@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>uPlot Live Chart mit persistentem X-Pan-Offset</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.23/dist/uPlot.min.css" />
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      user-select: none;
+    }
+    #chart {
+      width: 900px;
+      height: 500px;
+      position: relative;
+    }
+    #pauseBtn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 30;
+      padding: 6px 20px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #resetBtn {
+      margin-top: 10px;
+      padding: 6px 20px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #y-axis-overlay {
+      position: absolute;
+      top: 0; bottom: 70px;
+      left: 0;
+      width: 60px;
+      cursor: ns-resize;
+      z-index: 25;
+      user-select: none;
+      background: transparent;
+    }
+    #x-axis-overlay {
+      position: absolute;
+      left: 60px;
+      right: 0;
+      bottom: 0;
+      height: 70px;
+      cursor: ew-resize;
+      z-index: 25;
+      user-select: none;
+      background: transparent;
+    }
+  </style>
+</head>
+<body>
+  <h2>uPlot mit Zoom, Pan & persistentem X-Pan-Offset</h2>
+  <div id="chart" style="position: relative;">
+    <button id="pauseBtn">Pause</button>
+    <div id="y-axis-overlay" title="Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+    <div id="x-axis-overlay" title="X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+  </div>
+  <button id="resetBtn">⟲ Reset Zoom</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.23/dist/uPlot.iife.min.js"></script>
+  <script>
+    let timestamps = [];
+    let values = [];
+    const maxPoints = 300;
+    const now = Date.now();
+    for(let i = -99; i <= 0; i++) {
+      timestamps.push((now + i*1000)/1000);
+      values.push(Math.sin(i/5)*10 + 50);
+    }
+
+    const options = {
+      title: "Live-Daten mit Zoom, Pan & persistierendem X-Pan-Offset",
+      width: 900,
+      height: 500,
+      scales: {
+        x: { time: true },
+        y: { range: [0, 100] }
+      },
+      series: [
+        { label: "Zeit", value: (u,v) => v === null ? "-" : new Date(v*1000).toLocaleTimeString() },
+        { label: "Wert", stroke: "blue", width: 2 }
+      ],
+      cursor: {
+        drag: { x: true, y: true, setScale: true }
+      }
+    };
+
+    const chart = new uPlot(options, [timestamps.slice(), values.slice()], document.getElementById("chart"));
+
+    const pauseBtn = document.getElementById("pauseBtn");
+    let paused = false;
+    pauseBtn.onclick = () => {
+      paused = !paused;
+      pauseBtn.textContent = paused ? "Fortsetzen" : "Pause";
+    };
+
+    document.getElementById("resetBtn").addEventListener("click", () => {
+      xPanOffset = 0;
+      chart.setScale("x", { min: null, max: null });
+      chart.setScale("y", { min: null, max: null });
+    });
+
+    function zoomAxis(axis, factor, pointerPos) {
+      const sc = chart.scales[axis];
+      const range = sc.max - sc.min;
+      const newRange = range * factor;
+      const newMin = sc.min + range * pointerPos - newRange * pointerPos;
+      const newMax = newMin + newRange;
+      if (newMax - newMin < 1e-9) return;
+      chart.setScale(axis, { min: newMin, max: newMax });
+    }
+
+    // Persistenter X-Pan-Offset
+    let xPanOffset = 0;
+
+    function panAxis(axis, deltaPx, axisPxLength) {
+      if(axisPxLength === 0) return;
+      const sc = chart.scales[axis];
+      const range = sc.max - sc.min;
+      const delta = -(deltaPx / axisPxLength) * range;
+      if(axis === "x") {
+        xPanOffset += delta;
+        if(xPanOffset > 0) xPanOffset = 0;
+        chart.setScale(axis, { min: sc.min + delta, max: sc.max + delta });
+      } else {
+        chart.setScale(axis, { min: sc.min + delta, max: sc.max + delta });
+      }
+    }
+
+    function updateCursor(el, dragging, canDrag) {
+      if(dragging) {
+        el.style.cursor = "grabbing";
+      } else {
+        el.style.cursor = canDrag ? (el.id === "y-axis-overlay" ? "ns-resize" : "ew-resize") : "default";
+      }
+    }
+
+    // Y Axis overlay (normal, kein persistenter Offset)
+    (() => {
+      const yOverlay = document.getElementById("y-axis-overlay");
+      let isPanning = false;
+      let lastY = 0;
+      yOverlay.addEventListener("wheel", e => {
+        e.preventDefault();
+        const rect = yOverlay.getBoundingClientRect();
+        const pointerPos = (e.clientY - rect.top)/rect.height;
+        const factor = e.deltaY < 0 ? 0.85 : 1.15;
+        zoomAxis("y", factor, pointerPos);
+      }, { passive: false });
+      yOverlay.addEventListener("mousedown", e => {
+        if(e.button !== 0) return;
+        e.preventDefault();
+        isPanning = true;
+        lastY = e.clientY;
+        updateCursor(yOverlay, true, true);
+      });
+      window.addEventListener("mousemove", e => {
+        if(!isPanning) return;
+        e.preventDefault();
+        const deltaY = lastY - e.clientY;
+        lastY = e.clientY;
+        panAxis("y", deltaY, yOverlay.getBoundingClientRect().height);
+      });
+      window.addEventListener("mouseup", e => {
+        if(isPanning) {
+          isPanning = false;
+          updateCursor(yOverlay, false, true);
+        }
+      });
+      yOverlay.addEventListener("mouseenter", () => !isPanning && updateCursor(yOverlay, false, true));
+      yOverlay.addEventListener("mouseleave", () => !isPanning && updateCursor(yOverlay, false, false));
+    })();
+
+    // X Axis overlay mit persistenter Pan-Offset
+    (() => {
+      const xOverlay = document.getElementById("x-axis-overlay");
+      let isPanning = false;
+      let lastX = 0;
+      xOverlay.addEventListener("wheel", e => {
+        e.preventDefault();
+        const rect = xOverlay.getBoundingClientRect();
+        const pointerPos = (e.clientX - rect.left)/rect.width;
+        const factor = e.deltaY < 0 ? 0.85 : 1.15;
+        zoomAxis("x", factor, pointerPos);
+      }, { passive: false });
+      xOverlay.addEventListener("mousedown", e => {
+        if(e.button !== 0) return;
+        e.preventDefault();
+        isPanning = true;
+        lastX = e.clientX;
+        updateCursor(xOverlay, true, true);
+      });
+      window.addEventListener("mousemove", e => {
+        if(!isPanning) return;
+        e.preventDefault();
+        const deltaX = e.clientX - lastX;
+        lastX = e.clientX;
+        panAxis("x", deltaX, xOverlay.getBoundingClientRect().width);
+      });
+      window.addEventListener("mouseup", e => {
+        if(isPanning) {
+          isPanning = false;
+          updateCursor(xOverlay, false, true);
+        }
+      });
+      xOverlay.addEventListener("mouseenter", () => !isPanning && updateCursor(xOverlay, false, true));
+      xOverlay.addEventListener("mouseleave", () => !isPanning && updateCursor(xOverlay, false, false));
+    })();
+
+    // Contextmenu und Zoombox - rechte Maustaste deaktivieren
+    let zoomBoxing = false;
+    let zoomStart = null;
+    chart.over.addEventListener("contextmenu", e => e.preventDefault());
+    chart.over.addEventListener("mousedown", e => {
+      if(e.button === 2) {
+        zoomBoxing = true;
+        zoomStart = {x: e.offsetX, y: e.offsetY};
+        chart.over.style.cursor = "crosshair";
+      }
+    });
+    chart.over.addEventListener("mouseup", e => {
+      if(e.button === 2 && zoomBoxing) {
+        zoomBoxing = false;
+        chart.over.style.cursor = "";
+        const x0 = zoomStart.x, y0 = zoomStart.y;
+        const x1 = e.offsetX, y1 = e.offsetY;
+        const xMin = chart.posToVal(Math.min(x0, x1), "x");
+        const xMax = chart.posToVal(Math.max(x0, x1), "x");
+        const yMin = chart.posToVal(Math.max(y0, y1), "y");
+        const yMax = chart.posToVal(Math.min(y0, y1), "y");
+        if(xMax > xMin && yMax > yMin) {
+          chart.setScale("x", {min: xMin, max: xMax});
+          chart.setScale("y", {min: yMin, max: yMax});
+        }
+      }
+    });
+    
+    // Doppelklick Reset
+    chart.over.addEventListener("dblclick", () => {
+      xPanOffset = 0;
+      chart.setScale("x", {auto: true});
+      chart.setScale("y", {auto: true});
+    });
+
+    // Live-Daten Simulation & Updates mit persistentem X-Pan-Offset
+    let lastTimestamp = timestamps[timestamps.length - 1];
+    function addLiveDataPoint() {
+      if(paused) return;
+      lastTimestamp += 1;
+      timestamps.push(lastTimestamp);
+      values.push(Math.sin(lastTimestamp / 5) * 10 + 50 + (Math.random() - 0.5));
+      if(timestamps.length > maxPoints) {
+        timestamps.shift();
+        values.shift();
+      }
+      chart.setData([timestamps.slice(), values.slice()]);
+
+      const sc = chart.scales.x;
+      const range = sc.max - sc.min;
+      const latest = timestamps[timestamps.length - 1];
+      
+      // Hier nur X-Bereich verschieben mit persistentem Offset
+      if(xPanOffset > -0.5) {
+        xPanOffset = 0;
+        chart.setScale("x", {min: latest - range, max: latest});
+      } else {
+        chart.setScale("x", {min: latest - range + xPanOffset, max: latest + xPanOffset});
+      }
+
+      // Wichtig: Y-Achse NICHT überschreiben, bleibt unverändert
+    }
+    setInterval(addLiveDataPoint, 1000);
+  </script>
+</body>
+</html>

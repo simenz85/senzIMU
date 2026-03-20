@@ -1,0 +1,1177 @@
+:root {
+    --sidemenu-width: 70px;
+    --sidemenu-expanded: 220px;
+  --main-padding: 20px;
+    --primary-bg: #181c24;
+    --darkprimary-bg: #202020;
+    --card-bg: #232a36;
+    --accent: #232a36;
+    --text: #f1f1f1;
+    --secondary-text: #b0b8c1;
+    --shadow: 0 4px 24px 0 rgba(0,0,0,0.2);
+    --radius: 16px;
+    --smallradius: 8px;
+    --hoverbg: #293240 /*#181c24-*/; 
+    --distinct-hover: #33363e81;
+    --text2: #FFD600;
+}
+
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background: var(--primary-bg);
+    color: var(--text);
+    font-family: 'Segoe UI', 'Roboto', 'Arial', sans-serif;
+    min-height: 100vh;
+}
+
+.sidebar {
+    position: fixed;
+    z-index: 1100;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: var(--sidemenu-width);
+    background: #232a36;
+    box-shadow: 2px 0 8px 2px #0006;
+    overflow: hidden;
+    transition: width 0.21s;
+    will-change: width;
+    overflow: hidden;  
+}
+
+/*
+.sidebar:hover,
+.sidebar:focus-within {
+    width: var(--sidemenu-expanded);
+}
+
+.sidebar-content {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+*/
+.sidebar {
+  position: fixed;
+  z-index: 1100;
+  top: 0; left: 0; height: 100vh;
+  width: 90px;
+  background: #232a36;
+  box-shadow: 2px 0 8px 2px #0006;
+  overflow: hidden;
+  transition: width 0.25s cubic-bezier(.65,.05,.36,1);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: hidden;  
+}
+
+.sidebar.expanded {
+  width: 250px;
+}
+
+.sidebar-toggle {
+  background: none;
+  border: none;
+  width: 54px;
+  height: 54px;
+  color: #FFD600;
+  font-size: 1.4rem;
+  cursor: pointer;
+  outline: none;
+}
+
+.sidebar-icon svg { color: #FFD600; }
+.sidebar-icon svg path { stroke-width: 2; }
+
+.sidebar.expanded .sidebar-toggle i {
+  transform: rotate(180deg);
+  transition: transform 0.25s;
+}
+
+.sidebar-content {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-item {
+  width: 100%;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-start; /* Icon + Text linksbündig */
+  color: #b0b8c1;
+  border-bottom: 1px solid #1a1c22;
+  font-size: 1.13rem;
+  transition: background .12s, color .2s;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.sidebar-item:hover, .sidebar-item:focus {
+  background: #181c24;
+  color: #FFD600;
+}
+
+.sidebar-icon {
+  width: 50px;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;  /* Icon horizontal und vertikal zentrieren */
+  width: 50px; 
+  height: 50px;
+}
+
+
+.sidebar-icon img, .sidebar-icon svg {
+  max-width: 50px;
+  max-height: 50px;
+  display: block;
+}
+
+.sidebar-label {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, max-width 0.3s ease;
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sidebar.expanded .sidebar-label {
+  opacity: 1;
+  pointer-events: auto;
+  max-width: 150px; /* oder je nach Platzbedarf */
+}
+
+
+
+
+
+
+
+
+
+
+/* Kein Überschieben beim Ausklappen, der Hauptbereich ist immer rechts der eingeklappten Sidebar */
+.main {
+    margin-left: var(--sidemenu-width);
+    transition: margin-left 0.21s cubic-bezier(.65, .05, .36, 1);
+    padding-left: var(--main-padding);
+    padding-right: var(--main-padding);
+    min-width: 0;
+}
+
+@media (max-width:900px) {
+    .main {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+}
+
+.topnav {
+    background: #20242e;
+    padding:10px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.topnav h1 {
+    margin: 0;
+    font-size: 2.2rem;
+    letter-spacing: 1.2rem;
+    color: var(--secondary-text);
+    flex: 1;
+    text-align: center;
+}
+
+.content {
+  padding: 10px 0 8px 0;
+  margin: 0;
+    width: 100%;
+  max-width: none;
+    box-sizing: border-box;
+}
+
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(50px, 1fr));
+    gap: 8px;
+    margin-bottom: 0px;
+}
+
+.card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 5px 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.card:hover {
+    transform: translateY(-4px) scale(1.025);
+    box-shadow: 0 8px 32px 0 rgba(0,0,0,0.28);
+}
+
+.card-title {
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+    color: var(--secondary-text);
+    letter-spacing: 1px;
+    text-align: center;
+}
+
+.card-title i {
+    color: var(--secondary-text) !important;
+}
+
+
+.chart-controls button {
+  background: #222;
+  color: #eee;          /* Standard-Textfarbe */
+  border: none;
+  padding: 5px 10px;
+  margin: 0 2px;
+  border-radius: 4px;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.chart-controls button:hover, 
+.chart-controls button:focus {
+  background: #444;
+  color: #ffd700;       /* Neue Textfarbe beim Hover */
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  transform: translateY(-2px) scale(1.025);
+}
+
+.chart-controls button:hover i {
+  color: #ffd700;       /* Symbolfarbe beim Hover (optional) */
+  
+   
+
+}
+
+
+
+
+
+.reading {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+#accChart {
+    width: 100%;
+    height: 200px;
+    background: #232a36;
+    border-radius: 16px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+}
+
+
+
+#fftChart, #rmsChart {
+  display: block;
+  width: 100%;
+  min-height: 250px; /* oder Höhe passend zu Ihrem Chart */
+  position: relative; /* Standard-Positionierung */
+  clear: both; /* Verhindert Überlappungen, wenn floats im Spiel sind */
+}
+
+
+#fftrmscontainer {
+  display: flex;
+  flex-direction: column;
+  gap: 15px; /* Abstand zwischen den Charts */
+}
+
+#accChart .u-axis-label {
+  fill: #222299;   /* nur im FFT-Chart */
+}
+.u-axis-label {
+  fill: #EE3300 !important;
+}
+
+
+/* uPlot chart overrides */
+.uplot {
+  background: #232a36 !important;
+  border-radius: 18px;
+  padding: 6px 8px 6px;
+  width: 100% !important;
+  height: 100% !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.u-title {
+  font-size: 0.9rem;
+  line-height: 1.1;
+}
+
+.u-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.u-axis-title {
+  fill: #e53935;       /* z.B. ein rotes Label für den Achsentitel */
+  font-weight: bold;
+  font-size: 15px;
+  stroke: #b6d219;
+}
+
+.u-axes {stroke: yellow,blue;};
+
+.u-ticks text {
+  fill: #db0707;          /* Tick-Zahlen auf der Achse (z.B. ein dunkles Grau) */
+  font-size: 13px;
+}
+
+.u-axis-label {
+  fill: #b6d219 !important;       /* z.B. kräftiges Blau für die Achsen-Beschriftung */
+  font-size: 14px;     /* Schriftgröße optional anpassen */
+}
+
+.u-legend {
+  color: #b0b8c1 !important;
+  font-size: 0.82rem;
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 2;
+  margin-top: 4px;
+}
+
+.u-axis, .u-ticks {
+    color: #b0b8c1 !important;
+    stroke: #fbfcf9 !important;
+}
+
+.u-series-1 {
+    stroke: #FFD600 !important;
+}
+
+.u-series-2 {
+    stroke: #b0b8c1 !important;
+}
+
+.u-series-3 {
+    stroke: #ffffff !important;
+}
+
+.u-axis{stroke: blue; stroke: yellow}
+
+.chart-controls {
+    display: flex;
+  gap: 8px;
+    align-items: center;
+  margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.filter-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  font-size: 0.82rem;
+  line-height: 1;
+}
+
+.filter-drawer-toggle {
+  background: var(--card-bg);
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 0.92rem;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.filter-drawer {
+  width: 100%;
+  padding: 8px 0 2px;
+  display: none;
+}
+
+.filter-drawer.open {
+  display: block;
+}
+
+.filter-drawer-title {
+  font-weight: 700;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--secondary-text);
+  margin-bottom: 6px;
+}
+
+.filter-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(300px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.livecharts-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  min-height: 0;
+  grid-auto-rows: auto;
+  align-items: start;
+}
+
+.livecharts-grid.is-side-by-side {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.livecharts-grid.single-visible,
+.livecharts-grid.is-side-by-side.single-visible {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.livechart-panel {
+  position: relative;
+  display: flex;
+  min-height: 250px;
+  height: clamp(250px, 31vh, 340px);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.chart-plot-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.livecharts-grid.is-side-by-side .livechart-panel {
+  height: clamp(475px, 70vh, 775px);
+}
+
+.livecharts-grid.single-visible .livechart-panel {
+  grid-column: 1 / -1;
+  height: clamp(420px, 62vh, 760px);
+}
+
+.chart-overlay-controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+}
+
+#y-axis-overlay,
+#gyro-y-axis-overlay {
+  position: absolute;
+  left: 0;
+  top: 40px;
+  bottom: 36px;
+  width: 54px;
+  z-index: 10;
+  pointer-events: auto;
+  touch-action: none;
+  background: transparent;
+}
+
+#x-axis-overlay,
+#gyro-x-axis-overlay {
+  position: absolute;
+  left: 52px;
+  right: 0;
+  bottom: 0;
+  height: 42px;
+  z-index: 10;
+  pointer-events: auto;
+  touch-action: none;
+  background: transparent;
+}
+
+.filter-panel {
+  border: 1px solid rgba(255,255,255,0.1);
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.025);
+  min-width: 0;
+}
+
+.filter-panel-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  font-size: 0.84rem;
+  color: var(--text);
+}
+
+.filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.filter-panel .dropdown {
+  flex: 0 1 auto;
+}
+
+.filter-panel .dropdown-button {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 0.82rem;
+  min-height: 30px;
+  box-shadow: none;
+}
+
+.filter-panel .dropdown-content a {
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.filter-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-size: 0.8rem;
+  min-height: 30px;
+  box-sizing: border-box;
+}
+
+.filter-inline-check input,
+.filter-toggle input {
+  margin: 0;
+}
+
+@media (max-width: 1100px) {
+  .filter-panels {
+    grid-template-columns: 1fr;
+  }
+
+  .livecharts-grid {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    grid-auto-rows: auto;
+  }
+
+  .livecharts-grid.is-side-by-side {
+    grid-template-columns: 1fr;
+  }
+
+  .livechart-panel,
+  .livecharts-grid.is-side-by-side .livechart-panel {
+    height: clamp(240px, 30vh, 320px);
+  }
+}
+
+.chart-controls button {
+    background: var(--card-bg);
+    color: var(--text);
+    border: none;
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 0.92rem;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background 0.2s;
+}
+
+.chart-controls button.active,
+.chart-controls button:hover {
+    background: #353e4e;
+}
+
+.zoom-box {
+    position: absolute;
+    border: px dashed #FFD600;
+    background: rgba(255, 214, 0, 0.1);
+    pointer-events: none;
+    z-index: 100;
+    display: none;
+}
+
+    .dropdown {
+      position: relative;
+      display: inline-block;
+    }
+
+    .dropdown-button {
+     
+    background: var(--card-bg);
+    border-radius: var(--smallradius);
+    box-shadow: var(--shadow);
+     box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+     
+      
+      color: #eee;
+      border: none;
+      padding: 10px ;
+      margin: 10px auto ;
+      
+      transition: 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    .dropdown-button:focus {
+      outline: none;
+      border: 1px solid #ffd700; /* Fokus-Effekt */
+    }
+
+    .dropdown-button:hover,
+    .dropdown-button:focus {
+      background: var(--distinct-hover);
+      color: #ffd700;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      transform: translateY(-2px) scale(1.025);
+    }
+
+    .dropdown-label:hover {
+      color: #ffd700;;
+    }
+
+    .dropdown-content {
+      display: none;
+      position: absolute;
+      background: var(--primary-bg);
+      left: 0;
+      min-width: 100%;
+      border-radius: 4px;
+      box-sizing:border-box;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+      z-index: 1;
+    }
+
+    .dropdown-content a {
+      color: #eee;
+      padding: 10px 18px;
+      text-decoration: none;
+      display: block;
+      transition: 0.2s, color 0.2s;
+      border-radius: 4px;
+      margin: 2px 0;
+      padding: 3px 35px;
+      cursor: pointer;
+      text-align: right; /* <-- Hier die Änderung */
+    }
+
+    .dropdown-content a:hover {
+      background: var(--distinct-hover);
+      color: #ffd700;
+    }
+
+    /* Dropdown geöffnet */
+    .dropdown.open .dropdown-content {
+      display: block;
+    }
+
+    /* Aktive Option kennzeichnen */
+    .dropdown-content a.active {
+      background: var(--distinct-hover);
+      color: #ffd700;
+      font-weight: bold;
+    }
+
+    /* Button oben rechts in Topnav für Öffnen */
+.right-settings-btn {
+    position: fixed;          /* Fixed, damit es immer an gleicher Stelle bleibt */
+    top: 30px;                /* Etwas Abstand vom oberen Rand */
+    right: 15px;              /* Ganz rechts mit kleinem Abstand */
+    background: none;
+    border: none;
+    padding: 5px;
+    cursor: pointer;
+    z-index: 9999;
+    border-radius: 25px;            /* Über anderen Elementen */
+}
+
+.settings-icon {
+    display: block;
+    width: 40px;              /* Icon-Größe */
+    height: 40px;
+}
+.right-settings-btn:hover {
+    background: var(--hoverbg);
+    color: var(--text2);
+}
+
+/* Das rechte Panel – Standardposition komplett rechts draußen */
+.right-settings-panel {
+    position: fixed;
+    top: 0;
+    right: -300px;        /* komplett außerhalb */
+    width: 300px;
+    height: 100%;
+    background-color: var(--primary-bg); /* an Sidebar angepasst */
+    color: #fff;
+    box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+    overflow-y: auto;
+    transition: right 0.35s ease;
+    z-index: 2000;
+}
+
+/* Offen */
+.right-settings-panel.open {
+    right: 0;
+}
+
+/* Header im Panel */
+.right-settings-header {
+    display: flex;
+    height: 75px;
+    align-items: center;
+    background: var(--card-bg);
+    padding: 10px;
+    border-bottom: 1px solid #444;
+}
+
+/* Pfeil statt Close-Button */
+.close-arrow {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 22px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+.close-arrow:hover {
+    color: var(--text2); /* Hoverfarbe, kannst du ändern */
+}
+
+.right-settings-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: normal;
+}
+
+.right-settings-content {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+
+    padding-right: 6px;
+    width: 100%;
+    align-content: center;
+    box-sizing: border-box;
+    padding-right: 10px; /* optional Abstand zur Scrollbar */
+
+
+}
+
+.right-settings-content .dropdown-button {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.right-settings-content .dropdown {
+    display: block;         /* Nimmt ganze Breite */
+    width: 100%;
+}
+
+.label1 {
+    font-weight:600;
+    margin: 12px 0 6px;
+    padding: 4px 0;
+    font-size: 16px;
+    color: #fff;
+}
+
+.imu-container {
+  display: flex;
+  flex-wrap: wrap; /* Bei wenig Platz umbruch */
+  gap: 15px;
+}
+
+.imu-tile {
+  flex: 0 0 auto;
+  min-width: 140px;
+  background-color: var(--card-bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 15px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  font-family: sans-serif;
+  text-align: center;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.label {
+  font-size: 1em;        /* kleineres Label */
+  color: var(--secondary-text);           /* etwas dezentere Farbe */
+}
+
+.value {
+  font-size: 2em;      /* deutlich größere Werte */
+  font-weight: bold;
+  color: var(--text2);
+  padding: 5px 0; /* Etwas Abstand nach oben und unten */
+}
+.unit {
+  font-size: 1em;        /* kleineres Label */
+  color: var(--secondary-text);           /* etwas dezentere Farbe */
+}
+
+.imu-tile:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.u-x-axis .u-tick { fill: red; }
+.u-y-axis .u-tick { fill: blue; }
+
+
+
+#livechart2,
+#gyrochart {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  justify-self: stretch;
+}
+
+#pauseBtn2 {
+  position: flex;
+  top: 10px;
+  right: 5px;
+  z-index: 30;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--card);
+  color: white;
+}
+
+#recBtn2 {
+  position: flex;
+  top: 10px;
+  right: 5px;
+  z-index: 30;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--card);
+  color: white;
+}
+
+#SSBtn2 {
+  position: flex;
+  top: 10px;
+  right: 5px;
+  z-index: 30;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--card);
+  color: white;
+}
+
+#inchartcontrols {
+  z-index: 130;
+}
+
+#y-axis-overlay,
+#gyro-y-axis-overlay {
+  cursor: ns-resize;
+  user-select: none;
+}
+
+#x-axis-overlay,
+#gyro-x-axis-overlay {
+  cursor: ew-resize;
+  user-select: none;
+}
+
+.u-select {
+  background: rgba(0,0,0,0.17);
+  position: absolute;
+  pointer-events: none;
+  border: 1px dashed var(--u-select-border-color, var(--text2));
+  border-radius: 10px;
+}
+
+
+#switchable-area {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+#liveChartarea,
+#liveChartForm {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+#liveChartForm {
+  gap: 10px;
+}
+
+#livechart2,
+#gyrochart {
+  flex: 1;
+  position: relative;
+}
+
+
+#designDropdown,
+#orderDropdown,
+#cutoffDropdown,
+#gainDropdown,
+#rippleDropdown,
+#attenuationDropdown,
+#bandwidthDropdown,
+#preGainCheckbox{
+  display: none;
+}
+#oneDbCheckboxContainer {
+  display: none;
+
+}
+.filter-controls{
+  font-size: 1.1rem;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: row;  
+}
+
+.filter-controls .dropdown .label {
+  font-weight: 400;
+  font-style: bold;
+  font-size: 1.1rem;
+  margin-right: 10px;
+}
+
+
+
+.dropdown-button:hover .label {
+  color: var(--text2);
+}
+
+/* Popup Overlay */
+.popup {
+  display: none;              /* <-- jetzt wirklich zu am Anfang */
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0,0,0,0.6);
+  z-index: 9999;
+
+  justify-content: center;
+  align-items: center;
+}
+
+/* Inhalt */
+.popup-content {
+  background: var(--card-bg);
+  padding: 20px;
+  border-radius: 8px;
+  width: 800px;
+  text-align: center;
+}
+
+/* Buttons im Popup */
+.popup-buttons button {
+  display: block;
+  width: 100%;
+  margin: 5px 0;
+}
+
+
+button {
+  background: var(--card-bg);
+  border-radius: var(--smallradius);
+  box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+  color: #eee;
+  border: none;
+  padding: 10px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+
+button:hover,
+button:focus {
+  background: var(--distinct-hover);
+  color: #ffd700;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  transform: translateY(-2px) scale(1.025);
+}
+
+button:focus {
+  outline: none;
+  border: 1px solid #ffd700; /* Fokus-Effekt */
+}
+
+  .button-row {
+    display: flex;
+    align-items: center;
+    margin: 10px 10px;
+    padding: 5px 10px;
+  }
+
+  .button-row button {
+    padding: 10px 15px;
+    margin-right: 10px;
+  }
+
+  .statusbar {
+    position: relative;
+    width: 100%;
+    height: 30px;
+    background: #eee;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 0%;
+    border-radius: 5px;
+    z-index: 1;
+  }
+
+  .statusbar span {
+    position: relative;
+    z-index: 2; /* Text über der Progressbar */
+    color: #000;
+    font-weight: bold;
+  }
+
+  #progress1 { background-color: #2196F3; } /* Blau */
+  #progress2 { background-color: #FF9800; } /* Orange */
+  #progress3 { background-color: #4CAF50; } /* Grün */
+
+
+
+.popup-footer {
+    display: flex;
+    gap: 15px;   /* Abstand zwischen den Buttons */
+}
+
+.popup-footer button {
+    flex: 1 1 0; /* Alle Buttons nehmen gleich viel Platz ein */
+   
+    min-width: 0;
+}
+
+.toggle-button {
+    
+  width: 100%;
+  box-sizing: border-box; /* Damit Padding zur Breite dazugehört */
+  
+  background: var(--card-bg);
+  border-radius: var(--smallradius);
+  box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+  color: #eee;
+  border: none;
+  padding: 10px;
+  margin: 10px auto;
+  transition: 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s, background 0.2s;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+/* Toggle aktiviert */
+.toggle-button.toggle-on {
+  background: var(--distinct-hover);
+  color: #ffd700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transform: translateY(-2px) scale(1.025);
+  font-weight: bold;
+}
+
+/* Optional Fokus- und Hovereffekte */
+.toggle-button:focus {
+  outline: none;
+  border: 1px solid #ffd700;
+}
+.toggle-button:hover,
+.toggle-button:focus {
+  background: var(--distinct-hover);
+  color: #ffd700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transform: translateY(-2px) scale(1.025);
+}
+
+
+
+
+        #viewport {
+            flex: 3;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+
+
+          #fft-container {
+    width: 800px;
+    height: 600px;
+    position: relative;
+    background-color: #111;
+  }
+  /* Der CSS2DRenderer (Labels) sollen über das Canvas gelegt werden */

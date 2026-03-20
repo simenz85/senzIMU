@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Sensorausrichtung mit Quaternionen</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
+            color: white;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .container {
+            display: flex;
+            flex: 1;
+            padding: 20px;
+            gap: 20px;
+        }
+        
+        #viewport {
+            flex: 3;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        
+        .controls {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        h1 {
+            text-align: center;
+            margin: 20px 0;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        
+        .slider-container {
+            margin: 10px 0;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            margin: 5px 0;
+        }
+        
+        .value-display {
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        button {
+            background: #4a90e2;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s;
+            margin-top: 10px;
+        }
+        
+        button:hover {
+            background: #357abD;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            text-align: center;
+            margin-top: 10px;
+        }
+        
+        .instructions {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 0.9em;
+        }
+        
+        .axis-label {
+            position: absolute;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        
+        #x-label { color: #ff3333; bottom: 20px; right: 20px; }
+        #y-label { color: #33ff33; top: 20px; right: 20px; }
+        #z-label { color: #3399ff; top: 20px; left: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Live Sensorausrichtung mit Quaternionen</h1>
+    
+    <div class="container">
+        <div id="viewport"></div>
+        
+        <div class="controls">
+            <h2>Quaternion Werte</h2>
+            
+            <div class="slider-container">
+                <label for="x">X: <span id="x-value">0.00</span></label>
+                <input type="range" id="x" min="-1" max="1" step="0.01" value="0">
+            </div>
+            
+            <div class="slider-container">
+                <label for="y">Y: <span id="y-value">0.00</span></label>
+                <input type="range" id="y" min="-1" max="1" step="0.01" value="0">
+            </div>
+            
+            <div class="slider-container">
+                <label for="z">Z: <span id="z-value">0.00</span></label>
+                <input type="range" id="z" min="-1" max="1" step="0.01" value="0">
+            </div>
+            
+            <div class="slider-container">
+                <label for="w">W: <span id="w-value">1.00</span></label>
+                <input type="range" id="w" min="-1" max="1" step="0.01" value="1">
+            </div>
+            
+            <button id="reset-btn">Zurücksetzen</button>
+            <button id="demo-btn">Demo starten</button>
+            
+            <div class="status" id="status">
+                Manueller Modus - Verwende die Schieberegler
+            </div>
+            
+            <div class="instructions">
+                <h3>Anleitung:</h3>
+                <p>Verwende die Schieberegler, um die Quaternion-Werte anzupassen oder klicke auf "Demo starten", um eine automatische Rotation zu sehen.</p>
+                <p>Die Ausrichtung des Würfels entspricht der Orientierung deines Sensors.</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="axis-label" id="x-label">X</div>
+    <div class="axis-label" id="y-label">Y</div>
+    <div class="axis-label" id="z-label">Z</div>
+
+    <script>
+        // Three.js Variablen
+        let scene, camera, renderer, cube, controls;
+        let isDemoActive = false;
+        let demoStartTime;
+
+        // Initialisierung
+        function init() {
+            // Szene erstellen
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a2e);
+
+            // Kamera erstellen
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth * 0.7 / (window.innerHeight * 0.8), 0.1, 1000);
+            camera.position.z = 5;
+
+            // Renderer erstellen
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth * 0.7, window.innerHeight * 0.8);
+            document.getElementById('viewport').appendChild(renderer.domElement);
+
+            // OrbitControls hinzufügen
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Beleuchtung hinzufügen
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // Würfel mit Achsen erstellen
+            const geometry = new THREE.BoxGeometry(1, 1, 2);
+            const geo = new THREE.EdgesGeometry(geometry);
+            const materials = [
+                new THREE.MeshPhongMaterial({ color: 0xff3333, transparent: true, opacity: 0.8 }), // rechts
+                new THREE.MeshPhongMaterial({ color: 0x33ff33, transparent: true, opacity: 0.8 }), // links
+                new THREE.MeshPhongMaterial({ color: 0x3399ff, transparent: true, opacity: 0.8 }), // oben
+                new THREE.MeshPhongMaterial({ color: 0xffff33, transparent: true, opacity: 0.8 }), // unten
+                new THREE.MeshPhongMaterial({ color: 0xff33ff, transparent: true, opacity: 0.8 }), // vorne
+                new THREE.MeshPhongMaterial({ color: 0x33ffff, transparent: true, opacity: 0.8 })  // hinten
+            ];
+            
+            cube = new THREE.Mesh(geometry, materials);
+            scene.add(cube);
+
+            // Achsen hinzufügen
+            const axesHelper = new THREE.AxesHelper(3);
+            scene.add(axesHelper);
+
+            // Event-Listener für Schieberegler
+            document.getElementById('x').addEventListener('input', updateQuaternion);
+            document.getElementById('y').addEventListener('input', updateQuaternion);
+            document.getElementById('z').addEventListener('input', updateQuaternion);
+            document.getElementById('w').addEventListener('input', updateQuaternion);
+
+            // Event-Listener für Buttons
+            document.getElementById('reset-btn').addEventListener('click', resetQuaternion);
+            document.getElementById('demo-btn').addEventListener('click', toggleDemo);
+
+            // Animation starten
+            animate();
+
+            // Fenstergrößenänderung behandeln
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // Quaternion aus Schiebereglerwerten aktualisieren
+        function updateQuaternion() {
+            const x = parseFloat(document.getElementById('x').value);
+            const y = parseFloat(document.getElementById('y').value);
+            const z = parseFloat(document.getElementById('z').value);
+            const w = parseFloat(document.getElementById('w').value);
+
+            // Werte anzeigen
+            document.getElementById('x-value').textContent = x.toFixed(2);
+            document.getElementById('y-value').textContent = y.toFixed(2);
+            document.getElementById('z-value').textContent = z.toFixed(2);
+            document.getElementById('w-value').textContent = w.toFixed(2);
+
+            // Quaternion erstellen und anwenden
+            const quaternion = new THREE.Quaternion(x, y, z, w);
+            quaternion.normalize(); // Normalisieren für gültige Rotation
+            
+            cube.setRotationFromQuaternion(quaternion);
+            
+            // Demo stoppen wenn manuell angepasst wird
+            if (isDemoActive) {
+                toggleDemo();
+            }
+        }
+
+        // Quaternion zurücksetzen
+        function resetQuaternion() {
+            document.getElementById('x').value = 0;
+            document.getElementById('y').value = 0;
+            document.getElementById('z').value = 0;
+            document.getElementById('w').value = 1;
+            
+            updateQuaternion();
+        }
+
+        // Demo-Modus umschalten
+        function toggleDemo() {
+            isDemoActive = !isDemoActive;
+            
+            if (isDemoActive) {
+                document.getElementById('demo-btn').textContent = "Demo stoppen";
+                document.getElementById('status').textContent = "Demo aktiv - Automatische Rotation";
+                demoStartTime = Date.now();
+            } else {
+                document.getElementById('demo-btn').textContent = "Demo starten";
+                document.getElementById('status').textContent = "Manueller Modus - Verwende die Schieberegler";
+            }
+        }
+
+        // Fenstergrößenänderung behandeln
+        function onWindowResize() {
+            camera.aspect = (window.innerWidth * 0.7) / (window.innerHeight * 0.8);
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth * 0.7, window.innerHeight * 0.8);
+        }
+
+        // Animationsschleife
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Steuerelemente aktualisieren
+            controls.update();
+            
+            // Demo-Rotation
+            if (isDemoActive) {
+                const elapsedTime = (Date.now() - demoStartTime) / 1000;
+                
+                // Sanfte Rotation für Demo
+                const x = Math.sin(elapsedTime * 0.7) * 0.5;
+                const y = Math.cos(elapsedTime * 0.5) * 0.5;
+                const z = Math.sin(elapsedTime * 0.3) * 0.5;
+                const w = Math.cos(elapsedTime * 0.9) * 0.7 + 0.3;
+                
+                document.getElementById('x').value = x;
+                document.getElementById('y').value = y;
+                document.getElementById('z').value = z;
+                document.getElementById('w').value = w;
+                
+                updateQuaternion();
+            }
+            
+            // Rendern
+            renderer.render(scene, camera);
+        }
+
+        // Initialisierung starten
+        init();
+
+        // Simuliere eingehende Sensordaten (kann durch echte Sensordaten ersetzt werden)
+        function simulateSensorData() {
+            if (!isDemoActive) return;
+            
+            // Hier könnten echte Sensordaten verarbeitet werden
+            // Für dieses Beispiel verwenden wir die Demo-Daten
+        }
+
+        // Starte die Simulation (kann durch echte Sensordaten ersetzt werden)
+        setInterval(simulateSensorData, 100);
+    </script>
+</body>
+</html>

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>3D FFT Wasserfall Mesh</title>
+<style>
+  body { margin:0; background:#111; overflow:hidden; }
+  canvas { display:block; }
+</style>
+</head>
+<body>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+
+<script>
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+scene.add(new THREE.DirectionalLight(0xffffff, 0.8));
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.set(50, 30, 70);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const labelRenderer = new THREE.CSS2DRenderer();
+labelRenderer.setSize(window.innerWidth, window.innerHeight);
+labelRenderer.domElement.style.position = 'absolute';
+labelRenderer.domElement.style.top = '0px';
+document.body.appendChild(labelRenderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
+controls.enableDamping = true;
+
+// --- Parameter ---
+const fftSize = 250;
+const historyLength = 125;
+const spacing = 0.5;
+let fftHistory = [];
+
+// --- Mesh als Oberfläche ---
+let meshGeometry = new THREE.BufferGeometry();
+let meshMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true });
+let mesh;
+
+function initMesh() {
+  let vertices = new Float32Array(fftSize * historyLength * 3);
+  let colors = new Float32Array(fftSize * historyLength * 3);
+
+  meshGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  meshGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  // Indices für Flächen
+  let indices = [];
+  for (let t = 0; t < historyLength - 1; t++) {
+    for (let f = 0; f < fftSize - 1; f++) {
+      let a = t * fftSize + f;
+      let b = (t + 1) * fftSize + f;
+      let c = (t + 1) * fftSize + (f + 1);
+      let d = t * fftSize + (f + 1);
+      indices.push(a, b, d);
+      indices.push(b, c, d);
+    }
+  }
+  meshGeometry.setIndex(indices);
+
+  mesh = new THREE.Mesh(meshGeometry, meshMaterial);
+  scene.add(mesh);
+}
+
+initMesh();
+
+// --- Achsen + Gitterlinien ---
+function addAxis(p1,p2,color=0xffffff){ 
+  const mat = new THREE.LineBasicMaterial({color}); 
+  const geo = new THREE.BufferGeometry().setFromPoints([p1,p2]); 
+  scene.add(new THREE.Line(geo,mat));
+}
+addAxis(new THREE.Vector3(0,0,0), new THREE.Vector3(historyLength*spacing,0,0),0xff0000); // X Zeit
+addAxis(new THREE.Vector3(0,0,0), new THREE.Vector3(0,10,0),0x00ff00); // Y Amplitude
+addAxis(new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,fftSize*spacing),0x0000ff); // Z Frequenz
+
+// --- Achsen-Beschriftung ---
+function makeLabel(text,pos){
+  const div = document.createElement('div');
+  div.className='label';
+  div.style.color='white';
+  div.style.fontSize='12px';
+  div.textContent=text;
+  const label = new THREE.CSS2DObject(div);
+  label.position.copy(pos);
+  return label;
+}
+scene.add(makeLabel("Zeit", new THREE.Vector3(historyLength*spacing+1,0,0)));
+scene.add(makeLabel("Amplitude", new THREE.Vector3(0,10.5,0)));
+scene.add(makeLabel("Frequenz", new THREE.Vector3(0,0,fftSize*spacing+1)));
+
+// --- Ticks & Zahlen ---
+function addTicks(axisLength, tickSpacing, axis, offsetVec){
+  for(let i=0;i<=axisLength;i+=tickSpacing){
+    const pos = new THREE.Vector3().copy(offsetVec);
+    pos[axis]=i;
+    scene.add(makeLabel(i.toString(), pos));
+  }
+}
+addTicks(historyLength*spacing,5,'x',new THREE.Vector3(0,0,0));
+addTicks(10,2,'y',new THREE.Vector3(0,0,0));
+addTicks(fftSize*spacing,4,'z',new THREE.Vector3(0,0,0));
+
+// --- Peak marker & label ---
+const peakDiv = document.createElement('div');
+peakDiv.style.color='yellow';
+peakDiv.style.fontSize='14px';
+const peakLabel = new THREE.CSS2DObject(peakDiv);
+scene.add(peakLabel);
+
+const peakMarkerGeo = new THREE.SphereGeometry(0.3,16,16);
+const peakMarkerMat = new THREE.MeshBasicMaterial({color:0xff0000});
+const peakMarker = new THREE.Mesh(peakMarkerGeo, peakMarkerMat);
+scene.add(peakMarker);
+
+// --- Hover tooltip ---
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let hoverDiv = document.createElement('div');
+hoverDiv.style.color='cyan';
+hoverDiv.style.fontSize='12px';
+hoverDiv.style.backgroundColor='rgba(0,0,0,0.6)';
+hoverDiv.style.padding='2px 4px';
+hoverDiv.style.borderRadius='4px';
+hoverDiv.style.pointerEvents='none';
+const hoverLabel = new THREE.CSS2DObject(hoverDiv);
+scene.add(hoverLabel);
+
+window.addEventListener('mousemove', (event)=>{
+  mouse.x = (event.clientX / window.innerWidth)*2 -1;
+  mouse.y = -(event.clientY / window.innerHeight)*2 +1;
+});
+
+function updateHover(){
+  raycaster.setFromCamera(mouse, camera);
+  // Tipp: Raycast auf Mesh testen, falls benötigt
+  // const intersects = raycaster.intersectObject(mesh);
+  // Alternativ: Raycast auf die Oberfläche nur bei Bedarf
+  // ... analog ggf. auf die Geometrie umrechnen
+
+  // Wir können die bisherige Logik beibehalten, wenn auf die Gridpunkte gezeigt wird:
+  // Falls Intersect, Werte am Grid auslesen
+}
+
+// --- FFT-Dummy-Generator ---
+function generateFFT(){
+  return Array.from({length: fftSize}, (_,i)=>Math.sin(i*0.85+Date.now()*0.055)*5+Math.random()*2);
+}
+
+// --- Farbskala-Legende ---
+const legendWidth = 20;
+const legendHeight = 150;
+const legendDiv = document.createElement('div');
+legendDiv.style.position = 'absolute';
+legendDiv.style.right = '10px';
+legendDiv.style.top = '50px';
+legendDiv.style.width = `${legendWidth}px`;
+legendDiv.style.height = `${legendHeight}px`;
+legendDiv.style.border = '1px solid white';
+legendDiv.style.display = 'flex';
+legendDiv.style.flexDirection = 'column';
+legendDiv.style.justifyContent = 'space-between';
+legendDiv.style.alignItems = 'center';
+legendDiv.style.fontSize = '12px';
+legendDiv.style.color = 'white';
+legendDiv.style.padding = '2px';
+document.body.appendChild(legendDiv);
+
+const legendBar = document.createElement('div');
+legendBar.style.width = '100%';
+legendBar.style.height = '100%';
+legendBar.style.background = 'linear-gradient(to top, hsl(0.7,1,0.5), hsl(0.0,1,0.5))';
+legendDiv.appendChild(legendBar);
+
+const legendMax = document.createElement('div');
+const legendMin = document.createElement('div');
+legendMax.innerText = 'Max';
+legendMin.innerText = '0';
+legendDiv.appendChild(legendMax);
+legendDiv.appendChild(legendMin);
+
+// --- Update function ---
+function updateFFT(){
+  const fft = generateFFT();
+  fftHistory.unshift(fft);
+  if(fftHistory.length > historyLength) fftHistory.pop();
+
+  let vertices = meshGeometry.attributes.position.array;
+  let colors = meshGeometry.attributes.color.array;
+
+  let ptr = 0;
+  let maxVal = -Infinity, minVal = Infinity, maxPos = new THREE.Vector3();
+
+  for(let t = 0; t < historyLength; t++) {
+    for(let f = 0; f < fftSize; f++) {
+      let x = t * spacing;
+      let z = f * spacing;
+      let y = (fftHistory[t] && fftHistory[t][f] !== undefined) ? fftHistory[t][f] : 0;
+
+      vertices[ptr*3] = x;
+      vertices[ptr*3+1] = y;
+      vertices[ptr*3+2] = z;
+
+      let c = new THREE.Color().setHSL(0.7 - y/10, 1, 0.5);
+      colors[ptr*3] = c.r;
+      colors[ptr*3+1] = c.g;
+      colors[ptr*3+2] = c.b;
+
+      if (t === 0 && y > maxVal) {
+        maxVal = y;
+        maxPos.set(x, y, z);
+      }
+      if (y < minVal) minVal = y;
+      ptr++;
+    }
+  }
+  meshGeometry.attributes.position.needsUpdate = true;
+  meshGeometry.attributes.color.needsUpdate = true;
+  meshGeometry.computeVertexNormals();
+
+  peakMarker.position.copy(maxPos);
+  peakLabel.position.copy(maxPos.clone().add(new THREE.Vector3(0.5,0.5,0)));
+  peakDiv.textContent = `Peak: ${maxVal.toFixed(1)} @ f=${fft.findIndex(v=>v===maxVal)}`;
+  legendMax.innerText = maxVal.toFixed(1);
+  legendMin.innerText = minVal.toFixed(1);
+}
+
+// --- Animate ---
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  updateHover();
+  renderer.render(scene,camera);
+  labelRenderer.render(scene,camera);
+}
+animate();
+
+setInterval(updateFFT,40);
+
+window.addEventListener('resize',()=>{
+  camera.aspect=window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  labelRenderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>

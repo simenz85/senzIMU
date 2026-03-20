@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>ESP IOT DASHBOARD</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <link rel="icon" type="image/png" href="icons/favicon.png">
+    <!--link rel="stylesheet" href="all.min.css"> -->>
+    <link rel="stylesheet" href="uPlot.min.css">
+    <link rel="stylesheet" href="stylesheet.css">
+    <script src="uPlot.iife.min.js"></script>
+    <script src="fft.min.js"></script>
+
+    <!--<script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>-->
+
+</head>
+<body>
+<div class="sidebar" id="sidebar">
+    <button class="sidebar-toggle" id="sidebarToggle">
+        <svg width="20" height="20" viewBox="0 0 576 512" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M541 229.16l-61.05-53.59V56a24 24 0 0 0-24-24h-72a24 24 0 0 0-24 24v36.11L314.56 43a40 40 0 0 0-53.12 0L35 229.16a16 16 0 0 0-1.16 22.59l21.4 23.32a16 16 0 0 0 22.59 1.16L96 232.37V488a24 24 0 0 0 24 24H456a24 24 0 0 0 24-24V232.37l18.17 16.86a16 16 0 0 0 22.59-1.16l21.4-23.32a16 16 0 0 0-1.16-22.59z"/>
+        </svg>
+    </button>
+    <ul class="sidebar-content">
+       
+      <li class="sidebar-item" id="navLivechart">
+            <span class="sidebar-icon">
+              <img src="icons/livechart.svg" alt="Einstellungen"  />
+            </span>
+            <span class="sidebar-label">Livechart</span>
+        </li>
+
+        <li class="sidebar-item" id="navLFFTchart">
+          <span class="sidebar-icon">
+            <img src="icons/fft.svg" alt="Einstellungen"  />
+          <span class="sidebar-label">Livechart</span>
+        </li>
+
+        <li class="sidebar-item" id="navSettings">
+          <span class="sidebar-icon">
+            <img src="icons/settings.svg" alt="Einstellungen"  />
+          </span>
+          <span class="sidebar-label">Einstellungen</span>
+        </li>
+
+
+        <!-- Weitere Einträge -->
+    </ul>
+</div>
+
+<div class="main">
+    <div class="topnav"><h1>SENSOR READINGS (6.6 kHz)</h1>
+  </div>
+
+    <!-- Zahnrad öffnen Button -->
+    <button id="rightSettingsBtn" class="right-settings-btn" title="Weitere Einstellungen">
+        <img src="icons/settings.svg" alt="Einstellungen" class="settings-icon" />
+    </button>
+
+    <!-- Rechts einschiebendes Panel -->
+    <div id="rightSettingsPanel" class="right-settings-panel">
+        <div class="right-settings-header">
+            <button id="closeRightPanel" class="close-arrow">←</button>
+            <h2>Weitere Einstellungen</h2>
+        </div>
+        <div class="right-settings-content">
+
+<div class="label1">ACC SETTINGS</div>
+                    <div class="dropdown" id="accelSampleRateDD2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                      <div class="dropdown" id="accelRangeDD2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+
+
+                    <div class="dropdown" id="accelFilterDD2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+<div class="label1">GYRO SETTINGS</div>
+                    
+                    <div class="dropdown" id="gyroSampleRateDD2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                    <div class="dropdown" id="gyroRangeDD2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+
+
+                    <div class="dropdown" id="gyroFilterDD2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+<div class="label1">TEMP SETTINGS</div>
+                    <div class="dropdown" id="tempSampleRateDD2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+        </div>
+    </div>
+
+    <div class="content">
+        
+<div class="imu-container">
+  <div class="imu-tile">
+    <div class="label">Acc X:</div>
+    <div class="value" id="accX">0.00</div>
+    <div class="unit">mg</div>
+  </div>
+  <div class="imu-tile">
+    <div class="label">Acc Y:</div>
+    <div class="value" id="accY">0.00</div>
+    <div class="unit">mg</div>
+  </div>
+  <div class="imu-tile">
+    <div class="label">Acc Z:</div>
+    <div class="value" id="accZ">0.00</div>
+    <div class="unit">mg</div>
+  </div>
+  <div class="imu-tile">
+    <div class="label">Gyro X:</div>
+    <div class="value" id="gyroX">0.00</div>
+    <div class="unit">mg</div>
+  </div>
+
+  <div class="imu-tile">
+    <div class="label">Gyro Y:</div>
+    <div class="value" id="gyroY">0.00</div>
+    <div class="unit">mg</div>
+  </div>
+
+  <div class="imu-tile">
+    <div class="label">Gyro Z:</div>
+    <div class="value" id="gyroZ">0.00</div>
+    <div class="unit">mg</div>
+  </div>
+
+    <div class="imu-tile">
+    <div class="label">Time:</div>
+    <div class="value" id="timestamp">0.00</div>    
+  </div>
+
+ <div class="imu-tile">
+    <div class="label">Samplerate:</div>
+    <div class="value" id="samplerate">0.00</div>
+    <div class="unit">Hz</div>
+  </div>
+
+   <div class="imu-tile">
+    <div class="label">Temperature:</div>
+    <div class="value" id="temperature">0.00</div>
+    <div class="unit">°C</div>
+  </div>
+
+
+</div>
+
+
+
+        <div style="position:relative;">
+            <div id="switchable-area">
+                
+                
+                <div id="liveChartarea" >               
+                  <form id="liveChartForm">
+                    
+                    <div class="chart-controls">
+                      <button id="pauseBtn" title="Chart pausieren/wieder starten"><i class="fas fa-pause"></i> Pause</button>
+                      <button id="resetZoomBtn" title="Zoom/Scroll zurücksetzen"><i class="fas fa-expand-arrows-alt"></i> Reset</button>
+                      <button id="recordBtn" title="Daten recording starten/stoppen"><i class="fas fa-circle"></i> Record</button>
+                      <button id="downloadBtn" style="display:none;" title="CSV herunterladen"><i class="fas fa-download"></i> Download CSV</button>
+                      <label for="fpsSlider">FPS: <span id="fpsValue">33</span></label>
+                      <input id="fpsSlider" type="range" min="1" max="100" value="33" step="1" />
+                    </div>
+                  <!--  <div id="tester" style="width:100%;height:600px;"></div> -->
+                    <div id="accChart"></div>
+  
+  
+  
+  
+  
+<div id="livechart2" style="position: relative;">
+    <button id="pauseBtn">Pause</button>
+    <div id="y-axis-overlay" title="Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+    <div id="x-axis-overlay" title="X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+                  </form>
+                </div>
+
+                <div id="fftChartarea" >               
+                  <form id="fftChartForm" style="display:none;">
+                   
+                      <div class="dropdown" id="dropdown6">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                  <div class="dropdown" id="dropdown1">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                  <div class="dropdown" id="dropdown2">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+
+                  <div class="dropdown" id="dropdown3">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                  <div class="dropdown" id="dropdown4">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                      <div class="dropdown" id="dropdown5">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+<div class="dropdown" id="sliderDropdown">
+  <button type="button" class="dropdown-button">
+    <span class="label"></span>
+    <span class="arrow">▼</span>
+  </button>
+  <div class="dropdown-content"></div>
+</div>
+
+
+
+
+                    <div id="fftChart" ></div>
+                  </form>
+                </div>
+
+                <div id="settings" style="display:none;">
+                   
+                  
+                  
+                  <!-- Settings Section -->
+                <div id="section-settings" class="content-section">
+                 <h1>LSM6DSO SETTINGS</h1>
+                  <form id="settingsForm">
+                  
+                 
+                      <div class="dropdown" id="accelRangeDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                      <div class="dropdown" id="accelSampleRateDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+
+                      <div class="dropdown" id="accelFilterDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+
+
+                      <div class="dropdown" id="gyroRangeDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                      <div class="dropdown" id="gyroSampleRateDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+
+                      <div class="dropdown" id="gyroFilterDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+
+
+
+
+                   
+            
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script src="script.js"></script>
+<script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* Sidebar-Zusammenklappen */
+const sidebar = document.querySelector('.sidebar');
+
+sidebar.querySelectorAll('.sidebar-item').forEach(item => {
+  item.addEventListener('click', () => {
+    sidebar.classList.remove('expanded');
+  });
+});
+
+sidebar.addEventListener('mouseleave', () => {
+  sidebar.classList.remove('expanded');
+});
+
+    document.getElementById('navLivechart').addEventListener('click', function() {
+        document.getElementById('liveChartarea').style.display = 'block';
+        document.getElementById('fftChartarea').style.display = 'none';
+        document.getElementById('settings').style.display = 'none';
+    });
+
+
+
+    document.getElementById('navLFFTchart').addEventListener('click', function() {
+        document.getElementById('liveChartarea').style.display = 'none';
+        document.getElementById('fftChartarea').style.display = 'block';
+        document.getElementById('settings').style.display = 'none';
+        document.getElementById('fftChartForm').style.display = 'block';
+    });
+
+    document.getElementById('navSettings').addEventListener('click', function () {
+    document.getElementById('liveChartarea').style.display = 'none';
+    document.getElementById('fftChartarea').style.display = 'none';
+    document.getElementById('settings').style.display = 'block';
+  });
+
+
+document.addEventListener("DOMContentLoaded", function() {
+    const rightBtn = document.getElementById("rightSettingsBtn");
+    const rightPanel = document.getElementById("rightSettingsPanel");
+    const closeRight = document.getElementById("closeRightPanel");
+
+    // ⚙️ Button öffnet oder schließt jetzt (toggle)
+    rightBtn.addEventListener("click", () => {
+        rightPanel.classList.toggle("open");
+    });
+
+    // Pfeil schließt
+    closeRight.addEventListener("click", () => {
+        rightPanel.classList.remove("open");
+    });
+
+    // Klick außerhalb schließt
+    document.addEventListener("click", (e) => {
+        if (rightPanel.classList.contains("open") &&
+            !rightPanel.contains(e.target) &&
+            e.target !== rightBtn &&
+            !rightBtn.contains(e.target)) {
+            rightPanel.classList.remove("open");
+        }
+    });
+});
+
+
+/* const dropdown = document.getElementById('myDropdown');
+    const btn = document.getElementById('dropdownBtn');
+    const dropdownContent = document.getElementById('dropdownContent');
+    const options = dropdownContent.querySelectorAll('a');
+
+    // Standard aktiv setzen (z.B. Option 1)
+    let activeOption = options[0];
+    activeOption.classList.add('active');
+    btn.textContent = `Menü: ${activeOption.dataset.value}`;
+
+    // Button klick öffnet/schließt das Dropdown
+    btn.addEventListener('click', function(event) {
+      event.stopPropagation();
+      dropdown.classList.toggle('open');
+    });
+
+    // Klick außerhalb schließt das Dropdown
+    document.addEventListener('click', function() {
+      dropdown.classList.remove('open');
+    });
+
+    // Klick auf eine Option: Button-Text ändern und aktiven Status setzen
+    options.forEach(option => {
+      option.addEventListener('click', function(event) {
+        event.preventDefault();
+
+        // aktive Klasse entfernen
+        if (activeOption) {
+          activeOption.classList.remove('active');
+        }
+
+        // Neue aktive Option setzen
+        activeOption = this;
+        activeOption.classList.add('active');
+
+        // Button Text ändern
+        btn.textContent = `Menü: ${this.dataset.value}`;
+
+        // Dropdown schließen
+        dropdown.classList.remove('open');
+      });
+    }); */
+
+
+
+	
+
+
+
+
+
+
+
+</script>
+</body>
+</html>

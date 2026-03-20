@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+  <meta charset="UTF-8">
+  <title>ESP IOT DASHBOARD</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <link rel="icon" type="image/png" href="icons/favicon.png">
+  <!--link rel="stylesheet" href="all.min.css"> -->>
+  <link rel="stylesheet" href="uPlot.min.css">
+  <link rel="stylesheet" href="stylesheet.css">
+  <script src="uPlot.iife.min.js"></script>
+  <script src="fft.min.js"></script>
+  <script src="fili.min.js"></script>
+  <script src="three.min.js"></script>
+  <script src="OrbitControls.min.js"></script>
+  <script src="GLTFLoader.js"></script>
+
+
+  <script src="CSS2DRenderer.js"></script>
+
+
+
+
+  <!--<script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>-->
+
+</head>
+
+<body>
+
+
+
+  <!-- Popup -->
+  <!-- Popup -->
+  <!-- Popup -->
+  <div class="popup" id="popup">
+    <div class="popup-content">
+      <h2 id="headline">Koordinatensystem wählen</h2>
+      <h2 id="command"></h2>
+
+
+      <!-- KALIBRIERUNGSTYP-->
+      <div class="button-row" id="buttonRow1">
+        <button id="btnWorldSimple">World Simple</button>
+        <button id="btnWorldAxis">World + Axis</button>
+        <button id="btnTwoAxis">Two Axis</button>
+        <button id="btnReferenceState">Reference</button>
+      </div>
+
+
+      <div class="popup-buttons">
+
+
+        <!-- Simple World Calibration -->
+        <div class="button-row" id="action1">
+          <button id="btn1">Starte Kalibrierung</button>
+          <div class="statusbar">
+            <span id="statusText1">Bereit</span>
+            <div class="progress" id="progress1"></div>
+          </div>
+          <label id="result1"></label>
+        </div>
+
+        <!--World Axis Calibration   ACTION 2 + ACTION 3-->
+        <div class="button-row" id="action2">
+
+
+
+          <button id="btn2" disabled>Aktion 2</button>
+          <div class="statusbar">
+            <span id="statusText2">Bereit</span>
+            <div class="progress" id="progress2"></div>
+            <label id="result2"></label>
+          </div>
+        </div>
+
+        <div class="button-row" id="action3">
+          <div class="dropdown" id="axisselector2">
+            <button class="dropdown-button">
+              <span class="label"></span>
+              <span class="arrow">▼</span>
+            </button>
+            <div class="dropdown-content">
+              <!-- Optionen werden dynamisch eingefügt -->
+            </div>
+          </div>
+
+          <button id="btn3" disabled>Aktion 3</button>
+          <div class="statusbar">
+            <span id="statusText3">Bereit</span>
+            <div class="progress" id="progress3"></div>
+            <label id="result3"></label>
+          </div>
+        </div>
+      </div>
+
+
+
+
+      <div class="popup-footer">
+        <button id="cancelBtn">Abbrechen</button>
+        <button id="resetBtn">Zurück</button>
+        <button id="okBtn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar" id="sidebar">
+    <button class="sidebar-toggle" id="sidebarToggle">
+      <svg width="20" height="20" viewBox="0 0 576 512" aria-hidden="true" focusable="scfalse">
+        <path fill="currentColor"
+          d="M541 229.16l-61.05-53.59V56a24 24 0 0 0-24-24h-72a24 24 0 0 0-24 24v36.11L314.56 43a40 40 0 0 0-53.12 0L35 229.16a16 16 0 0 0-1.16 22.59l21.4 23.32a16 16 0 0 0 22.59 1.16L96 232.37V488a24 24 0 0 0 24 24H456a24 24 0 0 0 24-24V232.37l18.17 16.86a16 16 0 0 0 22.59-1.16l21.4-23.32a16 16 0 0 0-1.16-22.59z" />
+      </svg>
+    </button>
+    <ul class="sidebar-content">
+
+      <li class="sidebar-item" id="navLivechart">
+        <span class="sidebar-icon">
+          <img src="icons/livechart.svg" alt="Einstellungen" />
+        </span>
+        <span class="sidebar-label">Livechart</span>
+      </li>
+
+      <li class="sidebar-item" id="navLFFTchart">
+        <span class="sidebar-icon">
+          <img src="icons/fft.svg" alt="Einstellungen" />
+          <span class="sidebar-label">Livechart</span>
+      </li>
+
+      <li class="sidebar-item" id="navSettings">
+        <span class="sidebar-icon">
+          <img src="icons/settings.svg" alt="Einstellungen" />
+        </span>
+        <span class="sidebar-label">Einstellungen</span>
+      </li>
+
+
+      <!-- Weitere Einträge -->
+    </ul>
+  </div>
+
+  <div class="main">
+
+
+    <!-- Zahnrad öffnen Button -->
+    <button id="rightSettingsBtn" class="right-settings-btn" title="Weitere Einstellungen">
+      <img src="icons/settings.svg" alt="Einstellungen" class="settings-icon" />
+    </button>
+
+    <!-- Rechts einschiebendes Panel -->
+    <div id="rightSettingsPanel" class="right-settings-panel">
+      <div class="right-settings-header">
+        <button id="closeRightPanel" class="close-arrow">←</button>
+        <h2>Weitere Einstellungen</h2>
+      </div>
+      <div class="right-settings-content">
+
+
+        <div class="label1">COORDINATESYSTEM</div>
+        <div class="dropdown" id="CSDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+
+        <button id="openBtn">Kalibrieren</button>
+        <button class="toggle-button" id="gravityBtn">Cut Gravity</button>
+
+        <div class="label1">ACC SETTINGS</div>
+        <div class="dropdown" id="accelSampleRateDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+
+        <div class="dropdown" id="accelRangeDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+
+
+
+        <div class="dropdown" id="accelFilterDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+        <div class="label1">GYRO SETTINGS</div>
+
+        <div class="dropdown" id="gyroSampleRateDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+
+        <div class="dropdown" id="gyroRangeDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+
+
+
+        <div class="dropdown" id="gyroFilterDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+
+        <div class="label1">TEMP SETTINGS</div>
+        <div class="dropdown" id="tempSampleRateDD2">
+          <button class="dropdown-button">
+            <span class="label"></span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="dropdown-content">
+            <!-- Optionen werden dynamisch eingefügt -->
+          </div>
+        </div>
+
+
+
+      </div>
+      <div class="label1">GYRO SETTINGS</div>
+    </div>
+
+
+
+    <div class="content">
+
+      <div class="imu-container">
+        <div class="imu-tile">
+          <div class="label">Acc X:</div>
+          <div class="value" id="accX">0.00</div>
+          <div class="unit">mg</div>
+        </div>
+        <div class="imu-tile">
+          <div class="label">Acc Y:</div>
+          <div class="value" id="accY">0.00</div>
+          <div class="unit">mg</div>
+        </div>
+        <div class="imu-tile">
+          <div class="label">Acc Z:</div>
+          <div class="value" id="accZ">0.00</div>
+          <div class="unit">mg</div>
+        </div>
+        <div class="imu-tile">
+          <div class="label">Gyro X:</div>
+          <div class="value" id="gyroX">0.00</div>
+          <div class="unit">mg</div>
+        </div>
+
+        <div class="imu-tile">
+          <div class="label">Gyro Y:</div>
+          <div class="value" id="gyroY">0.00</div>
+          <div class="unit">mg</div>
+        </div>
+
+        <div class="imu-tile">
+          <div class="label">Gyro Z:</div>
+          <div class="value" id="gyroZ">0.00</div>
+          <div class="unit">mg</div>
+        </div>
+
+        <div class="imu-tile">
+          <div class="label">Time:</div>
+          <div class="value" id="timestamp">0.00</div>
+        </div>
+
+        <div class="imu-tile">
+          <div class="label">Samplerate:</div>
+          <div class="value" id="samplerate">0.00</div>
+          <div class="unit">Hz</div>
+        </div>
+
+        <div class="imu-tile">
+          <div class="label">Temperature:</div>
+          <div class="value" id="temperature">0.00</div>
+          <div class="unit">°C</div>
+        </div>
+
+
+      </div>
+      <div style="position:relative;">
+        <div id="switchable-area">
+          <div id="liveChartarea">
+            <div id="liveChartForm">
+
+              <div class="chart-controls">
+
+
+
+                <div class="filter-toolbar">
+                  <label class="filter-toggle"><input type="checkbox" id="showAccChartToggle" checked /> Acc Chart</label>
+                  <label class="filter-toggle"><input type="checkbox" id="showGyroChartToggle" checked /> Gyro Chart</label>
+                  <label class="filter-toggle"><input type="checkbox" id="syncFilterToggle" /> Filter sync</label>
+                  <button id="filterDrawerToggle" type="button" class="filter-drawer-toggle">Filter</button>
+                </div>
+
+                <div id="filterDrawer" class="filter-drawer" aria-hidden="true">
+                  <div class="filter-drawer-title">Chart Filter</div>
+                  <div class="filter-panels">
+                  <div id="accFilterPanel" class="filter-panel">
+                    <div class="filter-panel-title">Accel Filter</div>
+                    <div class="filter-controls">
+                      <div class="dropdown" id="accTypeDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accDesignDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accTransformDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accOrderDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accCutoffDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accGainDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accRippleDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accAttenuationDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="accBandwidthDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <label class="filter-inline-check"><input type="checkbox" id="accPreGainCheckbox" /> Pre Gain</label>
+                      <label id="accOneDbCheckboxContainer" class="filter-inline-check" style="display:none;"><input type="checkbox" id="accOneDbCheckbox" /> 1 dB Bessel</label>
+                    </div>
+                  </div>
+
+                  <div id="gyroFilterPanel" class="filter-panel">
+                    <div class="filter-panel-title">Gyro Filter</div>
+                    <div class="filter-controls">
+                      <div class="dropdown" id="gyroTypeDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroDesignDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroTransformDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroOrderDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroCutoffDropdown"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroGainDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroRippleDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroAttenuationDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <div class="dropdown" id="gyroBandwidthDropdown" style="display:none;"><button class="dropdown-button"><span class="label"></span><span class="arrow">▼</span></button><div class="dropdown-content"></div></div>
+                      <label class="filter-inline-check"><input type="checkbox" id="gyroPreGainCheckbox" /> Pre Gain</label>
+                      <label id="gyroOneDbCheckboxContainer" class="filter-inline-check" style="display:none;"><input type="checkbox" id="gyroOneDbCheckbox" /> 1 dB Bessel</label>
+                    </div>
+                  </div>
+                </div>
+                </div>
+
+                <button id="pauseBtn" title="Chart pausieren/wieder starten"><i class="fas fa-pause"></i> Pause</button>
+                <button id="resetZoomBtn" title="Zoom/Scroll zurücksetzen"><i class="fas fa-expand-arrows-alt"></i>
+                  Reset</button>
+                <button id="recordBtn" title="Daten recording starten/stoppen"><i class="fas fa-circle"></i>
+                  Record</button>
+                <button id="downloadBtn" style="display:none;" title="CSV herunterladen"><i class="fas fa-download"></i>
+                  Download CSV</button>
+                <button id="chartLayoutToggle" title="Charts nebeneinander oder untereinander anzeigen">Nebeneinander</button>
+                <label for="fpsSlider">FPS: <span id="fpsValue">33</span></label>
+                <input id="fpsSlider" type="range" min="1" max="100" value="33" step="1" />
+                <label for="timeSlider">Anzeigezeit: <span id="timeValue">5</span>s</label>
+                <input id="timeSlider" type="range" min="1" max="60" value="5" step="1" />
+              </div>
+              <!--  <div id="tester" style="width:100%;height:600px;"></div> -->
+
+
+              <div class="livecharts-grid" id="livechartsGrid">
+              <div id="livechart2" class="livechart-panel">
+                <div id="accChartHost" class="chart-plot-host"></div>
+                <div id="inchartcontrols" class="chart-overlay-controls">
+                  <button id="pauseBtn2" title="Liveanzeige pausieren">Pause</button>
+                  <button id="recBtn2" title="CSV erzeugen">🔴</button>
+                  <button id="SSBtn2" title="Screenshot speichern">⎙</button>
+                  <button id="SSBtn3" title="Screenshot speichern">KALIB</button>
+                </div>
+                <div id="y-axis-overlay" title="Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+                <div id="x-axis-overlay" title="X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+              </div>
+
+              <div id="gyrochart" class="livechart-panel">
+                <div id="gyroChartHost" class="chart-plot-host"></div>
+                <div id="gyro-y-axis-overlay" title="Gyro Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+                <div id="gyro-x-axis-overlay" title="Gyro X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+              </div>
+              </div>
+
+
+
+
+
+
+
+
+
+
+
+            </div>
+
+          </div>
+
+          <div id="fftChartarea">
+            <div id="fftChartForm" style="display:none;">
+
+              <div class="dropdown" id="dropdown6">
+                <button class="dropdown-button">
+                  <span class="label"></span>
+                  <span class="arrow">▼</span>
+                </button>
+                <div class="dropdown-content">
+                  <!-- Optionen werden dynamisch eingefügt -->
+                </div>
+              </div>
+
+              <div class="dropdown" id="dropdown1">
+                <button class="dropdown-button">
+                  <span class="label"></span>
+                  <span class="arrow">▼</span>
+                </button>
+                <div class="dropdown-content">
+                  <!-- Optionen werden dynamisch eingefügt -->
+                </div>
+              </div>
+
+              <div class="dropdown" id="dropdown2">
+                <button class="dropdown-button">
+                  <span class="label"></span>
+                  <span class="arrow">▼</span>
+                </button>
+                <div class="dropdown-content">
+                  <!-- Optionen werden dynamisch eingefügt -->
+                </div>
+              </div>
+
+
+              <div class="dropdown" id="dropdown3">
+                <button class="dropdown-button">
+                  <span class="label"></span>
+                  <span class="arrow">▼</span>
+                </button>
+                <div class="dropdown-content">
+                  <!-- Optionen werden dynamisch eingefügt -->
+                </div>
+              </div>
+
+              <div class="dropdown" id="dropdown4">
+                <button class="dropdown-button">
+                  <span class="label"></span>
+                  <span class="arrow">▼</span>
+                </button>
+                <div class="dropdown-content">
+                  <!-- Optionen werden dynamisch eingefügt -->
+                </div>
+              </div>
+
+              <div class="dropdown" id="dropdown5">
+                <button class="dropdown-button">
+                  <span class="label"></span>
+                  <span class="arrow">▼</span>
+                </button>
+                <div class="dropdown-content">
+                  <!-- Optionen werden dynamisch eingefügt -->
+                </div>
+              </div>
+
+              <div class="dropdown" id="sliderDropdown">
+                <button type="button" class="dropdown-button">
+                  <span class="label"></span>
+                  <span class="arrow">▼</span>
+                </button>
+                <div class="dropdown-content"></div>
+              </div>
+
+
+<div id="eulerAngles">
+
+  <div class="euler-tile">
+
+
+<div id="fftrmscontainer">
+  <div id="fftChart"></div>
+  
+  <div id="rmsControlBar" style="margin: 10px 0; display: flex; align-items: center; gap: 10px;">
+      <label for="rmsTimeSlider" style="color: white;">RMS Anzeigezeit: <span id="rmsTimeValue">20</span>s</label>
+      <input id="rmsTimeSlider" type="range" min="1" max="60" value="20" step="1" />
+  </div>
+
+  <div id="rmsChartWrapper" style="position: relative;">
+      <div id="rmsInChartControls" style="position: absolute; top: 10px; right: 10px; z-index: 100; display: flex; gap: 5px;">
+           <button id="rmsPauseBtn" title="RMS-Anzeige pausieren">Pause</button>
+           <button id="rmsRecordBtn" title="CSV erzeugen">🔴</button>
+           <button id="rmsSSBtn" title="Screenshot speichern">⎙</button>
+      </div>
+      <div id="rmsChart"></div>
+  </div>
+
+      <div class="container">
+        <div id="viewport"></div>
+        <div id="fft-container" style="width: 800px; height: 600px; position: relative;"></div>
+
+    </div>
+    
+
+</div>
+
+
+            </div>
+          </div>
+
+          <div id="settings" style="display:none;">
+
+
+
+            <!-- Settings Section -->
+            <div id="section-settings" class="content-section">
+              <h1>LSM6DSO SETTINGS</h1>
+              <div id="settingsForm">
+
+
+                <div class="dropdown" id="accelRangeDD">
+                  <button class="dropdown-button">
+                    <span class="label"></span>
+                    <span class="arrow">▼</span>
+                  </button>
+                  <div class="dropdown-content">
+                    <!-- Optionen werden dynamisch eingefügt -->
+                  </div>
+                </div>
+
+                <div class="dropdown" id="accelSampleRateDD">
+                  <button class="dropdown-button">
+                    <span class="label"></span>
+                    <span class="arrow">▼</span>
+                  </button>
+                  <div class="dropdown-content">
+                    <!-- Optionen werden dynamisch eingefügt -->
+                  </div>
+
+                  <div class="dropdown" id="accelFilterDD">
+                    <button class="dropdown-button">
+                      <span class="label"></span>
+                      <span class="arrow">▼</span>
+                    </button>
+                    <div class="dropdown-content">
+                      <!-- Optionen werden dynamisch eingefügt -->
+                    </div>
+
+
+                    <div class="dropdown" id="gyroRangeDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+                    </div>
+
+                    <div class="dropdown" id="gyroSampleRateDD">
+                      <button class="dropdown-button">
+                        <span class="label"></span>
+                        <span class="arrow">▼</span>
+                      </button>
+                      <div class="dropdown-content">
+                        <!-- Optionen werden dynamisch eingefügt -->
+                      </div>
+
+                      <div class="dropdown" id="gyroFilterDD">
+                        <button class="dropdown-button">
+                          <span class="label"></span>
+                          <span class="arrow">▼</span>
+                        </button>
+                        <div class="dropdown-content">
+                          <!-- Optionen werden dynamisch eingefügt -->
+                        </div>
+
+
+                      </div>
+                    </div>
+                  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+                  <script type="module" src="script2.js"></script>
+                  <script src="gl-matrix-min.js"></script>
+                  <script src="svd-js.min.js"></script>
+
+                  <script>
+
+                    const { vec3, mat3, quat } = glMatrix;
+
+                    // Beispiel: quat.create() verwenden
+                    const q = quat.create();
+                    console.log("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW" + q);
+
+
+
+                    /* Sidebar-Zusammenklappen */
+                    const sidebar = document.querySelector('.sidebar');
+
+                    sidebar.querySelectorAll('.sidebar-item').forEach(item => {
+                      item.addEventListener('click', () => {
+                        sidebar.classList.remove('expanded');
+                      });
+                    });
+
+                    sidebar.addEventListener('mouseleave', () => {
+                      sidebar.classList.remove('expanded');
+                    });
+
+                    document.getElementById('navLivechart').addEventListener('click', function () {
+                      document.getElementById('liveChartarea').style.display = 'block';
+                      document.getElementById('fftChartarea').style.display = 'none';
+                      document.getElementById('settings').style.display = 'none';
+                    });
+
+
+
+                    document.getElementById('navLFFTchart').addEventListener('click', function () {
+                      document.getElementById('liveChartarea').style.display = 'none';
+                      document.getElementById('fftChartarea').style.display = 'block';
+                      document.getElementById('settings').style.display = 'none';
+                      document.getElementById('fftChartForm').style.display = 'block';
+                      console.log("FFT");
+                    });
+
+                    document.getElementById('navSettings').addEventListener('click', function () {
+                      document.getElementById('liveChartarea').style.display = 'none';
+                      document.getElementById('fftChartarea').style.display = 'none';
+                      document.getElementById('settings').style.display = 'block';
+                    });
+
+
+                    document.addEventListener("DOMContentLoaded", function () {
+                      const rightBtn = document.getElementById("rightSettingsBtn");
+                      const rightPanel = document.getElementById("rightSettingsPanel");
+                      const closeRight = document.getElementById("closeRightPanel");
+
+                      // ⚙️ Button öffnet oder schließt jetzt (toggle)
+                      rightBtn.addEventListener("click", () => {
+                        rightPanel.classList.toggle("open");
+                      });
+
+                      // Pfeil schließt
+                      closeRight.addEventListener("click", () => {
+                        rightPanel.classList.remove("open");
+                      });
+
+                      // Klick außerhalb schließt
+                      document.addEventListener("click", (e) => {
+                        if (rightPanel.classList.contains("open") &&
+                          !rightPanel.contains(e.target) &&
+                          e.target !== rightBtn &&
+                          !rightBtn.contains(e.target)) {
+                          rightPanel.classList.remove("open");
+                        }
+                      });
+                    });
+
+
+                    /* const dropdown = document.getElementById('myDropdown');
+                        const btn = document.getElementById('dropdownBtn');
+                        const dropdownContent = document.getElementById('dropdownContent');
+                        const options = dropdownContent.querySelectorAll('a');
+                    
+                        // Standard aktiv setzen (z.B. Option 1)
+                        let activeOption = options[0];
+                        activeOption.classList.add('active');
+                        btn.textContent = `Menü: ${activeOption.dataset.value}`;
+                    
+                        // Button klick öffnet/schließt das Dropdown
+                        btn.addEventListener('click', function(event) {
+                          event.stopPropagation();
+                          dropdown.classList.toggle('open');
+                        });
+                    
+                        // Klick außerhalb schließt das Dropdown
+                        document.addEventListener('click', function() {
+                          dropdown.classList.remove('open');
+                        });
+                    
+                        // Klick auf eine Option: Button-Text ändern und aktiven Status setzen
+                        options.forEach(option => {
+                          option.addEventListener('click', function(event) {
+                            event.preventDefault();
+                    
+                            // aktive Klasse entfernen
+                            if (activeOption) {
+                              activeOption.classList.remove('active');
+                            }
+                    
+                            // Neue aktive Option setzen
+                            activeOption = this;
+                            activeOption.classList.add('active');
+                    
+                            // Button Text ändern
+                            btn.textContent = `Menü: ${this.dataset.value}`;
+                    
+                            // Dropdown schließen
+                            dropdown.classList.remove('open');
+                          });
+                        }); */
+
+
+
+
+
+
+
+
+
+
+
+                  </script>
+  <div class="euler-tile" style="display:flex; flex-direction: column; align-items: flex-start; padding: 20px;">
+    <div style="margin-bottom: 10px;">
+        <span class="label" style="font-weight: bold;">Roll:</span><br>
+        <span class="value" id="roll">0.00</span><br>
+        <span class="unit">°</span>
+    </div>
+
+    <div style="margin-bottom: 10px;">
+        <span class="label" style="font-weight: bold;">Pitch:</span><br>
+        <span class="value" id="pitch">0.00</span><br>
+        <span class="unit">°</span>
+    </div>
+
+    <div style="margin-bottom: 10px;">
+        <span class="label" style="font-weight: bold;">Yaw:</span><br>
+        <span class="value" id="yaw">0.00</span><br>
+        <span class="unit">°</span>
+    </div>
+
+    <div style="margin-bottom: 10px;">
+        <span class="label" style="font-weight: bold;">Posx:</span><br>
+        <span class="value" id="posx">0.00</span><br>
+        <span class="unit">°</span>
+    </div>
+
+    <div style="margin-bottom: 10px;">
+        <span class="label" style="font-weight: bold;">Posy:</span><br>
+        <span class="value" id="posy">0.00</span><br>
+        <span class="unit">°</span>
+    </div>
+
+    <div style="margin-bottom: 10px;">
+        <span class="label" style="font-weight: bold;">PosZ:</span><br>
+        <span class="value" id="posz">0.00</span><br>
+        <span class="unit">°</span>
+    </div>
+  </div>
+</body>
+
+</html>

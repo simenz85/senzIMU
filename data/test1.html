@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<title>TWGL.js: 3D Raum mit Achspfeilen und Ticks</title>
+<style>
+  body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  canvas { border: 1px solid #444; background: #111; }
+</style>
+</head>
+<body>
+<canvas id="c" width="540" height="540"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/twgl.js/dist/4.x/twgl-full.min.js"></script>
+<script>
+const m4 = twgl.m4;
+const gl = document.getElementById("c").getContext("webgl");
+const canvas = gl.canvas;
+
+// Shader
+const vs = `
+attribute vec4 position;
+attribute vec4 color;
+varying vec4 v_color;
+uniform mat4 u_worldViewProjection;
+void main() {
+  gl_Position = u_worldViewProjection * position;
+  v_color = color;
+}`;
+const fs = `
+precision mediump float;
+varying vec4 v_color;
+void main() {
+  gl_FragColor = v_color;
+}`;
+
+// Set up program
+const programInfo = twgl.createProgramInfo(gl, [vs, fs]);
+
+// Würfel
+const cubeArrays = {
+  position: [
+    -1,-1, 1,  1,-1, 1, -1, 1, 1,  1, 1, 1, // vorder
+    -1,-1,-1, -1, 1,-1,  1,-1,-1, 1, 1,-1,  // rück
+  ],
+  color: [
+    0.6,0.7,1,1, 0.6,0.7,1,1, 0.6,0.7,1,1, 0.6,0.7,1,1,
+    0.7,1,0.7,1, 0.7,1,0.7,1, 0.7,1,0.7,1, 0.7,1,0.7,1,
+  ],
+  indices: [
+    0,1,2, 2,1,3,  // vorne
+    4,5,6, 6,5,7,  // hinten
+    0,2,4, 4,2,5,  // links
+    1,6,3, 3,6,7,  // rechts
+    2,3,5, 5,3,7,  // oben
+    0,4,1, 1,4,6   // unten
+  ]
+};
+const cubeBufferInfo = twgl.createBufferInfoFromArrays(gl, cubeArrays);
+
+// Achsenlinien
+const axisArrays = {
+  position: [
+    0,0,0, 3,0,0,   0,0,0, 0,3,0,   0,0,0, 0,0,3,
+  ],
+  color: [
+    1,0,0,1, 1,0,0,1,
+    0,1,0,1, 0,1,0,1,
+    0,0,1,1, 0,0,1,1
+  ]
+};
+const axisBufferInfo = twgl.createBufferInfoFromArrays(gl, axisArrays);
+
+// Ticks
+const tickCount = 6;
+const tickSize = 0.09;
+let tickPositions = [];
+let tickColors = [];
+for (let i = 1; i < tickCount; ++i) {
+  let v = i * 3 / tickCount;
+  // X-Ticks
+  tickPositions.push(v, -tickSize, 0, v, tickSize, 0);
+  tickColors.push(1, 0, 0, 1, 1, 0, 0, 1);
+  // Y-Ticks
+  tickPositions.push(-tickSize, v, 0, tickSize, v, 0);
+  tickColors.push(0, 1, 0, 1, 0, 1, 0, 1);
+  // Z-Ticks
+  tickPositions.push(0, -tickSize, v, 0, tickSize, v);
+  tickColors.push(0, 0, 1, 1, 0, 0, 1, 1);
+}
+const ticksBufferInfo = twgl.createBufferInfoFromArrays(gl, {
+  position: tickPositions,
+  color: tickColors
+});
+
+// Kugel-Marker an Achsenende (repräsentieren "Label")
+function createCubeMarker(center, color, size=0.13) {
+  const [cx, cy, cz] = center;
+  const c = color;
+  // Einfacher kleine Würfel
+  let pos = [];
+  for (let dx = -1; dx <= 1; dx+=2)
+  for (let dy = -1; dy <= 1; dy+=2)
+  for (let dz = -1; dz <= 1; dz+=2)
+    pos.push(cx+dx*size, cy+dy*size, cz+dz*size);
+
+  // 8 Ecken, jetzt die faces
+  const idx = [
+    0,1,2, 1,2,3,  // Seite 1
+    4,5,6, 5,6,7,  // Seite 2
+    0,2,4, 4,2,6,  // Seite 3
+    1,3,5, 5,3,7,  // Seite 4
+    2,3,6, 6,3,7,  // Seite 5
+    0,1,4, 4,1,5   // Seite 6
+  ];
+  let col = [];
+  for (let i=0; i<8; ++i) col.push(...c);
+  return twgl.createBufferInfoFromArrays(gl, {
+    position: pos, color: col, indices: idx
+  });
+}
+const markerX = createCubeMarker([3.17,0,0], [1,0.25,0.25,1]);
+const markerY = createCubeMarker([0,3.17,0], [0.25,1,0.25,1]);
+const markerZ = createCubeMarker([0,0,3.17], [0.25,0.25,1,1]);
+
+// Pfeilspitze (Kegel~)
+function createCone(radius=0.13, height=0.37, segments=17, color=[1,0,0,1]) {
+  let pos = [0,0,height];
+  let col = color.slice();
+  for (let i=0; i<=segments; ++i) {
+    const a = i*2*Math.PI/segments;
+    pos.push(radius*Math.cos(a), radius*Math.sin(a), 0);
+    col.push(...color);
+  }
+  let idx = [];
+  for (let i=1; i<=segments; ++i)
+    idx.push(0,i,i+1);
+  return twgl.createBufferInfoFromArrays(gl, {position:pos,color:col,indices:idx});
+}
+const arrowX = createCone(0.13,0.32,15,[1,0,0,1]);
+const arrowY = createCone(0.13,0.32,15,[0,1,0,1]);
+const arrowZ = createCone(0.13,0.32,15,[0,0,1,1]);
+
+// Kamera/Steuerung
+let cameraAngleX = 18, cameraAngleY = 28, cameraRadius = 7;
+let target = [0,0,0];
+let isDragging = false, dragButton = 0, lastX = 0, lastY = 0;
+
+// Maussteuerung
+canvas.addEventListener("mousedown", e => {
+  isDragging = true; dragButton = e.button;
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener("mouseup", ()=> isDragging=false);
+canvas.addEventListener("mouseleave", ()=> isDragging=false);
+canvas.addEventListener("contextmenu", e=>e.preventDefault());
+canvas.addEventListener("wheel", e=>{
+  e.preventDefault(); cameraRadius += e.deltaY*0.05;
+  cameraRadius = Math.max(2.2, Math.min(18, cameraRadius));
+}, {passive:false});
+canvas.addEventListener("mousemove", e=>{
+  if(!isDragging) return;
+  const dX = e.clientX-lastX, dY = e.clientY-lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  if (dragButton===0 && !e.shiftKey) { // Links: Orbit
+    cameraAngleY += dX*0.45;
+    cameraAngleX += dY*0.36;
+    cameraAngleX = Math.max(-88, Math.min(88, cameraAngleX));
+  } else { // Rechts oder Shift: Pan
+    const sens = 0.015*cameraRadius;
+    const radY = cameraAngleY*Math.PI/180, radX = cameraAngleX*Math.PI/180;
+    // Kamera-Vektoren
+    const right = [Math.cos(radY), 0, -Math.sin(radY)];
+    const up = [Math.sin(radY)*Math.sin(radX), Math.cos(radX), Math.cos(radY)*Math.sin(radX)];
+    for(let i=0;i<3;++i) {
+      target[i] -= right[i]*dX*sens;
+      target[i] += up[i]*dY*sens;
+    }
+  }
+});
+
+// Würfelrotation (IMU)
+let angleX=0, angleY=0, angleZ=0;
+setInterval(()=>{
+  angleX = Math.random()*360-180;
+  angleY = Math.random()*360-180;
+  angleZ = Math.random()*360-180;
+}, 800);
+
+function drawScene() {
+  twgl.resizeCanvasToDisplaySize(canvas);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.clearColor(0.09, 0.10, 0.13, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
+
+  gl.useProgram(programInfo.program);
+
+  // Kamera
+  const radX = cameraAngleX*Math.PI/180, radY = cameraAngleY*Math.PI/180;
+  const eye = [
+    target[0] + cameraRadius*Math.cos(radX)*Math.sin(radY),
+    target[1] + cameraRadius*Math.sin(radX),
+    target[2] + cameraRadius*Math.cos(radX)*Math.cos(radY)
+  ];
+  const up = [0,1,0];
+  let viewProj = m4.multiply(
+    m4.perspective(Math.PI/4,canvas.width/canvas.height,0.1,100),
+    m4.inverse(m4.lookAt(eye,target,up))
+  );
+
+  // Achsen
+  twgl.setUniforms(programInfo,{u_worldViewProjection:viewProj});
+  twgl.setBuffersAndAttributes(gl, programInfo, axisBufferInfo);
+  twgl.drawBufferInfo(gl, axisBufferInfo, gl.LINES);
+
+  // Ticks
+  twgl.setBuffersAndAttributes(gl,programInfo,ticksBufferInfo);
+  twgl.drawBufferInfo(gl, ticksBufferInfo, gl.LINES);
+
+  // Achspfeile (Kegel, sauber platziert und rotiert)
+  function matArrow(xr,yr,zr,trans) {
+    let t = m4.identity();
+    t = m4.translate(t,trans);
+    if(xr) t = m4.rotateX(t, xr);
+    if(yr) t = m4.rotateY(t, yr);
+    if(zr) t = m4.rotateZ(t, zr);
+    return m4.multiply(viewProj, t);
+  }
+  // X
+  twgl.setUniforms(programInfo,{u_worldViewProjection:matArrow(0,0,-Math.PI/2,[3,0,0])});
+  twgl.setBuffersAndAttributes(gl,programInfo,arrowX);
+  twgl.drawBufferInfo(gl,arrowX,gl.TRIANGLES);
+  // Y
+  twgl.setUniforms(programInfo,{u_worldViewProjection:matArrow(Math.PI/2,0,0,[0,3,0])});
+  twgl.setBuffersAndAttributes(gl,programInfo,arrowY);
+  twgl.drawBufferInfo(gl,arrowY,gl.TRIANGLES);
+  // Z
+  twgl.setUniforms(programInfo,{u_worldViewProjection:matArrow(0,0,0,[0,0,3])});
+  twgl.setBuffersAndAttributes(gl,programInfo,arrowZ);
+  twgl.drawBufferInfo(gl,arrowZ,gl.TRIANGLES);
+
+  // Achsen-"Labels" als Marker an Enden
+  twgl.setUniforms(programInfo,{u_worldViewProjection:viewProj});
+  twgl.setBuffersAndAttributes(gl,programInfo,markerX);
+  twgl.drawBufferInfo(gl,markerX,gl.TRIANGLES);
+  twgl.setBuffersAndAttributes(gl,programInfo,markerY);
+  twgl.drawBufferInfo(gl,markerY,gl.TRIANGLES);
+  twgl.setBuffersAndAttributes(gl,programInfo,markerZ);
+  twgl.drawBufferInfo(gl,markerZ,gl.TRIANGLES);
+
+  // Würfel (mit IMU-Rotation)
+  let worldMat = m4.identity();
+  worldMat = m4.rotateX(worldMat, angleX*Math.PI/180);
+  worldMat = m4.rotateY(worldMat, angleY*Math.PI/180);
+  worldMat = m4.rotateZ(worldMat, angleZ*Math.PI/180);
+  let cubeMat = m4.multiply(viewProj, worldMat);
+  twgl.setUniforms(programInfo,{u_worldViewProjection:cubeMat});
+  twgl.setBuffersAndAttributes(gl, programInfo, cubeBufferInfo);
+  twgl.drawBufferInfo(gl, cubeBufferInfo, gl.TRIANGLES);
+}
+function render() { drawScene(); requestAnimationFrame(render); }
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# Deaktiviere LCD-Komponenten, die nicht benötigt werden
+# CONFIG_ESP32S3_LCD_DRIVER is not set
+
+# Deaktiviere LCD-Konfigurationen
+CONFIG_LCD_ENABLE_DEBUG_LOG=n
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=n
+CONFIG_LCD_RGB_RESTART_IN_VSYNC=n
+
+# Setze wichtige Komponenten auf die Werte, die Sie benötigen
+CONFIG_LWIP_IPV6=n
+CONFIG_LWIP_IPV4=y
+CONFIG_ESP_HTTP_SERVER_ENABLE=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

@@ -1,0 +1,13 @@
+/src
+ ├─ main.js
+ ├─ buffers.js
+ ├─ /ui
+ │   ├─ UniDropdown.js
+ │   └─ ui-setup.js
+ ├─ /workers
+ │   ├─ ws-setup.js
+ │   ├─ decode-setup.js
+ │   ├─ fft-setup.js
+ └─ /charts
+     ├─ liveChart.js
+     └─ fftChart.js
