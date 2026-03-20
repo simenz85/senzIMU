@@ -1,4 +1,4 @@
-# ESP_IDF_TEST1
+# senzIMU
 
 ESP-IDF- und PlatformIO-Projekt fuer das Seeed XIAO ESP32S3 mit LittleFS-basierter Weboberflaeche unter `data/`.
 
