@@ -8,6 +8,36 @@ Um das zu lösen, machen wir uns die Struktur des LAN-Kabels zunutze. Jedes Ader
 
 Hier ist die visuelle Darstellung der Verkabelung passend zur aktuellen Firmware in src/main.cpp. Du bündelst auf der Seite des XIAO drei weiße Adern und verbindest sie mit dem einzigen GND-Pin. Dasselbe machst du auf der Seite des Sensors.
 
+## XIAO Pin-Schema
+
+Die folgende Skizze ist keine komplette Pinout-Grafik des Boards, sondern eine vereinfachte Schemaansicht mit den fuer diese SPI-Verdrahtung relevanten Anschluessen.
+
+```text
+        XIAO ESP32-S3
+    ---------------------
+    | 3V3            GND |
+    |                   |
+    | GPIO4   -> CS     |
+    | GPIO7   -> SCK    |
+    | GPIO8   -> MISO   |
+    | GPIO9   -> MOSI   |
+    ---------------------
+```
+
+## Schema als Diagramm
+
+```mermaid
+flowchart TB
+    subgraph XIAOBoard["XIAO ESP32-S3"]
+        PWR["3V3"]
+        GNDPIN["GND"]
+        CS["GPIO4 / CS"]
+        SCK["GPIO7 / SCK"]
+        MISO["GPIO8 / MISO"]
+        MOSI["GPIO9 / MOSI"]
+    end
+```
+
 ## Code-Snippet
 
 ```mermaid
