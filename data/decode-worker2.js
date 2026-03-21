@@ -109,9 +109,9 @@ onmessage = function (event) {
         }
 
         case 1: { // Gyro
-          const x = view.getInt16(offset + 1, true) * GYROMULTIPLIER;
-          const y = view.getInt16(offset + 3, true) * GYROMULTIPLIER;
-          const z = view.getInt16(offset + 5, true) * GYROMULTIPLIER;
+          let x = view.getInt16(offset + 1, true) * GYROMULTIPLIER;
+          let y = view.getInt16(offset + 3, true) * GYROMULTIPLIER;
+          let z = view.getInt16(offset + 5, true) * GYROMULTIPLIER;
 
 
 
@@ -120,6 +120,28 @@ onmessage = function (event) {
           if (timestampStepGyro > 0) {
             currentTimestamp = lastTimestamp + samplesSinceLastTsGyro * timestampStepGyro;
           }
+
+          if (IMUOrientation === IMUOpt.AUTO) {
+            if (quatauto !== null && quatauto !== undefined) {
+              const rotatedGyro = rotateVectorByQuat({ x, y, z }, quatauto);
+              x = rotatedGyro.x;
+              y = rotatedGyro.y;
+              z = rotatedGyro.z;
+            }
+          }
+
+          if (IMUOrientation === IMUOpt.WORLD_SIMPLE) {
+            if (quatworldsimple !== null && quatworldsimple !== undefined) {
+              [x, y, z] = applyCalibrationToAccelFast(x, y, z);
+            }
+          }
+
+          if (IMUOrientation === IMUOpt.REFERENCE && referenceState?.gyro) {
+            x = x - referenceState.gyro.x;
+            y = y - referenceState.gyro.y;
+            z = z - referenceState.gyro.z;
+          }
+
           gyroraw.push({ time: currentTimestamp, x: x, y: y, z: z });
           gyro.push({ time: currentTimestamp, x: x, y: y, z: z });
           samplesSinceLastTsGyro++;
@@ -182,10 +204,11 @@ onmessage = function (event) {
           }
 
           if (IMUOrientation === IMUOpt.REFERENCE) {
-            if (referenceState !== null) {
-              x = x - referenceState.x;
-              y = y - referenceState.y;
-              z = z - referenceState.z;
+            const referenceAccel = referenceState?.acc ?? referenceState;
+            if (referenceAccel !== null) {
+              x = x - referenceAccel.x;
+              y = y - referenceAccel.y;
+              z = z - referenceAccel.z;
               total = Math.sqrt(x * x + y * y + z * z);
               acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
               samplesSinceLastTsAcc++;
@@ -321,17 +344,12 @@ onmessage = function (event) {
     else if (event.data.type === 'calibmode') {
       let payload = event.data.payload;
 
-      console.log("[DECODE-WORKER] CALIBRATIONMODE:", event.data.payload);
-
       if (payload.mode != null && payload.mode !== undefined) {
-        //IMUOrientation = payload.mode;
-        if (payload.mode === "0") {IMUOrientation = IMUOpt.NONE;}
-        if (payload.mode === "1") {IMUOrientation = IMUOpt.AUTO;}
-        if (payload.mode === "2") {IMUOrientation = IMUOpt.WORLD_SIMPLE;}
-        if (payload.mode === "3") {IMUOrientation = IMUOpt.REFERENCE;}
-
-        console.log("[DECODE-WORKER] payload:", payload.mode);
-        console.log("[DECODE-WORKER] IMUOrientation set to:", IMUOrientation);
+        const mode = Number(payload.mode);
+        if (mode === IMUOpt.NONE) {IMUOrientation = IMUOpt.NONE;}
+        if (mode === IMUOpt.AUTO) {IMUOrientation = IMUOpt.AUTO;}
+        if (mode === IMUOpt.WORLD_SIMPLE) {IMUOrientation = IMUOpt.WORLD_SIMPLE;}
+        if (mode === IMUOpt.REFERENCE) {IMUOrientation = IMUOpt.REFERENCE;}
       }
   }
  // KALIBRIERDATEN EMPFANGEN
@@ -343,7 +361,6 @@ onmessage = function (event) {
         if (payload.type===2){quatworldsimple = payload.quaternion; updateCalibrationQuaternion(quatworldsimple)}  
         if (payload.type===3){quatworldaxis = payload.quaternion} 
         if (payload.type===4){quat2axis = payload.quaternion} 
-        console.log("[DECODE-WORKER] Kalibrierdatensatz:", payload.type);
         //console.log("[DECODE-WORKER] CALIBRATIONDATA:", quatauto);
       }
   }
@@ -381,7 +398,12 @@ onmessage = function (event) {
   else if (event.data.type === 'referenceState') {
     const payload = event.data.payload;
     if (payload && Number.isFinite(payload.x) && Number.isFinite(payload.y) && Number.isFinite(payload.z)) {
-      referenceState = { x: payload.x, y: payload.y, z: payload.z };
+      referenceState = {
+        acc: { x: payload.x, y: payload.y, z: payload.z },
+        gyro: Number.isFinite(payload.gx) && Number.isFinite(payload.gy) && Number.isFinite(payload.gz)
+          ? { x: payload.gx, y: payload.gy, z: payload.gz }
+          : null,
+      };
       console.log("[DECODE-WORKER] Reference state set:", referenceState);
     }
   }

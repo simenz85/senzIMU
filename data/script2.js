@@ -1,5 +1,7 @@
 import { calibrateWithZPlusXYFixed, calibrateWithZPlusXYSuperSimple, simpleZCalibration, calibrateWithZPlusXYSimple, calibrateWithIdleDataOnly, calibrateWithZPlusXY, calibrateWithZPlusXY2, calibrateTwoAxesFlexible, applyCalibrationToAccel, calibrateWithZPlusXYStrict } from './imuCalibration.js';
 import { MultiRingBuffer2, UniDropdown } from './helperclasses.js';
+import { AccVectorViewport } from './ui/acc-vector-viewport.js';
+import { formatMicrosecondsToHMS, toRegularArray } from './utils/format-utils.js';
 
 const FiliLib = globalThis.Fili;
 const liveIirCalculator = FiliLib ? new FiliLib.CalcCascades() : null;
@@ -22,9 +24,19 @@ let tempgravity = 0;
 let quater = null;
 let calibrating1 = false;
 let calibrating2 = false;
-let calibrationMemory = [null];
+let calibrationMemory = [null, null];
 let calibrationFlow = 'worldSimple';
-const REFERENCE_CAPTURE_SAMPLE_COUNT = 96;
+const CALIBRATION_CAPTURE_STEP_MS = 30;
+const CALIBRATION_CAPTURE_STEPS = 100;
+const REFERENCE_CAPTURE_MIN_SAMPLES = 8;
+const CALIBRATION_COOKIE_NAME = 'imuCalibrationState';
+const CALIBRATION_COOKIE_VERSION = 1;
+const CALIBRATION_COOKIE_MAX_AGE_SECONDS = 24 * 60 * 60;
+let referenceCaptureActive = false;
+let currentOrientationMode = 0;
+let currentOrientationLabel = null;
+let gravityCutEnabled = false;
+let currentReferenceState = null;
 
 let ausrichtung = [0,0,0,0];
 
@@ -49,13 +61,31 @@ const accRawBuffer = new MultiRingBuffer2(
     ['time', 'x', 'y', 'z', 'total']
 );
 
+const gyroRawBuffer = new MultiRingBuffer2(
+    [Float64Array, Float32Array, Float32Array, Float32Array],
+    GYRO_BUFFER_SIZE,
+    ['time', 'x', 'y', 'z']
+);
+
 const accBufferCALIB = new MultiRingBuffer2(
     [Float32Array, Float32Array, Float32Array],
     CALIB_BUFFER_SIZE,
     ['x', 'y', 'z']
 );
 
+const gyroBufferCALIB = new MultiRingBuffer2(
+    [Float32Array, Float32Array, Float32Array],
+    CALIB_BUFFER_SIZE,
+    ['x', 'y', 'z']
+);
+
 const rmsBuffer = new MultiRingBuffer2(
+    [Float64Array, Float32Array, Float32Array, Float32Array, Float32Array],
+    RMS_BUFFER_SIZE,
+    ['time', 'x', 'y', 'z', 'total']
+);
+
+const gyroRmsBuffer = new MultiRingBuffer2(
     [Float64Array, Float32Array, Float32Array, Float32Array, Float32Array],
     RMS_BUFFER_SIZE,
     ['time', 'x', 'y', 'z', 'total']
@@ -125,9 +155,22 @@ const FILTER_WARMUP_ORDER_SECONDS = 0.18;
 const FILTER_ZERO_PHASE_PAD_MIN_SAMPLES = 96;
 const FILTER_ZERO_PHASE_PAD_MAX_SAMPLES = 1024;
 const lastAppliedFilterSettings = { acc: null, gyro: null };
+const accVectorViewport = new AccVectorViewport();
+const alignLoadQuatBtn = document.getElementById('alignLoadQuatBtn');
+const alignApplyQuatBtn = document.getElementById('alignApplyQuatBtn');
 
-// Regelmäßiges Update, z.B. alle 200 ms:
-let FFT_UPDATE_INTERVAL = 50;
+window.addEventListener('dashboardTabChanged', (event) => {
+    console.log('[ACC-3D] dashboardTabChanged', event.detail);
+    accVectorViewport.setVisible(event.detail?.sectionId === 'vectorAlignArea');
+});
+
+console.log('[ACC-3D] initial visibility', {
+    vectorAlignAreaDisplay: document.getElementById('vectorAlignArea')?.style.display,
+});
+accVectorViewport.setVisible(document.getElementById('vectorAlignArea')?.style.display !== 'none');
+
+// Regelmäßiges Update, Standard: 30 fps
+let FFT_UPDATE_INTERVAL = 1000 / 30;
 let RMS_UPDATE_INTERVAL = 50;
 let FFT_WINDOW_SIZE = 2048; // Größte Zweierpotenz, ggf. auch 2048
 let fftUpdateTimerId = null;
@@ -140,6 +183,23 @@ let avgFFTBuffer = [];
 let fftWorker = null;
 let rmsWorker = null;
 let RMS_WINDOW_SIZE = 100;
+
+let GYRO_FFT_UPDATE_INTERVAL = 1000 / 30;
+let GYRO_FFT_WINDOW_SIZE = 2048;
+let gyroFftUpdateTimerId = null;
+let gyroRmsUpdateTimerId = null;
+const gyroFftMaxBuffer = [];
+let gyroN_AVG = 10;
+let gyroAvgFFTBuffer = [];
+let gyroFftWorker = null;
+let gyroRmsWorker = null;
+const GYRO_FFT_RING_SIZE = 2 * 1000 / GYRO_FFT_UPDATE_INTERVAL;
+let GYRO_FFT_WINDOW_TYPE;
+let GYRO_DC_CUTOFF = true;
+let GYRO_FFT_AXIS_MODE;
+let gyroFftHighPass = 0;
+let gyroDisplayDurationSecondsRMS = 20;
+let gyroRmsPaused = false;
 
 const FFT_RING_SIZE = 2 * 1000 / FFT_UPDATE_INTERVAL; // z.B. 50
 const dropdown1 = new UniDropdown(document.getElementById('dropdown1'), {
@@ -264,6 +324,116 @@ const dropdown6 = new UniDropdown(document.getElementById('dropdown6'), {
 dropdown6.button.title = "Wähle die Achse für FFT";
 
 let fftHighPass = 0;
+
+const gyroDropdown1 = new UniDropdown(document.getElementById('gyroDropdown1'), {
+    type: 'select',
+    label: 'Blocksize',
+    items: [
+        { value: 254, label: 254 },
+        { value: 508, label: 508 },
+        { value: 1024, label: 1024 },
+        { value: 2048, label: 2048 },
+        { value: 4096, label: 4096 }
+    ],
+    defaultValue: GYRO_FFT_WINDOW_SIZE,
+    onChange: (value, label) => {
+        GYRO_FFT_WINDOW_SIZE = value;
+        console.log('Gyro FFT Blocksize:', value, label);
+    }
+});
+gyroDropdown1.button.title = 'Wähle die Fenstergröße für Gyro FFT';
+
+const gyroDropdown2 = new UniDropdown(document.getElementById('gyroDropdown2'), {
+    type: 'select',
+    label: 'Samplerate',
+    items: [
+        { value: 1000 / 60, label: '60 fps' },
+        { value: 1000 / 30, label: '30 fps' },
+        { value: 1000 / 20, label: '20 fps' },
+        { value: 1000 / 10, label: '10 fps' },
+        { value: 1000 / 5, label: '5 fps' },
+        { value: 1000 / 1, label: '1 fps' }
+    ],
+    defaultValue: GYRO_FFT_UPDATE_INTERVAL,
+    onChange: (value, label) => {
+        GYRO_FFT_UPDATE_INTERVAL = value;
+        startGyroFFTUpdates();
+        console.log('Gyro FFT Samplerate:', value, label);
+    }
+});
+gyroDropdown2.button.title = 'Wähle die Aktualisierungsrate für Gyro FFT';
+
+const gyroDropdown3 = new UniDropdown(document.getElementById('gyroDropdown3'), {
+    type: 'select',
+    label: 'Samples',
+    items: [
+        { value: 5, label: '5' },
+        { value: 10, label: '10' },
+        { value: 15, label: '15' },
+        { value: 20, label: '20' },
+        { value: 25, label: '25' },
+        { value: 50, label: '50' },
+        { value: 100, label: '100' },
+        { value: 150, label: '150' },
+        { value: 300, label: '300' }
+    ],
+    defaultValue: gyroN_AVG,
+    onChange: (value, label) => {
+        gyroN_AVG = value;
+        setAverageCount(value, gyroAvgFFTBuffer);
+        console.log('Gyro FFT Mittelung:', value, label);
+    }
+});
+gyroDropdown3.button.title = 'Wähle die Anzahl der Samples für den Gyro FFT Mittelwert';
+
+const gyroDropdown4 = new UniDropdown(document.getElementById('gyroDropdown4'), {
+    type: 'select',
+    label: 'WinType',
+    items: [
+        { value: 'BLACKMAN', label: 'BLACKMAN' },
+        { value: 'HANNING', label: 'HANNING' },
+        { value: 'HAMMING', label: 'HAMMING' },
+        { value: 'RECTANGULAR', label: 'RECTANGULAR' },
+    ],
+    defaultValue: gyroN_AVG,
+    onChange: (value, label) => {
+        GYRO_FFT_WINDOW_TYPE = value;
+        console.log('Gyro FFT Fenstertyp:', value, label);
+    }
+});
+gyroDropdown4.button.title = 'Wähle den Fenstertyp für Gyro FFT';
+
+const gyroDropdown5 = new UniDropdown(document.getElementById('gyroDropdown5'), {
+    type: 'select',
+    label: 'DC Cutoff',
+    items: [
+        { value: true, label: 'YES' },
+        { value: false, label: 'NO' },
+    ],
+    defaultValue: true,
+    onChange: (value, label) => {
+        GYRO_DC_CUTOFF = (value === 'true');
+        console.log('Gyro FFT DC Cutoff:', GYRO_DC_CUTOFF, label);
+    }
+});
+gyroDropdown5.button.title = 'Wähle den DC Cutoff für Gyro FFT';
+
+const gyroDropdown6 = new UniDropdown(document.getElementById('gyroDropdown6'), {
+    type: 'select',
+    label: 'AXIS',
+    items: [
+        { value: 'COMBI', label: 'KOMBINIERT' },
+        { value: 'ONLYX', label: 'X' },
+        { value: 'ONLYY', label: 'Y' },
+        { value: 'ONLYZ', label: 'Z' },
+    ],
+    defaultValue: gyroN_AVG,
+    onChange: (value, label) => {
+        GYRO_FFT_AXIS_MODE = value;
+        console.log('Gyro FFT Achse:', value, label);
+    }
+});
+gyroDropdown6.button.title = 'Wähle die Achse für Gyro FFT';
 
 
 // Welche Filtertypen gibt es mit welchen Designs & Transforms?
@@ -773,11 +943,6 @@ function handleFilterWorkerMessage(sensorKey, payload) {
 
     if (isAcc) {
         chartRef.setData([times, x, y, z, total]);
-        if (x.length > 0) {
-            modelacc[0] = x[x.length - 1] * 0.001;
-            modelacc[1] = y[y.length - 1] * 0.001;
-            modelacc[2] = z[z.length - 1] * 0.001;
-        }
     } else {
         chartRef.setData([times, x, y, z]);
     }
@@ -1140,12 +1305,11 @@ function createLiveFilterCoefficients(settings) {
     };
 
     if (transform === 'bilinear') {
-        if (['peak', 'lowshelf', 'highshelf'].includes(settings.type.toLowerCase())) {
-            params.gain = settings.gain || 0;
-        }
-        if (['bandpass', 'bandstop'].includes(settings.type.toLowerCase()) && settings.bandwidth !== undefined) {
-            params.BW = settings.bandwidth;
-        }
+        params.gain = settings.gain || 0;
+    }
+
+    if (['bandpass', 'bandstop'].includes(settings.type.toLowerCase()) && settings.bandwidth !== undefined) {
+        params.BW = settings.bandwidth;
     }
 
     switch (settings.type.toLowerCase()) {
@@ -1468,6 +1632,20 @@ const logSliderDropdown = new UniDropdown(document.getElementById('sliderDropdow
     }
 });
 
+const gyroLogSliderDropdown = new UniDropdown(document.getElementById('gyroSliderDropdown'), {
+    type: 'logslider',
+    label: 'HIGHPASS',
+    minValue: 0.001,
+    maxValue: 100,
+    defaultValue: 0,
+    alpha: 0.3,
+
+    onChange: (value, label) => {
+        gyroFftHighPass = value;
+        console.log('Gyro FFT Highpass:', value, label);
+    }
+});
+
 // IMU SETTINGS
 
 const accelRangeDD = new UniDropdown(document.getElementById('accelRangeDD'), {
@@ -1572,13 +1750,7 @@ const CSDD2 = new UniDropdown(document.getElementById('CSDD2'), {
         // { value: 3, label: "2 Axis" },
     ],
     onChange: (value, label) => {
-        // Nachricht an den WebSocket-Worker senden
-        decodeWorker.postMessage({
-            type: "calibmode",
-            payload: {
-                mode: value,
-            }
-        });
+        applyOrientationMode(value);
         console.log('Ausgewählt:', value, label);
     }
 });
@@ -1588,6 +1760,638 @@ function ensureOrientationOption(label, value, preferredIndex = 2) {
     if (!exists) {
         CSDD2.addSelectItem({ label, value: String(value) }, preferredIndex);
     }
+}
+
+function resetOrientationLiveBuffers() {
+    accBuffer.clear();
+    gyroBuffer.clear();
+    accBufferFiltered.clear();
+    gyroBufferFiltered.clear();
+    rmsBuffer.clear();
+    gyroRmsBuffer.clear();
+    if (typeof window.setPanOffset === 'function') {
+        window.setPanOffset(0);
+    }
+    lastTimestamp = 0;
+
+    if (typeof chart !== 'undefined' && chart) {
+        chart.setData([[], [], [], [], []]);
+        chart.setScale('y', { min: -1100, max: 1100 });
+        chart.setScale('x', { auto: true });
+    }
+
+    if (typeof gyroChart !== 'undefined' && gyroChart) {
+        gyroChart.setData([[], [], [], []]);
+        gyroChart.setScale('y', { auto: true });
+        gyroChart.setScale('x', { auto: true });
+    }
+}
+
+function setCookieValue(name, value, maxAgeSeconds) {
+    document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; samesite=lax`;
+}
+
+function getCookieValue(name) {
+    const prefix = `${name}=`;
+    const cookies = document.cookie ? document.cookie.split('; ') : [];
+
+    for (const cookie of cookies) {
+        if (cookie.startsWith(prefix)) {
+            return decodeURIComponent(cookie.slice(prefix.length));
+        }
+    }
+
+    return null;
+}
+
+function clearCookieValue(name) {
+    document.cookie = `${name}=; max-age=0; path=/; samesite=lax`;
+}
+
+function sanitizeReferenceState(referenceState) {
+    if (!referenceState || typeof referenceState !== 'object') {
+        return null;
+    }
+
+    const sanitized = {
+        x: Number(referenceState.x),
+        y: Number(referenceState.y),
+        z: Number(referenceState.z),
+        gx: Number(referenceState.gx ?? 0),
+        gy: Number(referenceState.gy ?? 0),
+        gz: Number(referenceState.gz ?? 0),
+    };
+
+    if (![sanitized.x, sanitized.y, sanitized.z, sanitized.gx, sanitized.gy, sanitized.gz].every(Number.isFinite)) {
+        return null;
+    }
+
+    return sanitized;
+}
+
+function getOrientationLabelForMode(mode) {
+    const normalizedMode = Number(mode);
+    const existingItem = CSDD2.items?.find((item) => Number(item.value) === normalizedMode);
+    if (existingItem?.label) {
+        return existingItem.label;
+    }
+
+    if (normalizedMode === 1) {
+        return 'AUTO';
+    }
+
+    if (normalizedMode === 2) {
+        return currentOrientationLabel || 'World Simple';
+    }
+
+    if (normalizedMode === 3) {
+        return 'Reference';
+    }
+
+    return null;
+}
+
+function getCurrentCalibrationCookieState() {
+    const state = {
+        version: CALIBRATION_COOKIE_VERSION,
+        mode: Number.isFinite(currentOrientationMode) ? Number(currentOrientationMode) : 0,
+        savedAt: Date.now(),
+    };
+
+    const normalizedQuaternion = normalizeQuaternionXYZW(calibrationMemory[1]);
+    if (normalizedQuaternion) {
+        state.worldSimpleQuaternion = normalizedQuaternion;
+    }
+
+    const referenceState = sanitizeReferenceState(currentReferenceState);
+    if (referenceState) {
+        state.referenceState = referenceState;
+    }
+
+    if (Number.isFinite(tempgravity) && tempgravity > 0) {
+        state.gravityMagnitude = Number(tempgravity);
+    }
+
+    const orientationLabel = getOrientationLabelForMode(state.mode);
+    if (orientationLabel) {
+        state.orientationLabel = orientationLabel;
+    }
+
+    return state;
+}
+
+function persistCalibrationCookie() {
+    const state = getCurrentCalibrationCookieState();
+    const hasCalibrationPayload = Boolean(state.worldSimpleQuaternion || state.referenceState || state.gravityMagnitude);
+
+    if (!hasCalibrationPayload && state.mode === 0) {
+        clearCookieValue(CALIBRATION_COOKIE_NAME);
+        return;
+    }
+
+    setCookieValue(CALIBRATION_COOKIE_NAME, JSON.stringify(state), CALIBRATION_COOKIE_MAX_AGE_SECONDS);
+}
+
+function readCalibrationCookieState() {
+    const rawCookie = getCookieValue(CALIBRATION_COOKIE_NAME);
+    if (!rawCookie) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(rawCookie);
+        const state = {
+            version: Number(parsed?.version),
+            mode: Number.isFinite(Number(parsed?.mode)) ? Number(parsed.mode) : 0,
+            orientationLabel: typeof parsed?.orientationLabel === 'string' ? parsed.orientationLabel : null,
+            worldSimpleQuaternion: normalizeQuaternionXYZW(parsed?.worldSimpleQuaternion),
+            referenceState: sanitizeReferenceState(parsed?.referenceState),
+            gravityMagnitude: Number(parsed?.gravityMagnitude),
+        };
+
+        if (state.version !== CALIBRATION_COOKIE_VERSION) {
+            return null;
+        }
+
+        if (!Number.isFinite(state.gravityMagnitude) || state.gravityMagnitude <= 0) {
+            state.gravityMagnitude = null;
+        }
+
+        return state;
+    } catch (error) {
+        console.warn('Kalibrierungs-Cookie konnte nicht gelesen werden:', error);
+        clearCookieValue(CALIBRATION_COOKIE_NAME);
+        return null;
+    }
+}
+
+function restoreCalibrationFromCookie() {
+    const state = readCalibrationCookieState();
+    if (!state) {
+        return;
+    }
+
+    if (state.worldSimpleQuaternion) {
+        calibrationMemory[1] = state.worldSimpleQuaternion.slice();
+        decodeWorker.postMessage({
+            type: 'calibdata',
+            payload: {
+                type: 2,
+                quaternion: state.worldSimpleQuaternion,
+            }
+        });
+    }
+
+    if (state.referenceState) {
+        currentReferenceState = state.referenceState;
+        decodeWorker.postMessage({
+            type: 'referenceState',
+            payload: state.referenceState,
+        });
+    }
+
+    if (state.gravityMagnitude) {
+        tempgravity = state.gravityMagnitude;
+        decodeWorker.postMessage({
+            type: 'gravity',
+            payload: {
+                gravity: state.gravityMagnitude,
+            }
+        });
+    }
+
+    applyOrientationMode(state.mode, {
+        syncDropdown: true,
+        optionLabel: state.orientationLabel,
+        persistState: false,
+    });
+
+    console.log('Kalibrierung aus Cookie wiederhergestellt:', state);
+}
+
+function applyOrientationMode(mode, { syncDropdown = false, optionLabel = null, persistState = true } = {}) {
+    const normalizedMode = Number(mode);
+    if (!Number.isFinite(normalizedMode)) {
+        return;
+    }
+
+    currentOrientationMode = normalizedMode;
+
+    const resolvedLabel = optionLabel || getOrientationLabelForMode(normalizedMode);
+    if (resolvedLabel) {
+        currentOrientationLabel = resolvedLabel;
+        ensureOrientationOption(resolvedLabel, normalizedMode, 2);
+    }
+
+    decodeWorker.postMessage({
+        type: 'calibmode',
+        payload: {
+            mode: normalizedMode,
+        }
+    });
+
+    resetOrientationLiveBuffers();
+
+    if (syncDropdown) {
+        CSDD2.setValue(normalizedMode, true);
+    }
+
+    if (persistState) {
+        persistCalibrationCookie();
+    }
+}
+
+function normalizeQuaternionXYZW(quaternion) {
+    const source = Array.isArray(quaternion)
+        ? quaternion
+        : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w];
+
+    if (!source || source.length < 4) {
+        return null;
+    }
+
+    const values = source.slice(0, 4).map((value) => Number(value));
+    if (values.some((value) => !Number.isFinite(value))) {
+        return null;
+    }
+
+    const length = Math.hypot(values[0], values[1], values[2], values[3]);
+    if (length < 1e-12) {
+        return null;
+    }
+
+    return values.map((value) => value / length);
+}
+
+function convertQuaternionWXYZtoXYZW(quaternion) {
+    if (!Array.isArray(quaternion) || quaternion.length < 4) {
+        return null;
+    }
+
+    return normalizeQuaternionXYZW([quaternion[1], quaternion[2], quaternion[3], quaternion[0]]);
+}
+
+function applyQuaternionXYZWToSample(sample, quaternion) {
+    const normalizedQuaternion = normalizeQuaternionXYZW(quaternion);
+    if (!sample || !normalizedQuaternion) {
+        return null;
+    }
+
+    const [qx, qy, qz, qw] = normalizedQuaternion;
+    const qConjX = -qx;
+    const qConjY = -qy;
+    const qConjZ = -qz;
+    const qConjW = qw;
+    const vx = Number(sample.x || 0);
+    const vy = Number(sample.y || 0);
+    const vz = Number(sample.z || 0);
+    const tx = qw * vx + qy * vz - qz * vy;
+    const ty = qw * vy + qz * vx - qx * vz;
+    const tz = qw * vz + qx * vy - qy * vx;
+    const tw = -qx * vx - qy * vy - qz * vz;
+    const rx = tw * qConjX + tx * qConjW + ty * qConjZ - tz * qConjY;
+    const ry = tw * qConjY + ty * qConjW + tz * qConjX - tx * qConjZ;
+    const rz = tw * qConjZ + tz * qConjW + tx * qConjY - ty * qConjX;
+
+    return {
+        time: Number(sample.time || 0),
+        x: rx,
+        y: ry,
+        z: rz,
+        total: Math.hypot(rx, ry, rz),
+    };
+}
+
+function applyQuaternionWXYZToSample(sample, quaternion) {
+    if (!sample || !Array.isArray(quaternion) || quaternion.length < 4) {
+        return null;
+    }
+
+    const w = Number(quaternion[0]);
+    const x = Number(quaternion[1]);
+    const y = Number(quaternion[2]);
+    const z = Number(quaternion[3]);
+    if (![w, x, y, z].every(Number.isFinite)) {
+        return null;
+    }
+
+    const magnitude = Math.hypot(w, x, y, z);
+    if (magnitude < 1e-12) {
+        return null;
+    }
+
+    const nw = w / magnitude;
+    const nx = x / magnitude;
+    const ny = y / magnitude;
+    const nz = z / magnitude;
+    const vx = Number(sample.x || 0);
+    const vy = Number(sample.y || 0);
+    const vz = Number(sample.z || 0);
+    const tx = 2 * (ny * vz - nz * vy);
+    const ty = 2 * (nz * vx - nx * vz);
+    const tz = 2 * (nx * vy - ny * vx);
+    const rx = vx + nw * tx + (ny * tz - nz * ty);
+    const ry = vy + nw * ty + (nz * tx - nx * tz);
+    const rz = vz + nw * tz + (nx * ty - ny * tx);
+
+    return {
+        time: Number(sample.time || 0),
+        x: rx,
+        y: ry,
+        z: rz,
+        total: Math.hypot(rx, ry, rz),
+    };
+}
+
+function applyGravityCutToSample(sample, gravityMagnitude) {
+    if (!sample) {
+        return null;
+    }
+
+    const normalizedGravity = Number.isFinite(gravityMagnitude) && gravityMagnitude > 0 ? gravityMagnitude : 1000;
+    const x = Number(sample.x || 0);
+    const y = Number(sample.y || 0);
+    const z = Number(sample.z || 0) - normalizedGravity;
+
+    return {
+        time: Number(sample.time || 0),
+        x,
+        y,
+        z,
+        total: Math.hypot(x, y, z),
+    };
+}
+
+function applyReferenceToSample(sample, referenceState) {
+    if (!sample || !referenceState) {
+        return null;
+    }
+
+    const x = Number(sample.x || 0) - Number(referenceState.x || 0);
+    const y = Number(sample.y || 0) - Number(referenceState.y || 0);
+    const z = Number(sample.z || 0) - Number(referenceState.z || 0);
+
+    return {
+        time: Number(sample.time || 0),
+        x,
+        y,
+        z,
+        total: Math.hypot(x, y, z),
+    };
+}
+
+function getViewportGravityMagnitude() {
+    if (Number.isFinite(tempgravity) && tempgravity > 0) {
+        return tempgravity;
+    }
+
+    return 1000;
+}
+
+function getViewportBaseQuaternionXYZW() {
+    if (currentOrientationMode === 2) {
+        return normalizeQuaternionXYZW(calibrationMemory[1]) || convertQuaternionWXYZtoXYZW(ausrichtung);
+    }
+
+    if (currentOrientationMode === 1) {
+        return convertQuaternionWXYZtoXYZW(ausrichtung) || normalizeQuaternionXYZW(calibrationMemory[1]);
+    }
+
+    return normalizeQuaternionXYZW(calibrationMemory[1]) || convertQuaternionWXYZtoXYZW(ausrichtung);
+}
+
+function buildViewportAccelerationSamples(rawSample, processedSample) {
+    const raw = rawSample || processedSample || null;
+    let calibrated = processedSample || raw;
+    let calibratedCut = processedSample || raw;
+    const gravityMagnitude = getViewportGravityMagnitude();
+
+    if (raw) {
+        if (currentOrientationMode === 3 && currentReferenceState) {
+            calibrated = applyReferenceToSample(raw, currentReferenceState) || calibrated;
+            calibratedCut = calibrated;
+        } else if (currentOrientationMode === 1) {
+            calibrated = applyQuaternionWXYZToSample(raw, ausrichtung) || calibrated;
+            calibratedCut = applyGravityCutToSample(calibrated, gravityMagnitude) || calibrated;
+        } else {
+            const calibrationQuaternion = getViewportBaseQuaternionXYZW();
+            if (calibrationQuaternion) {
+                calibrated = applyQuaternionXYZWToSample(raw, calibrationQuaternion) || calibrated;
+                calibratedCut = applyGravityCutToSample(calibrated, gravityMagnitude) || calibrated;
+            }
+        }
+    }
+
+    if (!calibratedCut) {
+        calibratedCut = gravityCutEnabled
+            ? (processedSample || calibrated || raw)
+            : applyGravityCutToSample(processedSample || calibrated || raw, gravityMagnitude) || calibrated || raw;
+    }
+
+    return {
+        raw,
+        calibrated,
+        calibratedCut,
+    };
+}
+
+function buildViewportGyroSamples(rawSample, processedSample) {
+    const raw = rawSample || processedSample || null;
+    let calibrated = processedSample || raw;
+    let calibratedCut = processedSample || raw;
+
+    if (raw) {
+        if (currentOrientationMode === 3 && currentReferenceState) {
+            calibrated = {
+                time: Number(raw.time || 0),
+                x: Number(raw.x || 0) - Number(currentReferenceState.gx || 0),
+                y: Number(raw.y || 0) - Number(currentReferenceState.gy || 0),
+                z: Number(raw.z || 0) - Number(currentReferenceState.gz || 0),
+            };
+            calibrated.total = Math.hypot(calibrated.x, calibrated.y, calibrated.z);
+            calibratedCut = calibrated;
+        } else if (currentOrientationMode === 1) {
+            calibrated = applyQuaternionWXYZToSample(raw, ausrichtung) || calibrated;
+            calibratedCut = calibrated;
+        } else {
+            const calibrationQuaternion = getViewportBaseQuaternionXYZW();
+            if (calibrationQuaternion) {
+                calibrated = applyQuaternionXYZWToSample(raw, calibrationQuaternion) || calibrated;
+                calibratedCut = calibrated;
+            }
+        }
+    }
+
+    return {
+        calibrated,
+        calibratedCut,
+    };
+}
+
+function getPreferredQuaternionForViewportLoad() {
+    if (currentOrientationMode === 2) {
+        return normalizeQuaternionXYZW(calibrationMemory[1]);
+    }
+
+    if (currentOrientationMode === 1) {
+        return convertQuaternionWXYZtoXYZW(ausrichtung);
+    }
+
+    return normalizeQuaternionXYZW(calibrationMemory[1]) || convertQuaternionWXYZtoXYZW(ausrichtung);
+}
+
+function applyManualViewportQuaternion() {
+    const manualQuaternion = accVectorViewport.getAppliedQuaternion();
+    if (!manualQuaternion) {
+        accVectorViewport.setStatus('Manuelle Quaternion nicht verfuegbar');
+        return;
+    }
+
+    calibrationMemory[1] = manualQuaternion.slice();
+    decodeWorker.postMessage({
+        type: 'calibdata',
+        payload: {
+            type: 2,
+            quaternion: manualQuaternion,
+        }
+    });
+
+    applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World Simple' });
+    accVectorViewport.setStatus('Manuelle Quaternion als World Simple aktiv');
+}
+
+if (alignLoadQuatBtn) {
+    alignLoadQuatBtn.addEventListener('click', () => {
+        const currentQuaternion = getPreferredQuaternionForViewportLoad();
+        if (!currentQuaternion) {
+            accVectorViewport.setStatus('Keine kalibrierte Quaternion vorhanden');
+            return;
+        }
+
+        accVectorViewport.setAppliedQuaternion(currentQuaternion, { silent: true });
+        accVectorViewport.setStatus('Kalibrierte Quaternion in den 3D-Tab geladen');
+    });
+}
+
+if (alignApplyQuatBtn) {
+    alignApplyQuatBtn.addEventListener('click', () => {
+        applyManualViewportQuaternion();
+    });
+}
+
+function calculateStats(values) {
+    if (!values || values.length === 0) {
+        return { mean: 0, stdDev: 0, delta: 0 };
+    }
+
+    let sum = 0;
+    let min = values[0];
+    let max = values[0];
+
+    for (let index = 0; index < values.length; index++) {
+        const value = values[index];
+        sum += value;
+        if (value < min) min = value;
+        if (value > max) max = value;
+    }
+
+    const mean = sum / values.length;
+    let squaredDiffSum = 0;
+
+    for (let index = 0; index < values.length; index++) {
+        const diff = values[index] - mean;
+        squaredDiffSum += diff * diff;
+    }
+
+    return {
+        mean,
+        stdDev: Math.sqrt(squaredDiffSum / values.length),
+        delta: max - min,
+    };
+}
+
+function getBufferAxisStats(buffer, fieldName) {
+    return calculateStats(buffer.getFieldTypedArray(fieldName, buffer.length));
+}
+
+function buildCalibrationStatsTableHtml(accSampleCount, gyroSampleCount, accStats, gyroStats) {
+    const rows = [
+        { sensor: 'ACC', axis: 'X', stats: accStats.x, unit: 'mg' },
+        { sensor: 'ACC', axis: 'Y', stats: accStats.y, unit: 'mg' },
+        { sensor: 'ACC', axis: 'Z', stats: accStats.z, unit: 'mg' },
+        { sensor: 'Gyro', axis: 'X', stats: gyroStats.x, unit: 'mdps' },
+        { sensor: 'Gyro', axis: 'Y', stats: gyroStats.y, unit: 'mdps' },
+        { sensor: 'Gyro', axis: 'Z', stats: gyroStats.z, unit: 'mdps' },
+    ];
+
+    const bodyRows = rows.map(row => `
+        <tr>
+            <td>${row.sensor}</td>
+            <td>${row.axis}</td>
+            <td>${row.stats.mean.toFixed(2)} ${row.unit}</td>
+            <td>${row.stats.stdDev.toFixed(2)} ${row.unit}</td>
+            <td>${row.stats.delta.toFixed(2)} ${row.unit}</td>
+        </tr>
+    `).join('');
+
+    return `
+        <div class="calibration-summary">
+            <div class="calibration-summary-meta">
+                <span>ACC Samples: ${accSampleCount}</span>
+                <span>Gyro Samples: ${gyroSampleCount}</span>
+            </div>
+            <table class="calibration-summary-table">
+                <thead>
+                    <tr>
+                        <th>Sensor</th>
+                        <th>Achse</th>
+                        <th>Mittel</th>
+                        <th>StdAbw</th>
+                        <th>Delta</th>
+                    </tr>
+                </thead>
+                <tbody>${bodyRows}</tbody>
+            </table>
+        </div>
+    `;
+}
+
+function buildSingleSensorStatsTableHtml(sensorLabel, sampleCount, stats, unit) {
+    const rows = [
+        { axis: 'X', stats: stats.x },
+        { axis: 'Y', stats: stats.y },
+        { axis: 'Z', stats: stats.z },
+    ];
+
+    const bodyRows = rows.map(row => `
+        <tr>
+            <td>${sensorLabel}</td>
+            <td>${row.axis}</td>
+            <td>${row.stats.mean.toFixed(2)} ${unit}</td>
+            <td>${row.stats.stdDev.toFixed(2)} ${unit}</td>
+            <td>${row.stats.delta.toFixed(2)} ${unit}</td>
+        </tr>
+    `).join('');
+
+    return `
+        <div class="calibration-summary">
+            <div class="calibration-summary-meta">
+                <span>${sensorLabel} Samples: ${sampleCount}</span>
+            </div>
+            <table class="calibration-summary-table">
+                <thead>
+                    <tr>
+                        <th>Sensor</th>
+                        <th>Achse</th>
+                        <th>Mittel</th>
+                        <th>StdAbw</th>
+                        <th>Delta</th>
+                    </tr>
+                </thead>
+                <tbody>${bodyRows}</tbody>
+            </table>
+        </div>
+    `;
 }
 
 
@@ -1868,6 +2672,8 @@ const layout = {
 //let fftWorker = null;updat
 let fftPlot = null;
 let rmsPlot = null;
+let gyroFftPlot = null;
+let gyroRmsPlot = null;
 
 
 // === Web Workers ===
@@ -1888,15 +2694,22 @@ document.addEventListener("DOMContentLoaded", () => {
     //enableChartZoomAndPan();
     setupWSWorker();
     setupDecodeWorker();
+    restoreCalibrationFromCookie();
     setupUIListeners();
     connectWebSocket();
     startChartUpdates();
     initFFTChart();
     initRMSChart();
+    initGyroFFTChart();
+    initGyroRMSChart();
     setupRMSWorker()
     startRMSUpdates();
+    setupGyroRMSWorker();
+    startGyroRMSUpdates();
     setupFFTWorker();
     startFFTUpdates();
+    setupGyroFFTWorker();
+    startGyroFFTUpdates();
 
     const filterDrawer = document.getElementById('filterDrawer');
     const filterDrawerToggle = document.getElementById('filterDrawerToggle');
@@ -1908,6 +2721,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const livechartsGrid = document.getElementById('livechartsGrid');
     const chartLayoutToggle = document.getElementById('chartLayoutToggle');
+    const fftRmsGrid = document.getElementById('fftRmsGrid');
+    const fftRmsLayoutToggle = document.getElementById('fftRmsLayoutToggle');
+    const gyroFftRmsGrid = document.getElementById('gyroFftRmsGrid');
+    const gyroFftRmsLayoutToggle = document.getElementById('gyroFftRmsLayoutToggle');
     const updateChartLayoutToggle = () => {
         const isSideBySide = livechartsGrid?.classList.contains('is-side-by-side');
         if (chartLayoutToggle) {
@@ -1915,7 +2732,23 @@ document.addEventListener("DOMContentLoaded", () => {
             chartLayoutToggle.setAttribute('aria-pressed', isSideBySide ? 'true' : 'false');
         }
     };
+    const updateFftRmsLayoutToggle = () => {
+        const isSideBySide = fftRmsGrid?.classList.contains('is-side-by-side');
+        if (fftRmsLayoutToggle) {
+            fftRmsLayoutToggle.textContent = isSideBySide ? 'Untereinander' : 'Nebeneinander';
+            fftRmsLayoutToggle.setAttribute('aria-pressed', isSideBySide ? 'true' : 'false');
+        }
+    };
+    const updateGyroFftRmsLayoutToggle = () => {
+        const isSideBySide = gyroFftRmsGrid?.classList.contains('is-side-by-side');
+        if (gyroFftRmsLayoutToggle) {
+            gyroFftRmsLayoutToggle.textContent = isSideBySide ? 'Untereinander' : 'Nebeneinander';
+            gyroFftRmsLayoutToggle.setAttribute('aria-pressed', isSideBySide ? 'true' : 'false');
+        }
+    };
     updateChartLayoutToggle();
+    updateFftRmsLayoutToggle();
+    updateGyroFftRmsLayoutToggle();
     chartLayoutToggle?.addEventListener('click', () => {
         livechartsGrid?.classList.toggle('is-side-by-side');
         updateChartLayoutToggle();
@@ -1923,6 +2756,24 @@ document.addEventListener("DOMContentLoaded", () => {
         requestAnimationFrame(() => {
             chart.setSize(getSize());
             gyroChart.setSize(getGyroChartSize());
+        });
+    });
+    fftRmsLayoutToggle?.addEventListener('click', () => {
+        fftRmsGrid?.classList.toggle('is-side-by-side');
+        updateFftRmsLayoutToggle();
+        updateFftRmsPanelHeights();
+        requestAnimationFrame(() => {
+            fftPlot?.setSize(getFftChartSize());
+            rmsPlot?.setSize(getRmsChartSize());
+        });
+    });
+    gyroFftRmsLayoutToggle?.addEventListener('click', () => {
+        gyroFftRmsGrid?.classList.toggle('is-side-by-side');
+        updateGyroFftRmsLayoutToggle();
+        updateGyroFftRmsPanelHeights();
+        requestAnimationFrame(() => {
+            gyroFftPlot?.setSize(getGyroFftChartSize());
+            gyroRmsPlot?.setSize(getGyroRmsChartSize());
         });
     });
 
@@ -1934,9 +2785,32 @@ document.addEventListener("DOMContentLoaded", () => {
         const sidebar = document.getElementById('sidebar');
         sidebar.classList.toggle('expanded');
         updateLiveChartPanelHeights();
+        updateFftRmsPanelHeights();
+        updateGyroFftRmsPanelHeights();
     });
 
     updateLiveChartPanelHeights();
+    updateFftRmsPanelHeights();
+    updateGyroFftRmsPanelHeights();
+
+    window.addEventListener('dashboardTabChanged', (event) => {
+        if (event.detail?.sectionId === 'fftChartarea') {
+            updateFftRmsPanelHeights();
+            requestAnimationFrame(() => {
+                fftPlot?.setSize(getFftChartSize());
+                rmsPlot?.setSize(getRmsChartSize());
+            });
+            return;
+        }
+
+        if (event.detail?.sectionId === 'gyroFftChartarea') {
+            updateGyroFftRmsPanelHeights();
+            requestAnimationFrame(() => {
+                gyroFftPlot?.setSize(getGyroFftChartSize());
+                gyroRmsPlot?.setSize(getGyroRmsChartSize());
+            });
+        }
+    });
 });
 
 // SLIDER ACTION
@@ -2016,7 +2890,6 @@ fusionWorker.onmessage = (event) => {
 
 
 
-//console.log("ACCEL WORLD: " + modelacc[0].toFixed(3) + " " + modelacc[1].toFixed(3) + " " + modelacc[2].toFixed(3));
 
 roll.textContent = event.data.tiltHeadingRoll.roll.toFixed(0);
 pitch.textContent = event.data.tiltHeadingRoll.pitch.toFixed(0);
@@ -2028,7 +2901,7 @@ posZ.textContent = event.data.accWorld.z.toFixed(4);
 
 decodeWorker.postMessage({type: "calibdata", payload: {type: 1, quaternion: event.data.quaternion}});
 
-ausrichtung = event.data.quaternion;
+ausrichtung = Array.isArray(event.data.quaternion) ? event.data.quaternion.slice() : Array.from(event.data.quaternion || []);
 
 };
 
@@ -2051,6 +2924,9 @@ function setupDecodeWorker() {
 
             for (let sample of accraw) {
                 accRawBuffer.push([sample.time, sample.x, sample.y, sample.z, Math.hypot(sample.x, sample.y, sample.z)]);
+                if (referenceCaptureActive) {
+                    accBufferCALIB.push([sample.x, sample.y, sample.z]);
+                }
             }
         }
 
@@ -2060,6 +2936,13 @@ function setupDecodeWorker() {
                 sensor: "gyro",
                 data: gyroraw.map(s => ({ x: s.x, y: s.y, z: s.z, time: s.time }))
             });
+
+            for (let sample of gyroraw) {
+                gyroRawBuffer.push([sample.time, sample.x, sample.y, sample.z]);
+                if (referenceCaptureActive) {
+                    gyroBufferCALIB.push([sample.x, sample.y, sample.z]);
+                }
+            }
         }
 
         if (acccalib && acccalib.length > 0) {
@@ -2284,6 +3167,7 @@ function updateDashboard() {
 
     //console.log("[DASHBOARD] Update started, accBuffer size:", accBuffer.size);
     let lastAccSample = accBuffer.getLast();
+    let lastAccRawSample = accRawBuffer.getLast();
     let lastGyroSample = gyroBuffer.getLast();
     let Samplerate1 = 0.0;
     let totalSeconds1 = 0;
@@ -2343,6 +3227,8 @@ function updateDashboard() {
         document.getElementById("accX").textContent = lastAccSample.x.toFixed(1);
         document.getElementById("accY").textContent = lastAccSample.y.toFixed(1);
         document.getElementById("accZ").textContent = lastAccSample.z.toFixed(1);
+        accVectorViewport.setAccelerationSamples(buildViewportAccelerationSamples(lastAccRawSample, lastAccSample));
+        accVectorViewport.setGyroSamples(buildViewportGyroSamples(gyroRawBuffer.getLast(), lastGyroSample));
         if (lastGyroSample) {
             document.getElementById("gyroX").textContent = lastGyroSample.x.toFixed(1);
             document.getElementById("gyroY").textContent = lastGyroSample.y.toFixed(1);
@@ -2395,12 +3281,6 @@ function updateDashboard() {
                 const yMinBefore = chart.scales.y.min;
                 const yMaxBefore = chart.scales.y.max;
                 chart.setData([filteredWindow.times, filteredWindow.xs, filteredWindow.ys, filteredWindow.zs, filteredWindow.totals]);
-                if (filteredWindow.times.length > 0) {
-                    const lastIndex = filteredWindow.times.length - 1;
-                    modelacc[0] = filteredWindow.xs[lastIndex] * 0.001;
-                    modelacc[1] = filteredWindow.ys[lastIndex] * 0.001;
-                    modelacc[2] = filteredWindow.zs[lastIndex] * 0.001;
-                }
                 window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: accLatestTimestamp } }));
                 if (yMinBefore !== undefined && yMaxBefore !== undefined) {
                     chart.setScale("y", { min: yMinBefore, max: yMaxBefore });
@@ -2592,510 +3472,155 @@ function setupUIListeners() {
     });
     }
 
-    // Helper to toggle recording state
-// Helper to toggle recording state
-// Made global to be accessible by RMS controls
-window.toggleRecording = function() {
-    isRecording = !isRecording;
-    
-    // Update recordBtn (Main)
-    if (isRecording) {
-        console.log("toggleRecording: STARTING. recordedRows reset.");
-        recordedRows = [];
-        filePartIndex = 0; // Reset part index
-        recordBtn.innerHTML = '<i class="fas fa-stop"></i> Stop';
-        recordBtn.classList.add("active");
-        downloadBtn.style.display = "none";
-    } else {
-        console.log("toggleRecording: STOPPING. Rows collected:", recordedRows.length);
-        recordBtn.innerHTML = '<i class="fas fa-circle"></i> Record';
-        recordBtn.classList.remove("active");
-        if (recordedRows.length > 0) {
-            downloadBtn.style.display = "";
+    function syncRecordingButtons() {
+        const rmsRecordBtn = document.getElementById('rmsRecordBtn');
+        const gyroRmsRecordBtn = document.getElementById('gyroRmsRecordBtn');
+
+        if (recordBtn) {
+            recordBtn.innerHTML = isRecording
+                ? '<i class="fas fa-stop"></i> Stop'
+                : '<i class="fas fa-circle"></i> Record';
+            recordBtn.classList.toggle("active", isRecording);
+        }
+
+        if (recBtn2) {
+            recBtn2.textContent = isRecording ? "⏹" : "🔴";
+            recBtn2.classList.toggle("active", isRecording);
+        }
+
+        if (rmsRecordBtn) {
+            rmsRecordBtn.innerHTML = isRecording ? '⏹' : '🔴';
+            rmsRecordBtn.classList.toggle('active', isRecording);
+        }
+
+        if (gyroRmsRecordBtn) {
+            gyroRmsRecordBtn.innerHTML = isRecording ? '⏹' : '🔴';
+            gyroRmsRecordBtn.classList.toggle('active', isRecording);
         }
     }
-    
-    // Common Auto-Download Trigger when stopping
-    if (!isRecording) {
-            console.log("Recording stopped. Rows collected:", recordedRows.length);
-            if (recordedRows.length > 0) {
-                downloadCSV();
-            } else {
-                console.warn("No rows recorded, skipping download.");
-            }
-    }
 
-    // Update recBtn2 (Chart Overlay)
-    if (typeof recBtn2 !== 'undefined' && recBtn2) {
-        if (isRecording) {
-            recBtn2.innerHTML = "⏹"; // Stop symbol
-            recBtn2.title = "Aufnahme stoppen";
-            recBtn2.classList.add("recording"); // Optional style
-        } else {
-            recBtn2.innerHTML = "🔴"; // Record symbol
-            recBtn2.title = "CSV Aufnahme starten";
-            recBtn2.classList.remove("recording");
-        }
-    }
-    
-    // Update RMS Record Button
-    const rmsRecordBtn = document.getElementById("rmsRecordBtn");
-    if (rmsRecordBtn) {
-        if (isRecording) {
-            rmsRecordBtn.innerHTML = "⏹";
-            rmsRecordBtn.title = "Aufnahme stoppen";
-            rmsRecordBtn.classList.add("recording");
-        } else {
-            rmsRecordBtn.innerHTML = "🔴";
-            rmsRecordBtn.title = "CSV Aufnahme starten";
-            rmsRecordBtn.classList.remove("recording");
-        }
-    }
-}
-
-    recordBtn.addEventListener("click", () => {
-        window.toggleRecording();
-    });
-
-    if (typeof recBtn2 !== 'undefined' && recBtn2) {
-        recBtn2.addEventListener("click", () => {
-             window.toggleRecording();
-        });
-    }
-
-    function downloadCSV(intermediate = false) {
-        // console.log("Starting CSV download...");
+    function downloadCSV(isIntermediate = false) {
         if (!recordedRows.length) {
-            console.warn("No rows to download.");
             return;
         }
-        
-        // Header without ID
-        const csv = "timestamp,x,y,z\n" +
-            recordedRows.map(r => r.join(",")).join("\n");
-            
+
+        const columnCount = Math.max(...recordedRows.map((row) => row.length), 0);
+        const header = Array.from({ length: columnCount }, (_, index) => `col${index + 1}`).join(",");
+        const csv = `${header}\n${recordedRows.map((row) => row.join(",")).join("\n")}`;
         const blob = new Blob([csv], { type: "text/csv" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        
-        // Filename: LIVECHART_RAW_YYYYMMDD_HHMMSS_partN.csv
-        const now = new Date();
-        const timestampStr = now.getFullYear() +
-            String(now.getMonth() + 1).padStart(2, '0') +
-            String(now.getDate()).padStart(2, '0') + "_" +
-            String(now.getHours()).padStart(2, '0') +
-            String(now.getMinutes()).padStart(2, '0') +
-            String(now.getSeconds()).padStart(2, '0');
-            
-        a.download = `LIVECHART_RAW_${timestampStr}_part${filePartIndex}.csv`;
-        
-        document.body.appendChild(a); 
-        a.click();
-        document.body.removeChild(a); 
+        const anchor = document.createElement("a");
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "_");
+        const suffix = isIntermediate ? `_part${String(filePartIndex).padStart(3, '0')}` : "";
+
+        anchor.href = url;
+        anchor.download = `recording_${timestamp}${suffix}.csv`;
+        anchor.click();
         URL.revokeObjectURL(url);
-        
-        if (intermediate) {
-            recordedRows = []; // Clear buffer for next chunk
-            filePartIndex++;   // Increment part index
-            // Do NOT hide download button or change recording state
-        } else {
+
+        if (isIntermediate) {
+            filePartIndex += 1;
+            recordedRows = [];
+        } else if (downloadBtn) {
             downloadBtn.style.display = "none";
         }
-        // console.log("Download triggered.");
     }
 
-    downloadBtn.addEventListener("click", () => {
-        downloadCSV();
-    });
+    window.toggleRecording = function() {
+        isRecording = !isRecording;
 
-    const SSBtn2 = document.getElementById("SSBtn2");
-    if(SSBtn2) {
-        SSBtn2.addEventListener("click", () => {
-             // console.log("SSBtn2 clicked");
-             const chartElem = document.getElementById("livechart2"); 
-             // Use html2canvas if available
-             if (typeof html2canvas === 'function') {
-                 html2canvas(chartElem).then(canvas => {
-                    const link = document.createElement('a');
-                    link.download = `live_chart_${new Date().toISOString().replace(/[:.]/g, "_")}.png`;
-                    link.href = canvas.toDataURL();
-                    link.click();
-                 }).catch(err => console.error("Screenshot failed:", err));
-             } else {
-                 console.error("html2canvas not loaded!");
-                 alert("html2canvas library missing!");
-             }
+        if (isRecording) {
+            console.log("toggleRecording: STARTING. recordedRows reset.");
+            recordedRows = [];
+            filePartIndex = 0;
+            if (downloadBtn) {
+                downloadBtn.style.display = "none";
+            }
+        } else if (recordedRows.length > 0 && downloadBtn) {
+            downloadBtn.style.display = "";
+        }
+
+        syncRecordingButtons();
+    };
+
+    if (recordBtn) {
+        recordBtn.addEventListener("click", window.toggleRecording);
+    }
+
+    if (recBtn2) {
+        recBtn2.addEventListener("click", window.toggleRecording);
+    }
+
+    if (downloadBtn) {
+        downloadBtn.addEventListener("click", () => {
+            downloadCSV(false);
         });
     }
 
+    if (pauseBtn) {
+        pauseBtn.addEventListener("click", () => {
+            paused = !paused;
+            pauseBtn.classList.toggle("active", paused);
+            pauseBtn.innerHTML = paused
+                ? '<i class="fas fa-play"></i> Play'
+                : '<i class="fas fa-pause"></i> Pause';
 
-
-
-    pauseBtn.addEventListener("click", () => {
-        paused = !paused;
-        pauseBtn.classList.toggle("active");
-        pauseBtn.innerHTML = paused
-            ? '<i class="fas fa-play"></i> Play'
-            : '<i class="fas fa-pause"></i> Pause';
-        if (paused) {
-            pausedLastTimestamp = lastTimestamp;
-        }
-    });
-
-    resetZoomBtn.addEventListener("click", () => {
-        yRanges.forEach(range => { range.zoom = 1; range.pan = 0; });
-        window.setPanOffset(0);
-        currentTimeRange = 5;
-        displayDurationSeconds = 5;
-        if (timeSlider) timeSlider.value = 5;
-        if (timeValue) timeValue.textContent = 5;
-
-        if (chart) {
-            chart.setScale("y", getYRange());
-            setSharedXScale(lastTimestamp - currentTimeRange * 1000000, lastTimestamp);
-        }
-        if (gyroChart) {
-            gyroChart.setScale("y", { auto: true });
-        }
-    });
-
-    window.addEventListener("resize", () => {
-        if (chart) {
-            chart.setSize({
-                width: document.getElementById("accChart").clientWidth,
-                height: 400
-            });
-        }
-    });
-
-    // --- WHEEL ZOOM SYNC ---
-    const chartContainer = document.getElementById("livechart2");
-    if(chartContainer) {
-        chartContainer.addEventListener("wheel", (e) => {
-            if (e.target?.closest?.("#x-axis-overlay, #y-axis-overlay")) {
-                return;
+            if (paused) {
+                pausedLastTimestamp = lastTimestamp;
             }
-            e.preventDefault();
-            e.stopPropagation();
-
-            const rect = chartContainer.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const axisThickness = 90; // Increased width of Y-axis
-            
-            // console.log("Wheel Event. X:", x, "Y:", y, "Rect Left:", rect.left, "ClientX:", e.clientX);
-
-            const factor = e.deltaY < 0 ? 0.85 : 1.15; // 0.85 = zoom in, 1.15 = zoom out? Wait.
-            // Usually deltaY < 0 is scrolling UP (Zoom IN). newRange should be smaller.
-            // So factor < 1 for Zoom IN.
-            // e.deltaY < 0 (UP) -> 0.85 (Smaller range = Zoom IN). Correct.
-
-            if (x < axisThickness) {
-                // === Y-AXIS ZOOM ===
-                // console.log("Y-Axis Zoom");
-                
-                // We need to update the global yRanges state
-                // Calculate center relative to Y-axis
-                if (chart) {
-                    const center = chart.posToVal(chart.bbox.height - y, 'y');
-                    const range = chart.scales.y.max - chart.scales.y.min;
-                    const newRange = range * factor;
-                    const p = (center - chart.scales.y.min) / range;
-                    const min = center - p * newRange;
-                    const max = center + (1 - p) * newRange;
-
-                    // Update State
-                    const meanY = (min + max) / 2;
-                    const spanY = max - min;
-                    
-                    yRanges.forEach((r) => {
-                        r.zoom = 2500 / (0.5 * spanY); // roughly maintain logic
-                        r.pan = meanY;
-                    });
-                    
-                    // Apply immediately
-                    chart.setScale('y', { min, max });
-                }
-
-            } else {
-                // === X-AXIS (TIME) ZOOM ===
-                const pointerPosX = Math.max(0, Math.min(1, x / Math.max(rect.width, 1)));
-                zoomSharedXAxis(factor, pointerPosX, chart);
-            }
-
-        }, { passive: false });
+        });
     }
+
+    if (resetZoomBtn) {
+        resetZoomBtn.addEventListener("click", () => {
+            yRanges.forEach((range) => {
+                range.zoom = 1;
+                range.pan = 0;
+            });
+
+            panOffset = 0;
+            if (typeof window.setPanOffset === 'function') {
+                window.setPanOffset(0);
+            }
+
+            currentTimeRange = displayDurationSeconds;
+
+            if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
+                setSharedXScale(
+                    lastTimestamp - displayDurationSeconds * 1000000,
+                    lastTimestamp,
+                    { preserveY: false, syncUi: true }
+                );
+            }
+        });
+    }
+
+    syncRecordingButtons();
 }
 
-// === Chart Interaktion: Pan, Mousewheel-Zoom, Zoombox ===
-function enableChartZoomAndPan() {
-    const chartElem = plot.root;
-    const zoomBox = document.getElementById("zoomBox");
-    const axisThickness = 60;
-    const axisHeight = 40;
-
-    let isPanning = false;
-    let isZoomBox = false;
-    let panStart = {};
-    let panLastRange = {};
-    let boxStart = {};
-
-    chartElem.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        autoScroll = false;
-        const rect = chartElem.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const delta = e.deltaY > 0 ? 1.15 : 0.87;
-
-        const timeSlider = document.getElementById("timeSlider");
-        const timeValue = document.getElementById("timeValue");
-
-        if (x < axisThickness) {
-            // Y-Achsen-Zoom
-            const center = plot.posToVal(plot.bbox.height - y, 'y');
-            const range = plot.scales.y.max - plot.scales.y.min;
-            const newRange = range * delta;
-            const p = (center - plot.scales.y.min) / range;
-            const min = center - p * newRange;
-            const max = center + (1 - p) * newRange;
-
-            // === Y-Bereich im State speichern ===
-            const meanY = (min + max) / 2;
-            const spanY = max - min;
-            yRanges.forEach((r) => {
-                r.zoom = 2500 / (0.5 * spanY);
-                r.pan = meanY;
-            });
-            plot.setScale('y', getYRange());
-            plot.redraw(true);
-        } else if (y > plot.bbox.height - axisHeight) {
-            // X-Achsen-Zoom
-            const center = plot.posToVal(x, 'x');
-            const range = plot.scales.x.max - plot.scales.x.min;
-            const newRange = range * delta;
-            const p = (center - plot.scales.x.min) / range;
-            const min = center - p * newRange;
-            const max = center + (1 - p) * newRange;
-            plot.setScale('x', [min, max]);
-
-            // Only update if it makes sense (within bounds? clamp?)
-            currentTimeRange = newRange;
-            if (currentTimeRange < 1) currentTimeRange = 1;
-            if (currentTimeRange > 60) currentTimeRange = 60;
-
-            displayDurationSeconds = currentTimeRange;
-            if(timeSlider) {
-                timeSlider.value = Math.round(displayDurationSeconds);
-                // console.log("Zoom -> Slider adjust:", displayDurationSeconds);
-            }
-            if(timeValue) timeValue.textContent = Math.round(displayDurationSeconds);
-
-
-            panOffset = max - lastTimestamp;
-        } else {
-            // XY-Zoom
-            const centerX = plot.posToVal(x, 'x');
-            const rangeX = plot.scales.x.max - plot.scales.x.min;
-            const newRangeX = rangeX * delta;
-            const pX = (centerX - plot.scales.x.min) / rangeX;
-            const minX = centerX - pX * newRangeX;
-            const maxX = centerX + (1 - pX) * newRangeX;
-
-            const centerY = plot.posToVal(plot.bbox.height - y, 'y');
-            const rangeY = plot.scales.y.max - plot.scales.y.min;
-            const newRangeY = rangeY * delta;
-            const pY = (centerY - plot.scales.y.min) / rangeY;
-            const minY = centerY - pY * newRangeY;
-            const maxY = centerY + (1 - pY) * newRangeY;
-
-            // === Y-Bereich im State speichern ===
-            const meanY = (minY + maxY) / 2;
-            const spanY = maxY - minY;
-            yRanges.forEach((r) => {
-                r.zoom = 2500 / (0.5 * spanY);
-                r.pan = meanY;
-            });
-            plot.setScale('x', [minX, maxX]);
-            plot.setScale('y', getYRange());
-            plot.redraw(true);
-
-             // Only update if it makes sense (within bounds? clamp?)
-            currentTimeRange = newRangeX;
-            if (currentTimeRange < 1) currentTimeRange = 1;
-            if (currentTimeRange > 60) currentTimeRange = 60;
-            
-            displayDurationSeconds = currentTimeRange;
-            if(timeSlider) {
-                 timeSlider.value = Math.round(displayDurationSeconds);
-                 // console.log("XY-Zoom -> Slider adjust:", displayDurationSeconds);
-            }
-            if(timeValue) timeValue.textContent = Math.round(displayDurationSeconds);
-
-            panOffset = maxX - lastTimestamp;
-        }
-    });
-
-    chartElem.addEventListener('mousedown', (e) => {
-        if (e.button === 0) {
-            isPanning = true;
-            const rect = chartElem.getBoundingClientRect();
-            panStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-            panLastRange = {
-                xMin: plot.scales.x.min, xMax: plot.scales.x.max,
-                yMin: plot.scales.y.min, yMax: plot.scales.y.max
-            };
-            chartElem.style.cursor = "grabbing";
-            autoScroll = false;
-        }
-        if (e.button === 2) {
-            isZoomBox = true;
-            const rect = chartElem.getBoundingClientRect();
-            boxStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-            zoomBox.style.display = "block";
-            zoomBox.style.left = `${boxStart.x}px`;
-            zoomBox.style.top = `${boxStart.y}px`;
-            zoomBox.style.width = `1px`;
-            zoomBox.style.height = `1px`;
-            autoScroll = false;
-        }
-    });
-
-    window.addEventListener('mousemove', (e) => {
-        if (isPanning) {
-            const rect = chartElem.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const dx = x - panStart.x;
-            const dy = y - panStart.y;
-            const pixelsX = plot.bbox.width;
-            const pixelsY = plot.bbox.height;
-            const rangeX = panLastRange.xMax - panLastRange.xMin;
-            const rangeY = panLastRange.yMax - panLastRange.yMin;
-            const shiftX = -dx * rangeX / pixelsX;
-            const shiftY = dy * rangeY / pixelsY;
-
-            plot.setScale('x', [panLastRange.xMin + shiftX, panLastRange.xMax + shiftX]);
-
-            // === Y-Pan als State merken ===
-            let newMinY = panLastRange.yMin + shiftY;
-            let newMaxY = panLastRange.yMax + shiftY;
-            const meanY = (newMinY + newMaxY) / 2;
-            const spanY = newMaxY - newMinY;
-            yRanges.forEach((r) => {
-                r.zoom = 2500 / (0.5 * spanY);
-                r.pan = meanY;
-            });
-            plot.setScale('y', getYRange());
-            plot.redraw(true);
-        }
-        if (isZoomBox) {
-            const rect = chartElem.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const left = Math.min(boxStart.x, x);
-            const top = Math.min(boxStart.y, y);
-            const width = Math.abs(x - boxStart.x);
-            const height = Math.abs(y - boxStart.y);
-            zoomBox.style.left = `${left}px`;
-            zoomBox.style.top = `${top}px`;
-            zoomBox.style.width = `${width}px`;
-            zoomBox.style.height = `${height}px`;
-        }
-    });
-
-    window.addEventListener('mouseup', (e) => {
-        if (isPanning) {
-            isPanning = false;
-            chartElem.style.cursor = "";
-        }
-        if (isZoomBox) {
-            const rect = chartElem.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const x1 = Math.min(boxStart.x, x);
-            const x2 = Math.max(boxStart.x, x);
-            const y1 = Math.min(boxStart.y, y);
-            const y2 = Math.max(boxStart.y, y);
-            if (Math.abs(x2 - x1) > 10 && Math.abs(y2 - y1) > 10) {
-                const minX = plot.posToVal(x1, 'x');
-                const maxX = plot.posToVal(x2, 'x');
-                const minY = plot.posToVal(plot.bbox.height - y2, 'y');
-                const maxY = plot.posToVal(plot.bbox.height - y1, 'y');
-
-                // === Auch für Zoombox Y-STATE setzen! ===
-                const meanY = (minY + maxY) / 2;
-                const spanY = maxY - minY;
-                yRanges.forEach((r) => {
-                    r.zoom = 2500 / (0.5 * spanY);
-                    r.pan = meanY;
-                });
-                plot.setScale('x', [minX, maxX]);
-                plot.setScale('y', getYRange());
-                plot.redraw(true);
-                currentTimeRange = maxX - minX;
-                panOffset = maxX - lastTimestamp;
-            }
-            zoomBox.style.display = "none";
-            isZoomBox = false;
-        }
-    });
-
-    chartElem.addEventListener('contextmenu', e => { e.preventDefault(); });
-}
-
-
-
-
-// Event-Handler für Formularabsenden
-document.getElementById('settingsForm').addEventListener('submit', function (event) {
-    event.preventDefault();
-
-    const formData = new FormData(this);
-    const settingsObj = {};
-
-    formData.forEach((value, key) => {
-        settingsObj[key] = value;
-    });
-
-    const settingsJSON = JSON.stringify(settingsObj);
-
-    // Nachricht an den WebSocket-Worker senden
-    wsWorker.postMessage({
-        type: "send",
-        msgContent: settingsJSON
-    });
-
-    console.log("Settings an Worker gesendet:", settingsJSON);
-});
-
-
-// FFT SHIT
-// FFT-Chart initialisieren
 function initFFTChart() {
-    let fftopts = {
-        title: "FFT",
-        width: document.getElementById("fftChartarea").clientWidth,
-        height: 300,
+    const fftHost = document.getElementById("fftChart");
+    const fftSize = getFftChartSize();
+    const fftWidth = Math.max(320, fftSize.width || Math.round(fftHost?.clientWidth || 800));
+    const fftHeight = Math.max(250, fftSize.height || 500);
+
+    const fftopts = {
+        title: 'ACC FFT',
+        width: fftWidth,
+        height: fftHeight,
         scales: {
             x: {
                 time: false,
                 label: "Frequenz (Hz)",
-                //range: (u, min, max) => [0, 3300],
             },
             y: {
-                auto: false,
-                range: (u, min, max) => [0, 1000],
+                auto: true,
                 label: "Magnitude"
             }
         },
         axes: [
             {
-                stroke: () => dark ? "white" : "black",
-                //    grid: {
-                //    	stroke: () => dark ? "white" : "black",
-                //    }
+                stroke: () => dark ? "white" : "black"
             },
             {
                 stroke: () => dark ? "white" : "black"
@@ -3103,39 +3628,40 @@ function initFFTChart() {
         ],
         series: [
             { label: "Freq (Hz)" },
-            { // Max Magnitude – sehr dezent im Hintergrund
+            {
                 label: "Max Magnitude",
                 stroke: null,
                 width: 0,
-                fill: "rgba(200,210,223,0.08)",  // sehr helles, fast weißblaues Grau, extrem dezent
+                fill: "rgba(200,210,223,0.08)",
                 points: { show: false }
             },
-
-            { // Average Magnitude – Hauptdarstellung: kräftig und gelb (Kontrast zu Blau)
+            {
                 label: "Average Magnitude",
-                stroke: "#FFD600",                // sattes, leuchtendes Gelb (deutlich auf dunklem Grund)
-                width: 2.,
-                fill: "rgba(255, 213, 0, 0.5)",      // gelbliche Fläche, leicht transparent
+                stroke: "#FFD600",
+                width: 2,
+                fill: "rgba(255, 213, 0, 0.5)",
                 points: { show: false }
             },
-
-            { // Current Magnitude – feine, kühle Linie, keine Füllung
+            {
                 label: "Current Magnitude",
-                stroke: "rgba(110,190,255,0.45)", // helles Cyan-Blau, halbtransparent
+                stroke: "rgba(110,190,255,0.45)",
                 width: 1,
                 points: { show: false }
             },
         ]
     };
-    fftPlot = new uPlot(fftopts, [[], [], []], document.getElementById("fftChart"));
+
+    fftPlot = new uPlot(fftopts, [[], [], [], []], fftHost);
 }
+
 function initRMSChart() {
+    const rmsSize = getRmsChartSize();
 
     const rmsopts = {
-        ...getSize(),
-        title: "RMS",
-        width: container.clientWidth,
-        height: container.clientHeight,
+        ...rmsSize,
+        title: 'ACC RMS',
+        width: Math.max(320, rmsSize.width || 800),
+        height: Math.max(250, rmsSize.height || 500),
         scales: {
             x: {
                 values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
@@ -3248,6 +3774,110 @@ function initRMSChart() {
 
 }
 
+function initGyroFFTChart() {
+    const fftHost = document.getElementById('gyroFftChart');
+    const fftSize = getGyroFftChartSize();
+    const fftWidth = Math.max(320, fftSize.width || Math.round(fftHost?.clientWidth || 800));
+    const fftHeight = Math.max(250, fftSize.height || 500);
+
+    const fftopts = {
+        title: 'Gyro FFT',
+        width: fftWidth,
+        height: fftHeight,
+        scales: {
+            x: {
+                time: false,
+                label: 'Frequenz (Hz)',
+            },
+            y: {
+                auto: true,
+                label: 'Magnitude'
+            }
+        },
+        axes: [
+            {
+                stroke: () => dark ? 'white' : 'black'
+            },
+            {
+                stroke: () => dark ? 'white' : 'black'
+            },
+        ],
+        series: [
+            { label: 'Freq (Hz)' },
+            {
+                label: 'Max Magnitude',
+                stroke: null,
+                width: 0,
+                fill: 'rgba(200,210,223,0.08)',
+                points: { show: false }
+            },
+            {
+                label: 'Average Magnitude',
+                stroke: '#4dd0e1',
+                width: 2,
+                fill: 'rgba(77,208,225,0.22)',
+                points: { show: false }
+            },
+            {
+                label: 'Current Magnitude',
+                stroke: 'rgba(255,183,77,0.5)',
+                width: 1,
+                points: { show: false }
+            },
+        ]
+    };
+
+    gyroFftPlot = new uPlot(fftopts, [[], [], [], []], fftHost);
+}
+
+function initGyroRMSChart() {
+    const rmsSize = getGyroRmsChartSize();
+
+    const rmsopts = {
+        ...rmsSize,
+        title: 'Gyro RMS',
+        width: Math.max(320, rmsSize.width || 800),
+        height: Math.max(250, rmsSize.height || 500),
+        scales: {
+            x: {
+                values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
+            },
+            y: { auto: true }
+        },
+        axes: [
+            {
+                space: 100,
+                scale: 'x',
+                label: 'Zeit',
+                grid: { show: true },
+                values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
+                stroke: 'white'
+            },
+            {
+                scale: 'y',
+                label: 'Wert',
+                grid: { show: true },
+                ticks: {
+                    format: v => v.toFixed(2)
+                },
+                stroke: 'white',
+            }
+        ],
+        series: [
+            { label: 'Zeit', value: (u, v) => formatMicrosecondsToHMS(v, 2) },
+            { label: 'Gyro X (mdps)', stroke: '#4dd0e1' },
+            { label: 'Gyro Y (mdps)', stroke: '#ffb74d' },
+            { label: 'Gyro Z (mdps)', stroke: '#81c784' },
+            { label: 'Gyro Total (mdps)', stroke: '#ce93d8', fill: 'rgba(206,147,216,0.18)' },
+        ],
+        cursor: {
+            drag: { x: true, y: true, setScale: true }
+        }
+    };
+
+    gyroRmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById('gyroRmsChart'));
+}
+
 // FFT Worker initialisieren
 function setupFFTWorker() {
     if (fftWorker) {
@@ -3323,6 +3953,55 @@ function setupFFTWorker() {
     };
 }
 
+function setupGyroFFTWorker() {
+    if (gyroFftWorker) {
+        gyroFftWorker.terminate();
+    }
+
+    gyroFftWorker = new Worker('fft-worker.js');
+    console.log('[Main] Gyro FFT Worker:', gyroFftWorker);
+
+    gyroFftWorker.onmessage = (e) => {
+        const { freqs, mags } = e.data;
+
+        if (!freqs || !mags) {
+            console.warn('[Gyro FFT Worker] Ungültige Daten empfangen:', e.data);
+            return;
+        }
+
+        bufferFFTResult(mags, gyroFftMaxBuffer, GYRO_FFT_RING_SIZE);
+        const maxValues = computeMaxFFTValues(gyroFftMaxBuffer);
+        bufferAverageFFT(mags, gyroAvgFFTBuffer, gyroN_AVG);
+        const meanValues = computeAverageFFT(gyroAvgFFTBuffer);
+
+        let maxAmp = Math.max(...meanValues);
+        let maxAmpMax = Math.max(...maxValues);
+        let maxAmpCurrent = Math.max(...mags);
+        let totalmax = Math.max(maxAmp * 1.2, maxAmpMax * 1.2, maxAmpCurrent * 1.2);
+
+        if (totalmax < 2000) {
+            totalmax = 2000;
+        }
+
+        if (gyroFftPlot) {
+            gyroFftPlot.setScale('y', {
+                min: 0,
+                max: totalmax
+            });
+
+            if (fftDBoutput) {
+                gyroFftPlot.setScale('y', [0.0, 100.0]);
+            }
+
+            gyroFftPlot.setData([toRegularArray(freqs), maxValues, toRegularArray(meanValues), toRegularArray(mags)]);
+
+            if (fftDBoutput) {
+                gyroFftPlot.setScale('y', [0.0, 100.0]);
+            }
+        }
+    };
+}
+
 function setupRMSWorker() {
     if (rmsWorker) {
         rmsWorker.terminate();
@@ -3389,102 +4068,153 @@ function setupRMSWorker() {
     };
 }
 
+function setupGyroRMSWorker() {
+    if (gyroRmsWorker) {
+        gyroRmsWorker.terminate();
+    }
+
+    gyroRmsWorker = new Worker('rms-worker.js');
+    console.log('[Main] Gyro RMS Worker:', gyroRmsWorker);
+
+    gyroRmsWorker.onmessage = (e) => {
+        if (gyroRmsPaused) return;
+
+        const { rmsX, rmsY, rmsZ, rmsTotal, time } = e.data;
+
+        gyroRmsBuffer.push([time, rmsX, rmsY, rmsZ, rmsTotal]);
+
+        const updatesPerSecond = 1000 / RMS_UPDATE_INTERVAL;
+        let N = Math.ceil(updatesPerSecond * gyroDisplayDurationSecondsRMS);
+        if (N < 10) N = 10;
+
+        const rmsx = gyroRmsBuffer.getFieldTypedArray('x', N);
+        const rmsy = gyroRmsBuffer.getFieldTypedArray('y', N);
+        const rmsz = gyroRmsBuffer.getFieldTypedArray('z', N);
+        const rmstotal = gyroRmsBuffer.getFieldTypedArray('total', N);
+        const rmst = gyroRmsBuffer.getFieldTypedArray('time', N);
+
+        gyroRmsPlot?.setData([rmst, rmsx, rmsy, rmsz, rmstotal]);
+
+        if (rmst.length > 0) {
+            gyroRmsPlot?.setScale('x', { min: rmst[0], max: rmst[rmst.length - 1] });
+        }
+    };
+}
+
 
 let displayDurationSecondsRMS = 20;
 let rmsPaused = false;
 
-function setupRMSControls() {
-    const rmsTimeSlider = document.getElementById("rmsTimeSlider");
-    const rmsTimeValue = document.getElementById("rmsTimeValue");
-    const rmsPauseBtn = document.getElementById("rmsPauseBtn");
-    const rmsRecordBtn = document.getElementById("rmsRecordBtn");
-    const rmsSSBtn = document.getElementById("rmsSSBtn");
-    const rmsChartContainer = document.getElementById("rmsTable") || document.getElementById("rmsChart"); // Using rmsChart div
+function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, screenshotButtonId, chartId, getDuration, setDuration, getPaused, setPaused }) {
+    const timeSlider = document.getElementById(sliderId);
+    const timeValue = document.getElementById(valueId);
+    const pauseBtn = document.getElementById(pauseButtonId);
+    const recordBtn = document.getElementById(recordButtonId);
+    const screenshotBtn = document.getElementById(screenshotButtonId);
+    const chartContainer = document.getElementById(chartId);
 
-    // Initialize UI
-    if (rmsTimeSlider && rmsTimeValue) {
-        rmsTimeSlider.value = displayDurationSecondsRMS;
-        rmsTimeValue.textContent = displayDurationSecondsRMS;
+    if (timeSlider && timeValue) {
+        timeSlider.value = String(Math.round(getDuration()));
+        timeValue.textContent = String(Math.round(getDuration()));
 
-        rmsTimeSlider.addEventListener("input", () => {
-             displayDurationSecondsRMS = parseInt(rmsTimeSlider.value);
-             rmsTimeValue.textContent = displayDurationSecondsRMS;
+        timeSlider.addEventListener('input', () => {
+            const nextDuration = parseInt(timeSlider.value, 10);
+            setDuration(nextDuration);
+            timeValue.textContent = String(nextDuration);
         });
     }
 
-    if (rmsPauseBtn) {
-        rmsPauseBtn.addEventListener("click", () => {
-            rmsPaused = !rmsPaused;
-            rmsPauseBtn.textContent = rmsPaused ? "▶" : "Pause";
+    if (pauseBtn) {
+        pauseBtn.textContent = getPaused() ? '▶' : 'Pause';
+        pauseBtn.addEventListener('click', () => {
+            const nextPaused = !getPaused();
+            setPaused(nextPaused);
+            pauseBtn.textContent = nextPaused ? '▶' : 'Pause';
         });
     }
 
-    if (rmsRecordBtn) {
-        // Init icon state based on global isRecording
-        rmsRecordBtn.innerHTML = isRecording ? "⏹" : "🔴";
-        
-        rmsRecordBtn.addEventListener("click", () => {
-            if (typeof window.toggleRecording === "function") {
-                 window.toggleRecording();
-                 // Icon update handled by toggleRecording
-            } else {
-                 console.warn("toggleRecording not found!");
+    if (recordBtn) {
+        recordBtn.innerHTML = isRecording ? '⏹' : '🔴';
+        recordBtn.addEventListener('click', () => {
+            if (typeof window.toggleRecording === 'function') {
+                window.toggleRecording();
             }
         });
     }
-    
-    if (rmsSSBtn) {
-        rmsSSBtn.addEventListener("click", () => {
-             // Screenshot Logic for RMS Chart
-             // Using html2canvas or just assuming canvg?
-             // Since uPlot is canvas based, we can grab the canvas.
-             const canvas = document.querySelector("#rmsChart canvas.u-off"); // or .u-over? uPlot uses multiple canvases.
-             // Actually, uPlot creates a structure. We can use dom-to-image or similar.
-             // Or construct manually. uPlot has specific export?
-             // Simplest: use the helper 'takeScreenshot' if available, or meaningful logic.
-             // Let's look for existing SSBtn2 logic? 
-             // Existing logic not visible in snippets. Assuming standard approach.
-             
-             // Try to use the uPlot instance 'rmsPlot' to get image??
-             // rmsPlot is defined globally.
-             // But simpler: just use existing screenshot mechanics if possible.
-             // Let's assume we need to implement it.
-             
-             const chartDiv = document.getElementById("rmsChart");
-             html2canvas(chartDiv).then(canvas => {
+
+    if (screenshotBtn && chartContainer) {
+        screenshotBtn.addEventListener('click', () => {
+            html2canvas(chartContainer).then((canvas) => {
                 const link = document.createElement('a');
-                link.download = `rms_chart_${new Date().toISOString()}.png`;
+                link.download = `${chartId}_${new Date().toISOString()}.png`;
                 link.href = canvas.toDataURL();
                 link.click();
-             });
+            });
         });
     }
 
-    // Wheel Sync
-    if (rmsChartContainer) {
-        rmsChartContainer.addEventListener("wheel", (e) => {
-             e.preventDefault();
-             e.stopPropagation();
-             
-             const factor = e.deltaY < 0 ? 0.85 : 1.15;
-             let newDuration = displayDurationSecondsRMS * factor;
-             
-             if (newDuration < 1) newDuration = 1;
-             if (newDuration > 60) newDuration = 60;
-             
-             displayDurationSecondsRMS = newDuration;
-             
-             if (rmsTimeSlider) rmsTimeSlider.value = Math.round(displayDurationSecondsRMS);
-             if (rmsTimeValue) rmsTimeValue.textContent = Math.round(displayDurationSecondsRMS);
-             
+    if (chartContainer) {
+        chartContainer.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const factor = event.deltaY < 0 ? 0.85 : 1.15;
+            let nextDuration = getDuration() * factor;
+
+            if (nextDuration < 1) nextDuration = 1;
+            if (nextDuration > 60) nextDuration = 60;
+
+            setDuration(nextDuration);
+
+            if (timeSlider) timeSlider.value = String(Math.round(nextDuration));
+            if (timeValue) timeValue.textContent = String(Math.round(nextDuration));
         }, { passive: false, capture: true });
     }
+}
+
+function setupRMSControls() {
+    bindRMSControls({
+        sliderId: 'rmsTimeSlider',
+        valueId: 'rmsTimeValue',
+        pauseButtonId: 'rmsPauseBtn',
+        recordButtonId: 'rmsRecordBtn',
+        screenshotButtonId: 'rmsSSBtn',
+        chartId: 'rmsChart',
+        getDuration: () => displayDurationSecondsRMS,
+        setDuration: (value) => {
+            displayDurationSecondsRMS = value;
+        },
+        getPaused: () => rmsPaused,
+        setPaused: (value) => {
+            rmsPaused = value;
+        }
+    });
+}
+
+function setupGyroRMSControls() {
+    bindRMSControls({
+        sliderId: 'gyroRmsTimeSlider',
+        valueId: 'gyroRmsTimeValue',
+        pauseButtonId: 'gyroRmsPauseBtn',
+        recordButtonId: 'gyroRmsRecordBtn',
+        screenshotButtonId: 'gyroRmsSSBtn',
+        chartId: 'gyroRmsChart',
+        getDuration: () => gyroDisplayDurationSecondsRMS,
+        setDuration: (value) => {
+            gyroDisplayDurationSecondsRMS = value;
+        },
+        getPaused: () => gyroRmsPaused,
+        setPaused: (value) => {
+            gyroRmsPaused = value;
+        }
+    });
 }
 
 // Ensure setupRMSControls is called
 document.addEventListener("DOMContentLoaded", () => {
     // Other setups are likely called elsewhere or inline
     setupRMSControls();
+    setupGyroRMSControls();
 });
 
 
@@ -3534,21 +4264,61 @@ function startRMSUpdates() {
     }, RMS_UPDATE_INTERVAL);
 }
 
-function bufferFFTResult(magArray) {
-    if (fftMaxBuffer.length >= FFT_RING_SIZE)
-        fftMaxBuffer.shift(); // Ältestes raus
-    fftMaxBuffer.push(magArray);
+function startGyroRMSUpdates() {
+    if (gyroRmsUpdateTimerId !== null) {
+        clearInterval(gyroRmsUpdateTimerId);
+    }
+
+    gyroRmsUpdateTimerId = setInterval(() => {
+        if (!gyroRmsWorker || !gyroRmsPlot) return;
+
+        const lastGyroSample = gyroBuffer.getLast();
+        if (!lastGyroSample) return;
+
+        const arrx = gyroBuffer.getFieldTypedArray('x', RMS_WINDOW_SIZE);
+        const arry = gyroBuffer.getFieldTypedArray('y', RMS_WINDOW_SIZE);
+        const arrz = gyroBuffer.getFieldTypedArray('z', RMS_WINDOW_SIZE);
+
+        const arrtotal = new Float32Array(arrx.length);
+        for (let index = 0; index < arrx.length; index++) {
+            arrtotal[index] = Math.hypot(arrx[index] || 0, arry[index] || 0, arrz[index] || 0);
+        }
+
+        const rmsXInput = new Float32Array(arrx);
+        const rmsYInput = new Float32Array(arry);
+        const rmsZInput = new Float32Array(arrz);
+        const rmsTotalInput = new Float32Array(arrtotal);
+
+        gyroRmsWorker.postMessage({
+            x: rmsXInput,
+            y: rmsYInput,
+            z: rmsZInput,
+            total: rmsTotalInput,
+            time: lastGyroSample.time
+        }, [
+            rmsXInput.buffer,
+            rmsYInput.buffer,
+            rmsZInput.buffer,
+            rmsTotalInput.buffer,
+        ]);
+    }, RMS_UPDATE_INTERVAL);
+}
+
+function bufferFFTResult(magArray, targetBuffer = fftMaxBuffer, ringSize = FFT_RING_SIZE) {
+    if (targetBuffer.length >= ringSize)
+        targetBuffer.shift();
+    targetBuffer.push(magArray);
 }
 
 
-function computeMaxFFTValues() {
-    if (fftMaxBuffer.length === 0) return [];
-    const numBins = fftMaxBuffer[0].length;
+function computeMaxFFTValues(targetBuffer = fftMaxBuffer) {
+    if (targetBuffer.length === 0) return [];
+    const numBins = targetBuffer[0].length;
     let maxValues = Array(numBins).fill(-Infinity);
 
     for (let bin = 0; bin < numBins; bin++) {
-        for (let i = 0; i < fftMaxBuffer.length; i++) {
-            maxValues[bin] = Math.max(maxValues[bin], fftMaxBuffer[i][bin]);
+        for (let i = 0; i < targetBuffer.length; i++) {
+            maxValues[bin] = Math.max(maxValues[bin], targetBuffer[i][bin]);
         }
     }
     return maxValues;
@@ -3608,6 +4378,50 @@ function startFFTUpdates() {
 
         //fftWorker.postMessage({ buffer: buf.buffer, sampleRate: frq }, [buf.buffer]);
     }, FFT_UPDATE_INTERVAL);
+}
+
+function startGyroFFTUpdates() {
+    if (gyroFftUpdateTimerId !== null) {
+        clearInterval(gyroFftUpdateTimerId);
+    }
+
+    gyroFftUpdateTimerId = setInterval(() => {
+        if (!gyroFftWorker || !gyroFftPlot) return;
+
+        const arr = getSelectedData(GYRO_FFT_AXIS_MODE, gyroBuffer, GYRO_FFT_WINDOW_SIZE);
+        const tarr = gyroBuffer.getFieldTypedArray('time', GYRO_FFT_WINDOW_SIZE);
+        const arrLen = arr.length;
+
+        if (arrLen < GYRO_FFT_WINDOW_SIZE) return;
+
+        const idx0 = arrLen - 1;
+        const idx1 = arrLen - GYRO_FFT_WINDOW_SIZE;
+        const t0 = tarr[idx0];
+        const t1 = tarr[idx1];
+        const delta = t0 - t1;
+
+        if (delta <= 0) {
+            console.warn('Gyro FFT: Ungültiges Zeitintervall');
+            return;
+        }
+
+        const estimatedSampleRate = Math.round((GYRO_FFT_WINDOW_SIZE - 1) * (1000000 / delta));
+        if (!Number.isFinite(estimatedSampleRate) || estimatedSampleRate <= 0) {
+            return;
+        }
+
+        const windowArr = arr.slice(idx1, idx0 + 1);
+        const buf = windowArr instanceof Float32Array ? windowArr : Float32Array.from(windowArr);
+
+        gyroFftWorker.postMessage({
+            buffer: buf.buffer,
+            sampleRate: estimatedSampleRate,
+            windowType: GYRO_FFT_WINDOW_TYPE,
+            highpassCutoff: gyroFftHighPass,
+            dcCutoff: GYRO_DC_CUTOFF,
+            fftDBoutput: fftDBoutput,
+        }, [buf.buffer]);
+    }, GYRO_FFT_UPDATE_INTERVAL);
 }
 
 
@@ -3670,63 +4484,36 @@ function getSelectedData(mode, accBuffer, N) {
 
 // FFT MITTELUNG
 
-function bufferAverageFFT(mags) {
-    //console.log("[DEBUG] Neuer Eintrag (mags):", mags);
-    if (avgFFTBuffer.length >= N_AVG) {
-        avgFFTBuffer.shift();
+function bufferAverageFFT(mags, targetBuffer = avgFFTBuffer, limit = N_AVG) {
+    if (targetBuffer.length >= limit) {
+        targetBuffer.shift();
     }
-    avgFFTBuffer.push(mags);
-    // console.log("[DEBUG] Buffer-Länge:", avgFFTBuffer.length);
-    // console.log("[DEBUG] Erstes Element im Buffer:", avgFFTBuffer[0]);
-    // Optional: Alle Längen prüfen
-    /*   for (let i = 0; i < avgFFTBuffer.length; i++) {
-        if (!Array.isArray(avgFFTBuffer[i])) {
-          console.warn(`[WARN] Buffer-Eintrag ${i} ist kein Array!`, avgFFTBuffer[i]);
-        } else {
-          console.log(`[DEBUG] Buffer-Eintrag ${i} Länge:`, avgFFTBuffer[i].length);
-        }
-      } */
+    targetBuffer.push(mags);
 }
 
-function computeAverageFFT() {
-    //console.log("[DEBUG] Mittelwertberechnung über Buffer-Länge:", avgFFTBuffer.length);
-    if (avgFFTBuffer.length === 0) return [];
-    const len = avgFFTBuffer[0].length;
+function computeAverageFFT(targetBuffer = avgFFTBuffer) {
+    if (targetBuffer.length === 0) return [];
+    const len = targetBuffer[0].length;
     let avg = new Array(len).fill(0);
-    for (let i = 0; i < avgFFTBuffer.length; i++) {
-        if (avgFFTBuffer[i].length !== len) {
-            console.error(`[ERROR] Abweichende Länge in Buffer bei Index ${i}:`, avgFFTBuffer[i].length, "erwartet:", len);
+    for (let i = 0; i < targetBuffer.length; i++) {
+        if (targetBuffer[i].length !== len) {
+            console.error(`[ERROR] Abweichende Länge in Buffer bei Index ${i}:`, targetBuffer[i].length, 'erwartet:', len);
         }
         for (let j = 0; j < len; j++) {
-            avg[j] += avgFFTBuffer[i][j];
+            avg[j] += targetBuffer[i][j];
         }
     }
     for (let j = 0; j < len; j++) {
-        avg[j] /= avgFFTBuffer.length;
+        avg[j] /= targetBuffer.length;
     }
-    //console.log("[DEBUG] Gemitteltes Ergebnis (Ausschnitt):", avg.slice(0, 10)); // Nur die ersten 10 Einträge, damit Log nicht explodiert
     return avg;
 }
 
-function setAverageCount(newVal) {
-    N_AVG = Math.max(1, parseInt(newVal)); // Mindestwert 1
-    while (avgFFTBuffer.length > N_AVG) {
-        avgFFTBuffer.shift(); // Buffer ggf. verkleinern
+function setAverageCount(newVal, targetBuffer = avgFFTBuffer) {
+    const nextLimit = Math.max(1, parseInt(newVal));
+    while (targetBuffer.length > nextLimit) {
+        targetBuffer.shift();
     }
-}
-
-
-// Konvertiere Float32Array in Array (nur wenn nötig)
-function toRegularArray(arr) {
-    return Array.from(arr);
-}
-
-function formatMicroseconds(v) {
-    const totalSeconds = v / 1e3;
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = (totalSeconds % 60).toFixed(3);
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.padStart(6, '0')}`;
 }
 
 
@@ -3809,6 +4596,42 @@ function getGyroChartSize() {
     }
 }
 
+function getFftChartSize() {
+    const container = document.getElementById("fftPanel") || document.getElementById("fftChart");
+    const rect = container.getBoundingClientRect();
+    return {
+        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
+        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
+    };
+}
+
+function getRmsChartSize() {
+    const container = document.getElementById("rmsPanel") || document.getElementById("rmsChart");
+    const rect = container.getBoundingClientRect();
+    return {
+        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
+        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
+    };
+}
+
+function getGyroFftChartSize() {
+    const container = document.getElementById('gyroFftPanel') || document.getElementById('gyroFftChart');
+    const rect = container.getBoundingClientRect();
+    return {
+        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
+        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
+    };
+}
+
+function getGyroRmsChartSize() {
+    const container = document.getElementById('gyroRmsPanel') || document.getElementById('gyroRmsChart');
+    const rect = container.getBoundingClientRect();
+    return {
+        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
+        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
+    };
+}
+
 function getViewportMetrics() {
     const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
     const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
@@ -3868,11 +4691,122 @@ function updateLiveChartPanelHeights() {
     });
 }
 
+function updateFftRmsPanelHeights() {
+    const grid = document.getElementById("fftRmsGrid");
+    const fftPanel = document.getElementById("fftPanel");
+    const rmsPanel = document.getElementById("rmsPanel");
+    const controls = document.getElementById("fftRmsChartControls");
+    if (!grid || !fftPanel || !rmsPanel || !controls) {
+        return;
+    }
+
+    const { viewportHeight, viewportWidth } = getViewportMetrics();
+    document.documentElement.style.setProperty("--viewport-height", `${viewportHeight}px`);
+    document.documentElement.style.setProperty("--viewport-width", `${viewportWidth}px`);
+
+    const gridRect = grid.getBoundingClientRect();
+    const controlsRect = controls.getBoundingClientRect();
+    const gap = parseFloat(getComputedStyle(grid).gap || "12") || 12;
+    const bottomPadding = 16;
+    const visiblePanels = [fftPanel, rmsPanel].filter(panel => getComputedStyle(panel).display !== "none");
+
+    grid.classList.toggle("single-visible", visiblePanels.length === 1);
+
+    fftPanel.style.height = "";
+    rmsPanel.style.height = "";
+
+    if (visiblePanels.length === 0) {
+        return;
+    }
+
+    const topAnchor = Math.max(gridRect.top, controlsRect.bottom + 10);
+    const availableHeight = Math.max(220, Math.floor(viewportHeight - topAnchor - bottomPadding));
+    const hasSideBySideLayout = grid.classList.contains("is-side-by-side");
+    const isSingleVisible = visiblePanels.length === 1;
+
+    let panelHeight;
+    if (hasSideBySideLayout && isSingleVisible) {
+        const desiredSingleSideBySideHeight = Math.floor(viewportHeight * 0.70);
+        panelHeight = Math.max(420, Math.min(availableHeight, desiredSingleSideBySideHeight));
+    } else if (hasSideBySideLayout) {
+        const desiredSideBySideHeight = Math.floor(viewportHeight * 0.70);
+        panelHeight = Math.max(380, Math.min(availableHeight, desiredSideBySideHeight));
+    } else if (isSingleVisible) {
+        const desiredSingleStackedHeight = Math.floor(viewportHeight * 0.62);
+        panelHeight = Math.max(360, Math.min(availableHeight, desiredSingleStackedHeight));
+    } else {
+        const availablePerPanel = Math.floor((availableHeight - gap * (visiblePanels.length - 1)) / visiblePanels.length);
+        panelHeight = Math.max(220, availablePerPanel);
+    }
+
+    visiblePanels.forEach(panel => {
+        panel.style.height = `${panelHeight}px`;
+    });
+}
+
+function updateGyroFftRmsPanelHeights() {
+    const grid = document.getElementById('gyroFftRmsGrid');
+    const fftPanel = document.getElementById('gyroFftPanel');
+    const rmsPanel = document.getElementById('gyroRmsPanel');
+    const controls = document.getElementById('gyroFftRmsChartControls');
+    if (!grid || !fftPanel || !rmsPanel || !controls) {
+        return;
+    }
+
+    const { viewportHeight, viewportWidth } = getViewportMetrics();
+    document.documentElement.style.setProperty('--viewport-height', `${viewportHeight}px`);
+    document.documentElement.style.setProperty('--viewport-width', `${viewportWidth}px`);
+
+    const gridRect = grid.getBoundingClientRect();
+    const controlsRect = controls.getBoundingClientRect();
+    const gap = parseFloat(getComputedStyle(grid).gap || '12') || 12;
+    const bottomPadding = 16;
+    const visiblePanels = [fftPanel, rmsPanel].filter(panel => getComputedStyle(panel).display !== 'none');
+
+    grid.classList.toggle('single-visible', visiblePanels.length === 1);
+
+    fftPanel.style.height = '';
+    rmsPanel.style.height = '';
+
+    if (visiblePanels.length === 0) {
+        return;
+    }
+
+    const topAnchor = Math.max(gridRect.top, controlsRect.bottom + 10);
+    const availableHeight = Math.max(220, Math.floor(viewportHeight - topAnchor - bottomPadding));
+    const hasSideBySideLayout = grid.classList.contains('is-side-by-side');
+    const isSingleVisible = visiblePanels.length === 1;
+
+    let panelHeight;
+    if (hasSideBySideLayout && isSingleVisible) {
+        const desiredSingleSideBySideHeight = Math.floor(viewportHeight * 0.70);
+        panelHeight = Math.max(420, Math.min(availableHeight, desiredSingleSideBySideHeight));
+    } else if (hasSideBySideLayout) {
+        const desiredSideBySideHeight = Math.floor(viewportHeight * 0.70);
+        panelHeight = Math.max(380, Math.min(availableHeight, desiredSideBySideHeight));
+    } else if (isSingleVisible) {
+        const desiredSingleStackedHeight = Math.floor(viewportHeight * 0.62);
+        panelHeight = Math.max(360, Math.min(availableHeight, desiredSingleStackedHeight));
+    } else {
+        const availablePerPanel = Math.floor((availableHeight - gap * (visiblePanels.length - 1)) / visiblePanels.length);
+        panelHeight = Math.max(220, availablePerPanel);
+    }
+
+    visiblePanels.forEach(panel => {
+        panel.style.height = `${panelHeight}px`;
+    });
+}
+
 window.addEventListener("resize", e => {
     updateLiveChartPanelHeights();
+    updateFftRmsPanelHeights();
+    updateGyroFftRmsPanelHeights();
     chart.setSize(getSize());
     gyroChart.setSize(getGyroChartSize());
-    //rmsPlot.setSize(getSize());
+    fftPlot?.setSize(getFftChartSize());
+    rmsPlot?.setSize(getRmsChartSize());
+    gyroFftPlot?.setSize(getGyroFftChartSize());
+    gyroRmsPlot?.setSize(getGyroRmsChartSize());
 });
 
 
@@ -3882,9 +4816,9 @@ let values2 = [];
 let values3 = [];
 let values4 = [];
 const maxPoints = 300000;
-const now = Date.now();
+const nowUs = Date.now() * 1000;
 for (let i = -99; i <= 0; i++) {
-    const t = (now + i * 1000) / 1000;
+    const t = nowUs + (i * 1000000);
     timestamps.push(t);
     values1.push(Math.sin(i / 5) * 10 + 50);
     values2.push(Math.cos(i / 5) * 7 + 40);
@@ -3898,8 +4832,6 @@ const options = {
     width: container.clientWidth,
     height: container.clientHeight,
     padding: [6, 8, 2, 2],
-
-
     axes: [
         {
             time: false,
@@ -3920,15 +4852,12 @@ const options = {
             stroke: "white"
         }
     ],
-
-
     scales: {
         x: {},
-        y: { range: [-1500, 1500] }
+        y: { range: [-1100, 1100] }
     },
+
     series: [
-
-
         {label: "Zeit",value: (u, v) => formatMicrosecondsToHMS(v, 5) },
         { label: "Acc X (mg)", stroke: "#FFD600" },
         { label: "Acc Y (mg)", stroke: "#ec3030ff" },
@@ -3937,7 +4866,7 @@ const options = {
 
     ],
     cursor: {
-        drag: { x: true, y: true, setScale: true }
+        drag: { x: false, y: false, setScale: false }
     },
 };
 
@@ -3991,6 +4920,121 @@ const gyroChart = new uPlot(
     document.getElementById("gyroChartHost")
 );
 
+function syncAxisOverlayPositions(chartInstance, panelId, yOverlayId, xOverlayId) {
+    const panel = document.getElementById(panelId);
+    const yOverlay = document.getElementById(yOverlayId);
+    const xOverlay = document.getElementById(xOverlayId);
+    const wrap = chartInstance?.root?.querySelector?.(".u-wrap");
+    const bbox = chartInstance?.bbox;
+
+    if (!panel || !yOverlay || !xOverlay || !wrap || !bbox) {
+        return;
+    }
+
+    const panelRect = panel.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    const wrapLeft = wrapRect.left - panelRect.left;
+    const wrapTop = wrapRect.top - panelRect.top;
+
+    yOverlay.style.left = `${Math.max(0, wrapLeft)}px`;
+    yOverlay.style.top = `${Math.max(0, wrapTop + bbox.top)}px`;
+    yOverlay.style.width = `${Math.max(0, bbox.left)}px`;
+    yOverlay.style.height = `${Math.max(0, bbox.height)}px`;
+
+    const xTop = wrapTop + bbox.top + bbox.height;
+    const xHeight = Math.max(0, (wrapRect.bottom - panelRect.top) - xTop);
+    xOverlay.style.left = `${Math.max(0, wrapLeft + bbox.left)}px`;
+    xOverlay.style.top = `${Math.max(0, xTop)}px`;
+    xOverlay.style.width = `${Math.max(0, bbox.width)}px`;
+    xOverlay.style.height = `${xHeight}px`;
+    xOverlay.style.bottom = "auto";
+}
+
+function preserveScalesOnSeriesToggle(chartInstance) {
+    if (!chartInstance || typeof chartInstance.setSeries !== "function") {
+        return;
+    }
+
+    const originalSetSeries = chartInstance.setSeries.bind(chartInstance);
+    chartInstance.setSeries = (...args) => {
+        const xScale = chartInstance.scales?.x;
+        const yScale = chartInstance.scales?.y;
+        const lockedX = xScale && Number.isFinite(xScale.min) && Number.isFinite(xScale.max)
+            ? { min: xScale.min, max: xScale.max }
+            : null;
+        const lockedY = yScale && Number.isFinite(yScale.min) && Number.isFinite(yScale.max)
+            ? { min: yScale.min, max: yScale.max }
+            : null;
+
+        const restoreScales = () => {
+            if (lockedX) {
+                chartInstance.setScale("x", lockedX);
+            }
+            if (lockedY) {
+                chartInstance.setScale("y", lockedY);
+            }
+        };
+
+        const result = originalSetSeries(...args);
+
+        restoreScales();
+        requestAnimationFrame(restoreScales);
+        setTimeout(restoreScales, 0);
+        setTimeout(restoreScales, 32);
+
+        return result;
+    };
+}
+
+function installManualLegendToggle(chartInstance) {
+    const legendRoot = chartInstance?.root?.querySelector?.(".u-legend");
+    if (!legendRoot) {
+        return;
+    }
+
+    legendRoot.addEventListener("click", (event) => {
+        const headerCell = event.target.closest("th");
+        const row = event.target.closest(".u-series");
+        if (!headerCell || !row) {
+            return;
+        }
+
+        const rows = Array.from(legendRoot.querySelectorAll(".u-series"));
+        const seriesIndex = rows.indexOf(row);
+        if (seriesIndex <= 0) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
+        const series = chartInstance.series?.[seriesIndex];
+        if (!series) {
+            return;
+        }
+
+        chartInstance.setSeries(seriesIndex, { show: !series.show });
+    }, true);
+}
+
+preserveScalesOnSeriesToggle(chart);
+preserveScalesOnSeriesToggle(gyroChart);
+installManualLegendToggle(chart);
+installManualLegendToggle(gyroChart);
+
+syncAxisOverlayPositions(chart, "livechart2", "y-axis-overlay", "x-axis-overlay");
+syncAxisOverlayPositions(gyroChart, "gyrochart", "gyro-y-axis-overlay", "gyro-x-axis-overlay");
+
+if (timestamps.length > 0) {
+    const initialLatestTimestamp = timestamps[timestamps.length - 1];
+    setSharedXScale(
+        initialLatestTimestamp - (displayDurationSeconds * 1000000),
+        initialLatestTimestamp,
+        { preserveY: true, syncUi: true }
+    );
+}
+
 let liveChartResizeObserver = new ResizeObserver(() => {
     requestAnimationFrame(() => {
         const accSize = getSize();
@@ -4003,6 +5047,9 @@ let liveChartResizeObserver = new ResizeObserver(() => {
         if (gyroSize.width > 0 && gyroSize.height > 0) {
             gyroChart.setSize(gyroSize);
         }
+
+        syncAxisOverlayPositions(chart, "livechart2", "y-axis-overlay", "x-axis-overlay");
+        syncAxisOverlayPositions(gyroChart, "gyrochart", "gyro-y-axis-overlay", "gyro-x-axis-overlay");
     });
 });
 
@@ -4056,34 +5103,6 @@ pauseBtn2.onclick = () => {
     paused = !paused;
     pauseBtn2.textContent = paused ? "▶" : "⏸";
 };
-
-
-
-
-function formatMicrosecondsToHMS(us, decimalPlaces = 0) {
-  if (typeof us !== "number" || isNaN(us)) {
-    return "";
-  }
-  const totalSeconds = us / 1_000_000;
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  // Stunden ohne führende Null, falls einstellig
-  const hh = hours.toString();
-
-  // Minuten weiterhin zweistellig mit führender Null
-  const mm = minutes.toString().padStart(2, "0");
-
-  let ss;
-  if (decimalPlaces > 0) {
-    ss = seconds.toFixed(decimalPlaces).padStart(3 + decimalPlaces, "0");
-  } else {
-    ss = Math.round(seconds).toString().padStart(2, "0");
-  }
-
-  return `${hh}:${mm}:${ss}`;
-}
 
 
 
@@ -4296,7 +5315,11 @@ bindSharedXAxisOverlay("gyro-x-axis-overlay", gyroChart);
 
 window.addEventListener("liveDataUpdate", (e) => {
     const latest = e.detail.latestTimestamp;
-    const visibleRange = chart.scales.x.max - chart.scales.x.min;
+    const currentVisibleRange = chart.scales.x.max - chart.scales.x.min;
+    const desiredVisibleRange = displayDurationSeconds * 1000000;
+    const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
+        ? currentVisibleRange
+        : desiredVisibleRange;
     if (!Number.isFinite(visibleRange) || visibleRange <= 0) return;
 
     if (Number.isFinite(panOffset) && panOffset !== liveChartPanOffset) {
@@ -4306,9 +5329,9 @@ window.addEventListener("liveDataUpdate", (e) => {
     if (liveChartPanOffset > -500000) {
         liveChartPanOffset = 0;
         panOffset = 0;
-        setSharedXScale(latest - visibleRange, latest);
+        setSharedXScale(latest - desiredVisibleRange, latest, { preserveY: true, syncUi: false });
     } else {
-        setSharedXScale(latest - visibleRange + liveChartPanOffset, latest + liveChartPanOffset);
+        setSharedXScale(latest - visibleRange + liveChartPanOffset, latest + liveChartPanOffset, { preserveY: true, syncUi: false });
     }
 });
 
@@ -4333,88 +5356,33 @@ window.setPanOffset = (offset) => {
     panOffset = liveChartPanOffset;
 };
 
-// Rechte Maustaste Zoombox
-let zoomBoxing = false;
-let zoomStart = null;
-
-chart.over.addEventListener("contextmenu", e => e.preventDefault());
-
-chart.over.addEventListener("wheel", e => {
-    e.preventDefault();
-
-    // Relative Mausposition im Chart-Overlay
-    const rect = chart.over.getBoundingClientRect();
-    const pointerPosX = (e.clientX - rect.left) / rect.width;
-    const pointerPosY = (e.clientY - rect.top) / rect.height;
-
-    // Zoom-Faktor: Mausrad hoch = Faktor < 1 (reinzoomen), sonst > 1 (rauszoomen)
-    const factor = e.deltaY < 0 ? 0.85 : 1.15;
-
-    // Zoom Funktion analog zu deinen zoomAxis
-    function zoomAxis(axis, factor, pointerPos) {
-        const sc = chart.scales[axis];
-        const range = sc.max - sc.min;
-        const newRange = range * factor;
-        const newMin = sc.min + range * pointerPos - newRange * pointerPos;
-        const newMax = newMin + newRange;
-        if (newMax - newMin < 1e-9) return;
-        if (axis === "x") {
-            setSharedXScale(newMin, newMax, { preserveY: true, syncUi: true });
-        } else {
-            chart.setScale(axis, { min: newMin, max: newMax });
-        }
-    }
-
-    zoomAxis('x', factor, pointerPosX);
-    zoomAxis('y', factor, pointerPosY);
-}, { passive: false });
-
-
-chart.over.addEventListener("mousedown", e => {
-    if (e.button === 2) {
-        zoomBoxing = true;
-        zoomStart = { x: e.offsetX, y: e.offsetY };
-        chart.over.style.cursor = "crosshair";
-    }
-});
-
-chart.over.addEventListener("mouseup", e => {
-    if (e.button === 2 && zoomBoxing) {
-        zoomBoxing = false;
-        chart.over.style.cursor = "";
-
-        const x0 = zoomStart.x, y0 = zoomStart.y;
-        const x1 = e.offsetX, y1 = e.offsetY;
-
-        const xMin = chart.posToVal(Math.min(x0, x1), "x");
-        const xMax = chart.posToVal(Math.max(x0, x1), "x");
-        const yMin = chart.posToVal(Math.max(y0, y1), "y");
-        const yMax = chart.posToVal(Math.min(y0, y1), "y");
-
-        if (xMax > xMin && yMax > yMin) {
-            setSharedXScale(xMin, xMax, { preserveY: true, syncUi: true });
-            chart.setScale("y", { min: yMin, max: yMax });
-        }
-    }
-});
-
 // Doppelklick reset
 chart.over.addEventListener("dblclick", () => {
     window.setPanOffset(0);
-    chart.setScale("x", { auto: true });
-    chart.setScale("y", { auto: true });
+    if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
+        setSharedXScale(lastTimestamp - (displayDurationSeconds * 1000000), lastTimestamp, { preserveY: false, syncUi: true });
+    } else {
+        chart.setScale("x", { auto: true });
+    }
+    chart.setScale("y", { min: -1100, max: 1100 });
     if (gyroChart) {
-        gyroChart.setScale("x", { auto: true });
         gyroChart.setScale("y", { auto: true });
     }
 });
 
 gyroChart.over.addEventListener("dblclick", () => {
     window.setPanOffset(0);
-    if (chart) {
-        chart.setScale("x", { auto: true });
+    if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
+        setSharedXScale(lastTimestamp - (displayDurationSeconds * 1000000), lastTimestamp, { preserveY: false, syncUi: true });
+    } else {
+        if (chart) {
+            chart.setScale("x", { auto: true });
+        }
+        gyroChart.setScale("x", { auto: true });
     }
-    gyroChart.setScale("x", { auto: true });
+    if (chart) {
+        chart.setScale("y", { min: -1100, max: 1100 });
+    }
     gyroChart.setScale("y", { auto: true });
 });
 
@@ -4668,9 +5636,14 @@ function startCalibWorldSimple(button, progressBar, statusText) {
             tempgravity = Math.sqrt(biasX * biasX + biasY * biasY + biasZ * biasZ);
 
             let accelIdleData = [accBufferCALIB.getFieldTypedArray("x", N), accBufferCALIB.getFieldTypedArray("y", N), accBufferCALIB.getFieldTypedArray("z", N)];
+            const accStats = {
+                x: getBufferAxisStats(accBufferCALIB, 'x'),
+                y: getBufferAxisStats(accBufferCALIB, 'y'),
+                z: getBufferAxisStats(accBufferCALIB, 'z'),
+            };
 
             command.textContent = "Kalibrierung abgeschlossen!";
-            result1.textContent = `${N} Samples` + "\n" + `Streuung X [mg]: ${accBufferCALIB.getAbsoluteDelta("x").toFixed(2)}` + "\n" + `Y [mg]: ${accBufferCALIB.getAbsoluteDelta("y").toFixed(2)}` + "\n" + ` Z [mg]: ${accBufferCALIB.getAbsoluteDelta("z").toFixed(2)}`;
+            result1.innerHTML = buildSingleSensorStatsTableHtml('ACC', N, accStats, 'mg');
             okBtn.style.display = "flex"; // OK-Button anzeigen
             cancelBtn.style.display = "none"; // Reset-Button ausblenden
             // KALIBRIERUNG DURCHFÜHREN
@@ -4684,6 +5657,7 @@ function startCalibWorldSimple(button, progressBar, statusText) {
                     quaternion: quatsimple,
                 }
             });
+            calibrationMemory[1] = Array.from(quatsimple);
             decodeWorker.postMessage({
                 type: 'calibmode',
                 payload: {
@@ -4705,13 +5679,7 @@ function startCalibWorldSimple(button, progressBar, statusText) {
 
             document.getElementById("btn1").disabled = false; // Button wieder aktivieren
         // Prüfe, ob "World Simple" schon existiert
-            const exists = CSDD2.items && CSDD2.items.some(item => item.label === "World Simple");
-
-            if (!exists) {
-                // Füge es nur hinzu, wenn nicht vorhanden
-                CSDD2.addSelectItem({ label: "World Simple", value: "2" }, 2)
-            }
-            CSDD2.setValue(2, true);
+            applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World Simple' });
             console.log("CALIBRATION DONE");
         }
     }, 30);
@@ -4786,9 +5754,14 @@ function startCalibWorldAxis(button, progressBar, statusText) {
             console.log("Streuung Y [%]:", accBufferCALIB.getAbsoluteDelta("y").toFixed(2));
             console.log("Streuung Z [%]:", accBufferCALIB.getAbsoluteDelta("z").toFixed(2));
             accelIdleData = [accBufferCALIB.getFieldTypedArray("x", N), accBufferCALIB.getFieldTypedArray("y", N), accBufferCALIB.getFieldTypedArray("z", N)];
+            const accStats = {
+                x: getBufferAxisStats(accBufferCALIB, 'x'),
+                y: getBufferAxisStats(accBufferCALIB, 'y'),
+                z: getBufferAxisStats(accBufferCALIB, 'z'),
+            };
 
             command.textContent = "Schritt 1 abgeschlossen!";
-            result2.textContent = `${N} Samples` + "\n" + `Streuung X [mg]: ${accBufferCALIB.getAbsoluteDelta("x").toFixed(2)}` + "\n" + `Y [mg]: ${accBufferCALIB.getAbsoluteDelta("y").toFixed(2)}` + "\n" + ` Z [mg]: ${accBufferCALIB.getAbsoluteDelta("z").toFixed(2)}`;
+            result2.innerHTML = buildSingleSensorStatsTableHtml('ACC', N, accStats, 'mg');
             result2.style.display = "block";
             okBtn.style.display = "flex"; // OK-Button anzeigen
             cancelBtn.style.display = "none"; // Reset-Button ausblenden
@@ -4880,9 +5853,14 @@ function startCalibWorldAxisSTEP2(button, progressBar, statusText) {
             console.log("Streuung Y [%]:", accBufferCALIB.getAbsoluteDelta("y").toFixed(2));
             console.log("Streuung Z [%]:", accBufferCALIB.getAbsoluteDelta("z").toFixed(2));
             accelmotiondata = [accBufferCALIB.getFieldTypedArray("x", N), accBufferCALIB.getFieldTypedArray("y", N), accBufferCALIB.getFieldTypedArray("z", N)];
+            const accStats = {
+                x: getBufferAxisStats(accBufferCALIB, 'x'),
+                y: getBufferAxisStats(accBufferCALIB, 'y'),
+                z: getBufferAxisStats(accBufferCALIB, 'z'),
+            };
 
             command.textContent = "Schritt 1 abgeschlossen!";
-            result2.textContent = `${N} Samples` + "\n" + `Streuung X [mg]: ${accBufferCALIB.getAbsoluteDelta("x").toFixed(2)}` + "\n" + `Y [mg]: ${accBufferCALIB.getAbsoluteDelta("y").toFixed(2)}` + "\n" + ` Z [mg]: ${accBufferCALIB.getAbsoluteDelta("z").toFixed(2)}`;
+            result2.innerHTML = buildSingleSensorStatsTableHtml('ACC', N, accStats, 'mg');
             result2.style.display = "block";
             okBtn.style.display = "flex"; // OK-Button anzeigen
             cancelBtn.style.display = "none"; // Reset-Button ausblenden
@@ -4906,20 +5884,12 @@ function startCalibWorldAxisSTEP2(button, progressBar, statusText) {
                     quaternion: quatsimple,
                 }
             });
-            decodeWorker.postMessage({
-                type: 'calibmode',
-                payload: {
-                    mode: 2,
-                }
-            });
-
             console.log('Kalibrierungsquaternion Variante World + Axis:', quatsimple);
 
             document.getElementById("btn1").disabled = false; // Button wieder aktivieren
 
-            calibrationMemory[1] = quatsimple;
-            CSDD2.addSelectItem({ label: "World + Axis ", value: "2" }, 2)
-            CSDD2.setValue(2, true);
+            calibrationMemory[1] = Array.from(quatsimple);
+            applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World + Axis' });
             //action2.style.display = "none";
             //const quatsimple = simpleZCalibration(accelIdleData);
             //decodeWorker.postMessage({
@@ -4951,47 +5921,94 @@ function startCalibWorldAxisSTEP2(button, progressBar, statusText) {
 
 
 function captureCurrentReferenceState(button, progressBar, statusText) {
-    const sampleCount = Math.min(REFERENCE_CAPTURE_SAMPLE_COUNT, accRawBuffer.length);
-    if (sampleCount < 8) {
+    if (referenceCaptureActive) {
+        return;
+    }
+
+    if (accRawBuffer.length < REFERENCE_CAPTURE_MIN_SAMPLES) {
         statusText.textContent = "Zu wenig Rohdaten";
         result1.textContent = "Bitte kurz warten, bis genug ACC-Rohdaten vorhanden sind.";
         return;
     }
 
-    const xs = accRawBuffer.getFieldTypedArray("x", sampleCount);
-    const ys = accRawBuffer.getFieldTypedArray("y", sampleCount);
-    const zs = accRawBuffer.getFieldTypedArray("z", sampleCount);
-    const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
-    const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
-    const meanZ = zs.reduce((sum, value) => sum + value, 0) / zs.length;
-
+    accBufferCALIB.clear();
+    gyroBufferCALIB.clear();
+    referenceCaptureActive = true;
     button.disabled = true;
-    progressBar.style.width = "100%";
-    statusText.textContent = "Fertig!";
+    progressBar.style.width = '0%';
+    statusText.textContent = 'Erfasse Referenz...';
+    result1.textContent = '0 ACC Samples\n0 Gyro Samples';
 
-    decodeWorker.postMessage({
-        type: 'referenceState',
-        payload: {
-            x: meanX,
-            y: meanY,
-            z: meanZ,
+    let progress = 0;
+    const interval = setInterval(() => {
+        progress += 1;
+        progressBar.style.width = `${progress}%`;
+        statusText.textContent = `Fortschritt: ${progress}%`;
+        result1.textContent = `${accBufferCALIB.length} ACC Samples\n${gyroBufferCALIB.length} Gyro Samples`;
+
+        if (progress < CALIBRATION_CAPTURE_STEPS) {
+            return;
         }
-    });
-    decodeWorker.postMessage({
-        type: 'calibmode',
-        payload: {
-            mode: 3,
+
+        clearInterval(interval);
+        referenceCaptureActive = false;
+
+        const accSampleCount = accBufferCALIB.length;
+        const gyroSampleCount = gyroBufferCALIB.length;
+
+        if (accSampleCount < REFERENCE_CAPTURE_MIN_SAMPLES) {
+            statusText.textContent = 'Zu wenig Rohdaten';
+            result1.textContent = 'Es wurden zu wenige ACC-Rohdaten während der Referenzaufnahme erfasst.';
+            button.disabled = false;
+            progressBar.style.width = '0%';
+            return;
         }
-    });
 
-    ensureOrientationOption("Reference", 3, 2);
-    CSDD2.setValue(3, true);
+        const accStats = {
+            x: getBufferAxisStats(accBufferCALIB, 'x'),
+            y: getBufferAxisStats(accBufferCALIB, 'y'),
+            z: getBufferAxisStats(accBufferCALIB, 'z'),
+        };
+        const gyroStats = gyroSampleCount > 0 ? {
+            x: getBufferAxisStats(gyroBufferCALIB, 'x'),
+            y: getBufferAxisStats(gyroBufferCALIB, 'y'),
+            z: getBufferAxisStats(gyroBufferCALIB, 'z'),
+        } : {
+            x: { mean: 0, stdDev: 0, delta: 0 },
+            y: { mean: 0, stdDev: 0, delta: 0 },
+            z: { mean: 0, stdDev: 0, delta: 0 },
+        };
 
-    command.textContent = "Referenz gespeichert!";
-    result1.textContent = `${sampleCount} Samples\nX: ${meanX.toFixed(2)} mg\nY: ${meanY.toFixed(2)} mg\nZ: ${meanZ.toFixed(2)} mg`;
-    okBtn.style.display = "flex";
-    cancelBtn.style.display = "none";
-    button.disabled = false;
+        console.log('Reference ACC Streuung X [mg]:', accStats.x.stdDev.toFixed(2));
+        console.log('Reference ACC Streuung Y [mg]:', accStats.y.stdDev.toFixed(2));
+        console.log('Reference ACC Streuung Z [mg]:', accStats.z.stdDev.toFixed(2));
+        console.log('Reference Gyro Streuung X [mdps]:', gyroStats.x.stdDev.toFixed(2));
+        console.log('Reference Gyro Streuung Y [mdps]:', gyroStats.y.stdDev.toFixed(2));
+        console.log('Reference Gyro Streuung Z [mdps]:', gyroStats.z.stdDev.toFixed(2));
+
+        currentReferenceState = {
+            x: accStats.x.mean,
+            y: accStats.y.mean,
+            z: accStats.z.mean,
+            gx: gyroStats.x.mean,
+            gy: gyroStats.y.mean,
+            gz: gyroStats.z.mean,
+        };
+
+        decodeWorker.postMessage({
+            type: 'referenceState',
+            payload: currentReferenceState
+        });
+
+        applyOrientationMode(3, { syncDropdown: true, optionLabel: 'Reference' });
+
+        statusText.textContent = 'Fertig!';
+        command.textContent = 'Referenz gespeichert!';
+        result1.innerHTML = buildCalibrationStatsTableHtml(accSampleCount, gyroSampleCount, accStats, gyroStats);
+        okBtn.style.display = 'flex';
+        cancelBtn.style.display = 'none';
+        button.disabled = false;
+    }, CALIBRATION_CAPTURE_STEP_MS);
 }
 
 // Button-Events
@@ -5098,7 +6115,7 @@ document.getElementById("btnTwoAxis").addEventListener("click", () => {
 document.getElementById("btnReferenceState").addEventListener("click", () => {
     calibrationFlow = 'reference';
     headline.textContent = "Reference aktiviert";
-    command.textContent = "Der aktuelle Rohzustand wird gemittelt und als Referenz ohne Transformation gespeichert.";
+    command.textContent = "Bitte halte das Gerät ruhig. ACC und Gyro werden mehrere Sekunden gemittelt und anschliessend als Referenz verwendet.";
     document.getElementById("btn1").textContent = "Referenz erfassen";
 
     buttonRow1.style.display = "none";
@@ -5113,8 +6130,8 @@ document.getElementById("btnReferenceState").addEventListener("click", () => {
 const btn = document.getElementById('gravityBtn');
 btn.addEventListener('click', function () {
     btn.classList.toggle('toggle-on');
+    gravityCutEnabled = btn.classList.contains('toggle-on');
 
-    // START-Kommando senden
     decodeWorker.postMessage({
         type: "setgravity",
         payload: {
@@ -5122,9 +6139,8 @@ btn.addEventListener('click', function () {
         }
     });
 
-    if (btn.classList.contains('toggle-on')) {
-
-    } else {
+    if (!btn.classList.contains('toggle-on')) {
+        gravityCutEnabled = false;
         decodeWorker.postMessage({
             type: "setgravity",
             payload: {
@@ -5137,430 +6153,9 @@ btn.addEventListener('click', function () {
 
 
 
-let modelacc =  [0, 0, 0];
-const positionsHistory = [];
-// Material für die Linie
-const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
 
-// Leere Geometrie anlegen
-const lineGeometry = new THREE.BufferGeometry();
-const line = new THREE.Line(lineGeometry, lineMaterial);
 
 
-
-
-
- // Erstelle ein einfaches Flugzeugmodell
-        function createAircraftModel() {
-            const group = new THREE.Group();
-            
-            // Rumpf
-            const fuselageGeometry = new THREE.CylinderGeometry(0.2, 0.3, 2, 16);
-            const fuselageMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
-            const fuselage = new THREE.Mesh(fuselageGeometry, fuselageMaterial);
-            fuselage.rotation.z = Math.PI / 2;
-            group.add(fuselage);
-            
-            // Flügel
-            const wingGeometry = new THREE.BoxGeometry(3, 0.1, 0.5);
-            const wingMaterial = new THREE.MeshPhongMaterial({ color: 0x5555ff });
-            const wing = new THREE.Mesh(wingGeometry, wingMaterial);
-            wing.position.set(0, 0, 0);
-            group.add(wing);
-            
-            // Heckflügel
-            const tailGeometry = new THREE.BoxGeometry(0.8, 0.1, 0.4);
-            const tailMaterial = new THREE.MeshPhongMaterial({ color: 0xff5555 });
-            const tail = new THREE.Mesh(tailGeometry, tailMaterial);
-            tail.position.set(-0.8, 0, 0);
-            group.add(tail);
-            
-            // Leitwerk
-            const finGeometry = new THREE.BoxGeometry(0.1, 0.6, 0.3);
-            const finMaterial = new THREE.MeshPhongMaterial({ color: 0xff5555 });
-            const fin = new THREE.Mesh(finGeometry, finMaterial);
-            fin.position.set(-0.9, 0.3, 0);
-            group.add(fin);
-            
-            // Cockpit
-            const cockpitGeometry = new THREE.SphereGeometry(0.25, 16, 16);
-            const cockpitMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffff });
-            const cockpit = new THREE.Mesh(cockpitGeometry, cockpitMaterial);
-            cockpit.position.set(0.7, 0.15, 0);
-            group.add(cockpit);
-            
-            // Propeller
-            const propellerGeometry = new THREE.BoxGeometry(0.1, 1.2, 0.1);
-            const propellerMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
-            const propeller = new THREE.Mesh(propellerGeometry, propellerMaterial);
-            propeller.position.set(1.1, 0, 0);
-            group.add(propeller);
-            
-            // Propellerblatt
-            const bladeGeometry = new THREE.BoxGeometry(0.5, 0.05, 0.1);
-            const bladeMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
-            const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
-            blade.position.set(0.25, 0, 0);
-            propeller.add(blade);
-            
-            return group;
-        }
-
-
-
-
- // Three.js Variablen
-        let scene, camera, renderer, cube, controls;
-        let isDemoActive = false;
-        let demoStartTime;
-        let arrowX, arrowY, arrowZ;
-        let aircraft, model;
-        
-
-        // Initialisierung
-       function init() {
-            // Szene erstellen
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x1a1a2e);
-
-            // Kamera erstellen
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth * 0.7 / (window.innerHeight * 0.8), 0.1, 1000);
-            camera.position.z = 5;
-
-            // Renderer erstellen
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth * 0.7, window.innerHeight * 0.8);
-            document.getElementById('viewport').appendChild(renderer.domElement);
-
-            // OrbitControls hinzufügen
-            controls = new THREE.OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
-
-            // Beleuchtung hinzufügen
-            const ambientLight = new THREE.AmbientLight(0x404040);
-            scene.add(ambientLight);
-
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-            directionalLight.position.set(1, 1, 1);
-            scene.add(directionalLight);
-scene.add(line);
-
-
-            // Flugzeugmodell erstellen
-           // aircraft = createAircraftModel();
-            //scene.add(aircraft);
-
-
-
-// Array für die gespeicherten Positionen
-
-
-
-
-
-
-
-
-
-
-            // Würfel mit Achsen erstellen
-            const geometry = new THREE.BoxGeometry(2, 2, 2);
-            const materials = [
-                new THREE.MeshPhongMaterial({ color: 0xff3333, transparent: true, opacity: 0.8 }), // rechts
-                new THREE.MeshPhongMaterial({ color: 0x33ff33, transparent: true, opacity: 0.8 }), // links
-                new THREE.MeshPhongMaterial({ color: 0x3399ff, transparent: true, opacity: 0.8 }), // oben
-                new THREE.MeshPhongMaterial({ color: 0xffff33, transparent: true, opacity: 0.8 }), // unten
-                new THREE.MeshPhongMaterial({ color: 0xff33ff, transparent: true, opacity: 0.8 }), // vorne
-                new THREE.MeshPhongMaterial({ color: 0x33ffff, transparent: true, opacity: 0.8 })  // hinten
-            ];
-            
-            cube = new THREE.Mesh(geometry, materials);
-            //scene.add(cube);
-
-            // Achsen hinzufügen
-            const axesHelper = new THREE.AxesHelper(3);
-            scene.add(axesHelper);
-
-            // Pfeile für die Achsen erstellen
-            const arrowLength = 4;
-            const arrowHeadLength = 0.5/5;
-            const arrowHeadWidth = 0.3/5;
-            
-            // X-Achse (Rot)
-            arrowX = new THREE.ArrowHelper(
-                new THREE.Vector3(1, 0, 0), 
-                new THREE.Vector3(0, 0, 0), 
-                arrowLength, 
-                0xff3333, 
-                arrowHeadLength, 
-                arrowHeadWidth
-            );
-            scene.add(arrowX);
-            
-            // Y-Achse (Grün)
-            arrowY = new THREE.ArrowHelper(
-                new THREE.Vector3(0, 1, 0), 
-                new THREE.Vector3(0, 0, 0), 
-                arrowLength, 
-                0x33ff33, 
-                arrowHeadLength, 
-                arrowHeadWidth
-            );
-            scene.add(arrowY);
-            
-            // Z-Achse (Blau)
-            arrowZ = new THREE.ArrowHelper(
-                new THREE.Vector3(0, 0, 1), 
-                new THREE.Vector3(0, 0, 0), 
-                arrowLength, 
-                0x3399ff, 
-                arrowHeadLength, 
-                arrowHeadWidth
-            );
-            scene.add(arrowZ);
-loadModel();
-            // Event-Listener für Schieberegler
-
-
-            // Event-Listener für Buttons
-
-
-            // Animation starten
-            animate();
-
-            // Fenstergrößenänderung behandeln
-            window.addEventListener('resize', onWindowResize);
-        }
-
-
-// Funktion zum Aktualisieren der Linie
-function updateTrail(object) {
-    // aktuelle Position kopieren
-    positionsHistory.push(object.position.clone());
-
-    // nur die letzten 50 behalten
-    if (positionsHistory.length > 50) {
-        positionsHistory.shift();
-    }
-
-    // Array in Float32Array für BufferGeometry konvertieren
-    const points = new Float32Array(positionsHistory.length * 3);
-    positionsHistory.forEach((pos, i) => {
-        points[i * 3]     = pos.x;
-        points[i * 3 + 1] = pos.y;
-        points[i * 3 + 2] = pos.z;
-    });
-
-    // Geometrie updaten
-    lineGeometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
-    lineGeometry.computeBoundingSphere();
-}
-
-
-
-
-// 3D-Modell laden
-        function loadModel() {
-            const loader = new THREE.GLTFLoader();
-            
-            // Ein Beispielmodell von einem öffentlichen URL (kann durch dein eigenes Modell ersetzt werden)
-            const modelUrl = 'Duck.glb';
-            
-            loader.load(
-                modelUrl,
-                function (gltf) {
-                    model = gltf.scene;
-                    
-                    // Modell skalieren und positionieren
-                    model.scale.set(2, 2, 2);
-                    model.position.set(0, -1, 0);
-                    
-                    // Modell zur Szene hinzufügen
-                    scene.add(model);
-                    
-                    // Lade-Animation ausblenden
-                    //document.getElementById('loading').style.display = 'none';
-                    
-                    // Kamera auf Modell ausrichten
-                    controls.reset();
-                },
-                function (xhr) {
-                    // Fortschritt anzeigen
-                    console.log((xhr.loaded / xhr.total * 100) + '% geladen');
-                },
-                function (error) {
-                    console.error('Fehler beim Laden des Modells:', error);
-                    document.getElementById('loading').textContent = 'Fehler beim Laden des Modells';
-                    
-                    // Fallback: Einfaches Modell erstellen
-                    createFallbackModel();
-                }
-            );
-        }
-
-        // Fallback-Modell erstellen, falls das Laden fehlschlägt
-        function createFallbackModel() {
-            const group = new THREE.Group();
-            
-            // Basis
-            const baseGeometry = new THREE.CylinderGeometry(1, 1.2, 0.3, 32);
-            const baseMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
-            const base = new THREE.Mesh(baseGeometry, baseMaterial);
-            base.position.y = -0.15;
-            group.add(base);
-            
-            // Mittelteil
-            const middleGeometry = new THREE.CylinderGeometry(0.6, 0.8, 1, 32);
-            const middleMaterial = new THREE.MeshPhongMaterial({ color: 0x5555ff });
-            const middle = new THREE.Mesh(middleGeometry, middleMaterial);
-            middle.position.y = 0.5;
-            group.add(middle);
-            
-            // Oberteil
-            const topGeometry = new THREE.SphereGeometry(0.5, 32, 32);
-            const topMaterial = new THREE.MeshPhongMaterial({ color: 0xff5555 });
-            const top = new THREE.Mesh(topGeometry, topMaterial);
-            top.position.y = 1.5;
-            group.add(top);
-            
-            // Griff
-            const handleGeometry = new THREE.CylinderGeometry(0.1, 0.1, 1, 16);
-            const handleMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
-            const handle = new THREE.Mesh(handleGeometry, handleMaterial);
-            handle.position.set(0.7, 1, 0);
-            handle.rotation.z = Math.PI / 2;
-            group.add(handle);
-            
-            model = group;
-            scene.add(model);
-            document.getElementById('loading').style.display = 'none';
-        }
-
-
-
-
-        // Quaternion aus Schiebereglerwerten aktualisieren
-        function updateQuaternion() {
-            const x = parseFloat(document.getElementById('x').value);
-            const y = parseFloat(document.getElementById('y').value);
-            const z = parseFloat(document.getElementById('z').value);
-            const w = parseFloat(document.getElementById('w').value);
-
-            // Werte anzeigen
-            document.getElementById('x-value').textContent = x.toFixed(2);
-            document.getElementById('y-value').textContent = y.toFixed(2);
-            document.getElementById('z-value').textContent = z.toFixed(2);
-            document.getElementById('w-value').textContent = w.toFixed(2);
-
-            // Quaternion erstellen und anwenden
-            const quaternion = new THREE.Quaternion(x, y, z, w);
-            quaternion.normalize(); // Normalisieren für gültige Rotation
-            
-            cube.setRotationFromQuaternion(quaternion);
-            
-            // Demo stoppen wenn manuell angepasst wird
-            if (isDemoActive) {
-                toggleDemo();
-            }
-        }
-
-        // Quaternion zurücksetzen
-        function resetQuaternion() {
-            document.getElementById('x').value = 0;
-            document.getElementById('y').value = 0;
-            document.getElementById('z').value = 0;
-            document.getElementById('w').value = 1;
-            
-            updateQuaternion();
-        }
-
-        // Demo-Modus umschalten
-        function toggleDemo() {
-            isDemoActive = !isDemoActive;
-            
-            if (isDemoActive) {
-                document.getElementById('demo-btn').textContent = "Demo stoppen";
-                document.getElementById('status').textContent = "Demo aktiv - Automatische Rotation";
-                demoStartTime = Date.now();
-            } else {
-                document.getElementById('demo-btn').textContent = "Demo starten";
-                document.getElementById('status').textContent = "Manueller Modus - Verwende die Schieberegler";
-            }
-        }
-
-        // Fenstergrößenänderung behandeln
-        function onWindowResize() {
-            camera.aspect = (window.innerWidth * 0.7) / (window.innerHeight * 0.8);
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth * 0.7, window.innerHeight * 0.8);
-        }
-
-        // Animationsschleife
-        function animate() {
-            requestAnimationFrame(animate);
-
-            // Steuerelemente aktualisieren
-            controls.update();
-            
-
-            if (aircraft) {
-                const propeller = aircraft.children.find(child => 
-                    child.children && child.children.length > 0 && child.children[0].type === "Mesh"
-                );
-                if (propeller) {
-                    propeller.rotation.x += 0.3;
-                }
-            }
-
-            // Demo-Rotation
-            if (isDemoActive) {
-                const elapsedTime = (Date.now() - demoStartTime) / 1000;
-                
-                // Sanfte Rotation für Demo
-                const x = Math.sin(elapsedTime * 0.7) * 0.5;
-                const y = Math.cos(elapsedTime * 0.5) * 0.5;
-                const z = Math.sin(elapsedTime * 0.3) * 0.5;
-                const w = Math.cos(elapsedTime * 0.9) * 0.7 + 0.3;
-                
-                document.getElementById('x').value = x;
-                document.getElementById('y').value = y;
-                document.getElementById('z').value = z;
-                document.getElementById('w').value = w;
-                
-                updateQuaternion();
-            }
-            
-            // Rendern
-            renderer.render(scene, camera);
-        }
-
-        // Initialisierung starten
-        init();
-
-        // Simuliere eingehende Sensordaten (kann durch echte Sensordaten ersetzt werden)
-        function simulateSensorData() {
-           
-           
-            // if (!isDemoActive) return;
-            
-
-
-
-
-            const quaternion = new THREE.Quaternion(ausrichtung[1], ausrichtung[2], ausrichtung[3], ausrichtung[0]);
-            quaternion.normalize(); // Normalisieren für gültige Rotation
-            
-            model.setRotationFromQuaternion(quaternion);
-            model.position.set(modelacc[0]*25, modelacc[1]*25, (modelacc[2]-1)*25);
-            
-            updateTrail(model);
-            //model.setPosition(new THREE.Vector3(modelacc[0] * 1000, modelacc[1] * 1000, modelacc[2] * 1000));
-        }
-
-
-        // Starte die Simulation (kann durch echte Sensordaten ersetzt werden)
-        setInterval(simulateSensorData, 40);
 
 
 
