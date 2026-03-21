@@ -26,6 +26,7 @@ let calibdata = null;
 let calibrating1 = false;
 let calibrating2 = false;
 let gravity = 1000;
+let accelCalibrationScale = 1;
 let fusionquat = null;
 let fusionacc = null;
 let totalacc = null;
@@ -409,6 +410,11 @@ onmessage = function (event) {
     gravity = event.data.payload.gravity;
     console.log("[DECODE-WORKER] Gravity set to:", gravity);
   }
+  else if (event.data.type === 'accelCalibrationScale') {
+    const scale = Number(event.data?.payload?.scale);
+    accelCalibrationScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    console.log("[DECODE-WORKER] Accel calibration scale set to:", accelCalibrationScale);
+  }
   else if (event.data.type === 'referenceState') {
     const payload = event.data.payload;
     if (payload && Number.isFinite(payload.x) && Number.isFinite(payload.y) && Number.isFinite(payload.z)) {
@@ -556,7 +562,7 @@ function applyCalibrationToAccelFast(x, y, z) {
   const ry = tw * qConjY + ty * qConjW + tz * qConjX - tx * qConjZ;
   const rz = tw * qConjZ + tz * qConjW + tx * qConjY - ty * qConjX;
 
-  return [rx, ry, rz];
+  return [rx * accelCalibrationScale, ry * accelCalibrationScale, rz * accelCalibrationScale];
 }
 
 function rotateVectorByQuat(v, q) {

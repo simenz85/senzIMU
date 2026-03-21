@@ -39,6 +39,7 @@ let currentOrientationLabel = null;
 let gravityCutEnabled = false;
 let currentReferenceState = null;
 let currentWorldSimpleGyroState = null;
+let currentAccelCalibrationScale = 1;
 let chart = null;
 let gyroChart = null;
 
@@ -1861,6 +1862,15 @@ function sanitizeGyroZeroState(gyroState) {
     return sanitized;
 }
 
+function sanitizeAccelCalibrationScale(scale) {
+    const normalizedScale = Number(scale);
+    if (!Number.isFinite(normalizedScale) || normalizedScale <= 0) {
+        return 1;
+    }
+
+    return normalizedScale;
+}
+
 function getOrientationLabelForMode(mode) {
     const normalizedMode = Number(mode);
     const existingItem = CSDD2.items?.find((item) => Number(item.value) === normalizedMode);
@@ -1905,6 +1915,11 @@ function getCurrentCalibrationCookieState() {
         state.worldSimpleGyroState = worldSimpleGyroState;
     }
 
+    const accelCalibrationScale = sanitizeAccelCalibrationScale(currentAccelCalibrationScale);
+    if (Math.abs(accelCalibrationScale - 1) > 1e-6) {
+        state.accelCalibrationScale = accelCalibrationScale;
+    }
+
     if (Number.isFinite(tempgravity) && tempgravity > 0) {
         state.gravityMagnitude = Number(tempgravity);
     }
@@ -1919,7 +1934,13 @@ function getCurrentCalibrationCookieState() {
 
 function persistCalibrationCookie() {
     const state = getCurrentCalibrationCookieState();
-    const hasCalibrationPayload = Boolean(state.worldSimpleQuaternion || state.referenceState || state.worldSimpleGyroState || state.gravityMagnitude);
+    const hasCalibrationPayload = Boolean(
+        state.worldSimpleQuaternion
+        || state.referenceState
+        || state.worldSimpleGyroState
+        || (Number.isFinite(state.accelCalibrationScale) && Math.abs(state.accelCalibrationScale - 1) > 1e-6)
+        || state.gravityMagnitude
+    );
 
     if (!hasCalibrationPayload && state.mode === 0) {
         clearCookieValue(CALIBRATION_COOKIE_NAME);
@@ -1944,6 +1965,7 @@ function readCalibrationCookieState() {
             worldSimpleQuaternion: normalizeQuaternionXYZW(parsed?.worldSimpleQuaternion),
             referenceState: sanitizeReferenceState(parsed?.referenceState),
             worldSimpleGyroState: sanitizeGyroZeroState(parsed?.worldSimpleGyroState),
+            accelCalibrationScale: sanitizeAccelCalibrationScale(parsed?.accelCalibrationScale),
             gravityMagnitude: Number(parsed?.gravityMagnitude),
         };
 
@@ -1992,6 +2014,8 @@ function restoreCalibrationFromCookie() {
         setWorldSimpleGyroState(state.worldSimpleGyroState, { persistState: false });
     }
 
+    setAccelCalibrationScale(state.accelCalibrationScale, { persistState: false });
+
     if (state.gravityMagnitude) {
         tempgravity = state.gravityMagnitude;
         decodeWorker.postMessage({
@@ -2017,6 +2041,21 @@ function setWorldSimpleGyroState(gyroState, { persistState = true } = {}) {
     decodeWorker.postMessage({
         type: 'worldSimpleGyroState',
         payload: currentWorldSimpleGyroState,
+    });
+
+    if (persistState) {
+        persistCalibrationCookie();
+    }
+}
+
+function setAccelCalibrationScale(scale, { persistState = true } = {}) {
+    currentAccelCalibrationScale = sanitizeAccelCalibrationScale(scale);
+
+    decodeWorker.postMessage({
+        type: 'accelCalibrationScale',
+        payload: {
+            scale: currentAccelCalibrationScale,
+        },
     });
 
     if (persistState) {
@@ -2177,6 +2216,29 @@ function applyGravityCutToSample(sample, gravityMagnitude) {
     };
 }
 
+function applyAccelCalibrationScale(sample, scale = currentAccelCalibrationScale) {
+    if (!sample) {
+        return null;
+    }
+
+    const normalizedScale = sanitizeAccelCalibrationScale(scale);
+    if (Math.abs(normalizedScale - 1) <= 1e-6) {
+        return sample;
+    }
+
+    const x = Number(sample.x || 0) * normalizedScale;
+    const y = Number(sample.y || 0) * normalizedScale;
+    const z = Number(sample.z || 0) * normalizedScale;
+
+    return {
+        time: Number(sample.time || 0),
+        x,
+        y,
+        z,
+        total: Math.hypot(x, y, z),
+    };
+}
+
 function applyReferenceToSample(sample, referenceState) {
     if (!sample || !referenceState) {
         return null;
@@ -2231,7 +2293,7 @@ function buildViewportAccelerationSamples(rawSample, processedSample) {
         } else {
             const calibrationQuaternion = getViewportBaseQuaternionXYZW();
             if (calibrationQuaternion) {
-                calibrated = applyQuaternionXYZWToSample(raw, calibrationQuaternion) || calibrated;
+                calibrated = applyAccelCalibrationScale(applyQuaternionXYZWToSample(raw, calibrationQuaternion)) || calibrated;
                 calibratedCut = applyGravityCutToSample(calibrated, gravityMagnitude) || calibrated;
             }
         }
@@ -5907,7 +5969,9 @@ function startCalibWorldSimple(button, progressBar, statusText) {
             biasZ = accBufferCALIB.getMean("z");
 
 
-            tempgravity = Math.sqrt(biasX * biasX + biasY * biasY + biasZ * biasZ);
+            const measuredGravity = Math.sqrt(biasX * biasX + biasY * biasY + biasZ * biasZ);
+            const accelCalibrationScale = measuredGravity > 0 ? (1000 / measuredGravity) : 1;
+            tempgravity = 1000;
 
             let accelIdleData = [accBufferCALIB.getFieldTypedArray("x", N), accBufferCALIB.getFieldTypedArray("y", N), accBufferCALIB.getFieldTypedArray("z", N)];
             const accStats = {
@@ -5951,7 +6015,9 @@ function startCalibWorldSimple(button, progressBar, statusText) {
                     gravity: tempgravity,
                 }
             });
+            setAccelCalibrationScale(accelCalibrationScale, { persistState: false });
             setWorldSimpleGyroState(gyroZeroState, { persistState: false });
+            persistCalibrationCookie();
 
 
 
