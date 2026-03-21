@@ -55,6 +55,7 @@ let quatworldsimple = null;
 let quatworldaxis = null;
 let quat2axis = null;
 let referenceState = null;
+let worldSimpleGyroState = null;
 
 
 onmessage = function (event) {
@@ -73,6 +74,7 @@ onmessage = function (event) {
     let acccalib = [];
     let accraw = [];
     let gyroraw = [];
+    let gyrocalib = [];
 
     for (let i = 0; i < sampleCount; ++i) {
       const offset = i * SAMPLE_SIZE;
@@ -112,6 +114,13 @@ onmessage = function (event) {
           let x = view.getInt16(offset + 1, true) * GYROMULTIPLIER;
           let y = view.getInt16(offset + 3, true) * GYROMULTIPLIER;
           let z = view.getInt16(offset + 5, true) * GYROMULTIPLIER;
+          const rawGyroX = x;
+          const rawGyroY = y;
+          const rawGyroZ = z;
+
+          if (calibrating1) {
+            gyrocalib.push({ x: rawGyroX, y: rawGyroY, z: rawGyroZ });
+          }
 
 
 
@@ -132,6 +141,11 @@ onmessage = function (event) {
 
           if (IMUOrientation === IMUOpt.WORLD_SIMPLE) {
             if (quatworldsimple !== null && quatworldsimple !== undefined) {
+              if (worldSimpleGyroState) {
+                x = x - worldSimpleGyroState.x;
+                y = y - worldSimpleGyroState.y;
+                z = z - worldSimpleGyroState.z;
+              }
               [x, y, z] = applyCalibrationToAccelFast(x, y, z);
             }
           }
@@ -142,7 +156,7 @@ onmessage = function (event) {
             z = z - referenceState.gyro.z;
           }
 
-          gyroraw.push({ time: currentTimestamp, x: x, y: y, z: z });
+          gyroraw.push({ time: currentTimestamp, x: rawGyroX, y: rawGyroY, z: rawGyroZ });
           gyro.push({ time: currentTimestamp, x: x, y: y, z: z });
           samplesSinceLastTsGyro++;
           break;
@@ -337,7 +351,7 @@ onmessage = function (event) {
       }
     }
 
-    postMessage({ acc, gyro, temp, info, acccalib, accraw, gyroraw })
+    postMessage({ acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib })
   }
 
  // ORIENTIERUNGSMODUS AUSWÄHLEN
@@ -405,6 +419,21 @@ onmessage = function (event) {
           : null,
       };
       console.log("[DECODE-WORKER] Reference state set:", referenceState);
+    }
+  }
+
+  else if (event.data.type === 'worldSimpleGyroState') {
+    const payload = event.data.payload;
+    if (payload && Number.isFinite(payload.x) && Number.isFinite(payload.y) && Number.isFinite(payload.z)) {
+      worldSimpleGyroState = {
+        x: Number(payload.x),
+        y: Number(payload.y),
+        z: Number(payload.z),
+      };
+      console.log("[DECODE-WORKER] World-simple gyro state set:", worldSimpleGyroState);
+    } else {
+      worldSimpleGyroState = null;
+      console.log("[DECODE-WORKER] World-simple gyro state cleared");
     }
   }
 

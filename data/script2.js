@@ -33,10 +33,14 @@ const CALIBRATION_COOKIE_NAME = 'imuCalibrationState';
 const CALIBRATION_COOKIE_VERSION = 1;
 const CALIBRATION_COOKIE_MAX_AGE_SECONDS = 24 * 60 * 60;
 let referenceCaptureActive = false;
+let worldSimpleGyroCaptureActive = false;
 let currentOrientationMode = 0;
 let currentOrientationLabel = null;
 let gravityCutEnabled = false;
 let currentReferenceState = null;
+let currentWorldSimpleGyroState = null;
+let chart = null;
+let gyroChart = null;
 
 let ausrichtung = [0,0,0,0];
 
@@ -125,6 +129,16 @@ let displayDurationSeconds = 5;
 
 let filePartIndex = 0;
 const MAX_RECORDED_ROWS = 500000;
+const RECORDED_CSV_HEADERS = [
+    "timestamp_us",
+    "sensor",
+    "acc_x_mg",
+    "acc_y_mg",
+    "acc_z_mg",
+    "gyro_x_mdps",
+    "gyro_y_mdps",
+    "gyro_z_mdps",
+];
 
 let fftDBoutput = false;
 let filterSyncEnabled = false;
@@ -1829,6 +1843,24 @@ function sanitizeReferenceState(referenceState) {
     return sanitized;
 }
 
+function sanitizeGyroZeroState(gyroState) {
+    if (!gyroState || typeof gyroState !== 'object') {
+        return null;
+    }
+
+    const sanitized = {
+        x: Number(gyroState.x),
+        y: Number(gyroState.y),
+        z: Number(gyroState.z),
+    };
+
+    if (![sanitized.x, sanitized.y, sanitized.z].every(Number.isFinite)) {
+        return null;
+    }
+
+    return sanitized;
+}
+
 function getOrientationLabelForMode(mode) {
     const normalizedMode = Number(mode);
     const existingItem = CSDD2.items?.find((item) => Number(item.value) === normalizedMode);
@@ -1868,6 +1900,11 @@ function getCurrentCalibrationCookieState() {
         state.referenceState = referenceState;
     }
 
+    const worldSimpleGyroState = sanitizeGyroZeroState(currentWorldSimpleGyroState);
+    if (worldSimpleGyroState) {
+        state.worldSimpleGyroState = worldSimpleGyroState;
+    }
+
     if (Number.isFinite(tempgravity) && tempgravity > 0) {
         state.gravityMagnitude = Number(tempgravity);
     }
@@ -1882,7 +1919,7 @@ function getCurrentCalibrationCookieState() {
 
 function persistCalibrationCookie() {
     const state = getCurrentCalibrationCookieState();
-    const hasCalibrationPayload = Boolean(state.worldSimpleQuaternion || state.referenceState || state.gravityMagnitude);
+    const hasCalibrationPayload = Boolean(state.worldSimpleQuaternion || state.referenceState || state.worldSimpleGyroState || state.gravityMagnitude);
 
     if (!hasCalibrationPayload && state.mode === 0) {
         clearCookieValue(CALIBRATION_COOKIE_NAME);
@@ -1906,6 +1943,7 @@ function readCalibrationCookieState() {
             orientationLabel: typeof parsed?.orientationLabel === 'string' ? parsed.orientationLabel : null,
             worldSimpleQuaternion: normalizeQuaternionXYZW(parsed?.worldSimpleQuaternion),
             referenceState: sanitizeReferenceState(parsed?.referenceState),
+            worldSimpleGyroState: sanitizeGyroZeroState(parsed?.worldSimpleGyroState),
             gravityMagnitude: Number(parsed?.gravityMagnitude),
         };
 
@@ -1950,6 +1988,10 @@ function restoreCalibrationFromCookie() {
         });
     }
 
+    if (state.worldSimpleGyroState) {
+        setWorldSimpleGyroState(state.worldSimpleGyroState, { persistState: false });
+    }
+
     if (state.gravityMagnitude) {
         tempgravity = state.gravityMagnitude;
         decodeWorker.postMessage({
@@ -1967,6 +2009,19 @@ function restoreCalibrationFromCookie() {
     });
 
     console.log('Kalibrierung aus Cookie wiederhergestellt:', state);
+}
+
+function setWorldSimpleGyroState(gyroState, { persistState = true } = {}) {
+    currentWorldSimpleGyroState = sanitizeGyroZeroState(gyroState);
+
+    decodeWorker.postMessage({
+        type: 'worldSimpleGyroState',
+        payload: currentWorldSimpleGyroState,
+    });
+
+    if (persistState) {
+        persistCalibrationCookie();
+    }
 }
 
 function applyOrientationMode(mode, { syncDropdown = false, optionLabel = null, persistState = true } = {}) {
@@ -2216,7 +2271,15 @@ function buildViewportGyroSamples(rawSample, processedSample) {
         } else {
             const calibrationQuaternion = getViewportBaseQuaternionXYZW();
             if (calibrationQuaternion) {
-                calibrated = applyQuaternionXYZWToSample(raw, calibrationQuaternion) || calibrated;
+                const worldSimpleGyroRaw = currentOrientationMode === 2 && currentWorldSimpleGyroState
+                    ? {
+                        time: Number(raw.time || 0),
+                        x: Number(raw.x || 0) - Number(currentWorldSimpleGyroState.x || 0),
+                        y: Number(raw.y || 0) - Number(currentWorldSimpleGyroState.y || 0),
+                        z: Number(raw.z || 0) - Number(currentWorldSimpleGyroState.z || 0),
+                    }
+                    : raw;
+                calibrated = applyQuaternionXYZWToSample(worldSimpleGyroRaw, calibrationQuaternion) || calibrated;
                 calibratedCut = calibrated;
             }
         }
@@ -2614,6 +2677,65 @@ let tts = 0.0;
 let fts = 0.0;
 let lts = 0.0;
 
+function formatRecordedValue(value, digits = 1) {
+    return Number.isFinite(value) ? value.toFixed(digits) : "";
+}
+
+function createAccRecordingRow(sample) {
+    return [
+        sample.time,
+        "acc",
+        formatRecordedValue(sample.x),
+        formatRecordedValue(sample.y),
+        formatRecordedValue(sample.z),
+        "",
+        "",
+        "",
+    ];
+}
+
+function createGyroRecordingRow(sample) {
+    return [
+        sample.time,
+        "gyro",
+        "",
+        "",
+        "",
+        formatRecordedValue(sample.x),
+        formatRecordedValue(sample.y),
+        formatRecordedValue(sample.z),
+    ];
+}
+
+function downloadRecordedCsv(isIntermediate = false) {
+    if (!recordedRows.length) {
+        return false;
+    }
+
+    const downloadBtn = document.getElementById("downloadBtn");
+    const header = RECORDED_CSV_HEADERS.join(",");
+    const csv = `${header}\n${recordedRows.map((row) => row.join(",")).join("\n")}`;
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "_");
+    const suffix = isIntermediate ? `_part${String(filePartIndex).padStart(3, '0')}` : "";
+
+    anchor.href = url;
+    anchor.download = `recording_${timestamp}${suffix}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+
+    if (isIntermediate) {
+        filePartIndex += 1;
+        recordedRows = [];
+    } else if (downloadBtn) {
+        downloadBtn.style.display = "none";
+    }
+
+    return true;
+}
+
 // Chart-Zoom-Einstellungen
 let yRanges = [
     { zoom: 1, pan: 0 },
@@ -2754,8 +2876,8 @@ document.addEventListener("DOMContentLoaded", () => {
         updateChartLayoutToggle();
         updateLiveChartPanelHeights();
         requestAnimationFrame(() => {
-            chart.setSize(getSize());
-            gyroChart.setSize(getGyroChartSize());
+            chart?.setSize(getSize());
+            gyroChart?.setSize(getGyroChartSize());
         });
     });
     fftRmsLayoutToggle?.addEventListener('click', () => {
@@ -2912,7 +3034,7 @@ ausrichtung = Array.isArray(event.data.quaternion) ? event.data.quaternion.slice
 function setupDecodeWorker() {
     decodeWorker.onmessage = (event) => {
 
-        const { acc, gyro, temp, info, acccalib, accraw, gyroraw } = event.data;
+        const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = event.data;
 
 
         if (accraw && accraw.length > 0) {            
@@ -2942,6 +3064,12 @@ function setupDecodeWorker() {
                 if (referenceCaptureActive) {
                     gyroBufferCALIB.push([sample.x, sample.y, sample.z]);
                 }
+            }
+        }
+
+        if (gyrocalib && gyrocalib.length > 0 && worldSimpleGyroCaptureActive) {
+            for (const sample of gyrocalib) {
+                gyroBufferCALIB.push([sample.x, sample.y, sample.z]);
             }
         }
 
@@ -2982,12 +3110,11 @@ function setupDecodeWorker() {
                 
                 // --- RECORDING LOGIC ADDED HERE ---
                 if (isRecording) {
-                    // [timestamp, x, y, z] - NO ID, 1 decimal place
-                    recordedRows.push([sample.time, sample.x.toFixed(1), sample.y.toFixed(1), sample.z.toFixed(1)]);
+                    recordedRows.push(createAccRecordingRow(sample));
                     
                     if (recordedRows.length >= MAX_RECORDED_ROWS) {
                         console.log("Max rows reached. Triggering intermediate download.");
-                        downloadCSV(true); // true = intermediate
+                        downloadRecordedCsv(true);
                     }
                 }
                 
@@ -3032,6 +3159,16 @@ function setupDecodeWorker() {
                 batchXs[index] = sample.x;
                 batchYs[index] = sample.y;
                 batchZs[index] = sample.z;
+
+                if (isRecording) {
+                    recordedRows.push(createGyroRecordingRow(sample));
+
+                    if (recordedRows.length >= MAX_RECORDED_ROWS) {
+                        console.log("Max rows reached. Triggering intermediate download.");
+                        downloadRecordedCsv(true);
+                    }
+                }
+
 //                downsamplingWorker.postMessage({ type: 'gyro', payload: { x: sample.x, y: sample.y, z: sample.z, time: sample.time } });
                        const newSample = { x: sample.x, y: sample.y, z: sample.z, time: sample.time };
 //mwrmsworker.postMessage({ type: 'gyro', payload: [newSample] })
@@ -3141,7 +3278,11 @@ function handleDecodedSample(sample) {
 
 
     if (isRecording) {
-        recordedRows.push([timestamp, id, value1, value2, value3]);
+        if (id === 1) {
+            recordedRows.push(createAccRecordingRow({ time: timestamp, x: value1, y: value2, z: value3 }));
+        } else if (id === 2) {
+            recordedRows.push(createGyroRecordingRow({ time: timestamp, x: value1, y: value2, z: value3 }));
+        }
         if (recordedRows.length % 50 === 0) console.log("Recording... rows:", recordedRows.length);
     } // DEBUGGING: Removed console.log
     else {
@@ -3499,33 +3640,6 @@ function setupUIListeners() {
         }
     }
 
-    function downloadCSV(isIntermediate = false) {
-        if (!recordedRows.length) {
-            return;
-        }
-
-        const columnCount = Math.max(...recordedRows.map((row) => row.length), 0);
-        const header = Array.from({ length: columnCount }, (_, index) => `col${index + 1}`).join(",");
-        const csv = `${header}\n${recordedRows.map((row) => row.join(",")).join("\n")}`;
-        const blob = new Blob([csv], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "_");
-        const suffix = isIntermediate ? `_part${String(filePartIndex).padStart(3, '0')}` : "";
-
-        anchor.href = url;
-        anchor.download = `recording_${timestamp}${suffix}.csv`;
-        anchor.click();
-        URL.revokeObjectURL(url);
-
-        if (isIntermediate) {
-            filePartIndex += 1;
-            recordedRows = [];
-        } else if (downloadBtn) {
-            downloadBtn.style.display = "none";
-        }
-    }
-
     window.toggleRecording = function() {
         isRecording = !isRecording;
 
@@ -3536,8 +3650,8 @@ function setupUIListeners() {
             if (downloadBtn) {
                 downloadBtn.style.display = "none";
             }
-        } else if (recordedRows.length > 0 && downloadBtn) {
-            downloadBtn.style.display = "";
+        } else if (recordedRows.length > 0) {
+            downloadRecordedCsv(false);
         }
 
         syncRecordingButtons();
@@ -3553,7 +3667,7 @@ function setupUIListeners() {
 
     if (downloadBtn) {
         downloadBtn.addEventListener("click", () => {
-            downloadCSV(false);
+            downloadRecordedCsv(false);
         });
     }
 
@@ -3600,6 +3714,7 @@ function setupUIListeners() {
 
 function initFFTChart() {
     const fftHost = document.getElementById("fftChart");
+    const fftLegendHost = document.getElementById("fftChartLegendHost");
     const fftSize = getFftChartSize();
     const fftWidth = Math.max(320, fftSize.width || Math.round(fftHost?.clientWidth || 800));
     const fftHeight = Math.max(250, fftSize.height || 500);
@@ -3648,14 +3763,22 @@ function initFFTChart() {
                 width: 1,
                 points: { show: false }
             },
-        ]
+        ],
+        legend: {
+            mount: (u, table) => {
+                fftLegendHost?.replaceChildren(table);
+            },
+        },
     };
 
     fftPlot = new uPlot(fftopts, [[], [], [], []], fftHost);
+    installManualLegendToggle(fftPlot, "fftChartLegendHost");
+    updatePeakFrequencyBadge('fftPeakBadge', null, null);
 }
 
 function initRMSChart() {
     const rmsSize = getRmsChartSize();
+    const rmsLegendHost = document.getElementById("rmsChartLegendHost");
 
     const rmsopts = {
         ...rmsSize,
@@ -3696,10 +3819,16 @@ function initRMSChart() {
         ],
         cursor: {
             drag: { x: true, y: true, setScale: true }
-        }
+        },
+        legend: {
+            mount: (u, table) => {
+                rmsLegendHost?.replaceChildren(table);
+            },
+        },
     };
 
     rmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById("rmsChart"));
+    installManualLegendToggle(rmsPlot, "rmsChartLegendHost");
 
 
 
@@ -3776,6 +3905,7 @@ function initRMSChart() {
 
 function initGyroFFTChart() {
     const fftHost = document.getElementById('gyroFftChart');
+    const gyroFftLegendHost = document.getElementById('gyroFftChartLegendHost');
     const fftSize = getGyroFftChartSize();
     const fftWidth = Math.max(320, fftSize.width || Math.round(fftHost?.clientWidth || 800));
     const fftHeight = Math.max(250, fftSize.height || 500);
@@ -3824,14 +3954,66 @@ function initGyroFFTChart() {
                 width: 1,
                 points: { show: false }
             },
-        ]
+        ],
+        legend: {
+            mount: (u, table) => {
+                gyroFftLegendHost?.replaceChildren(table);
+            },
+        },
     };
 
     gyroFftPlot = new uPlot(fftopts, [[], [], [], []], fftHost);
+    installManualLegendToggle(gyroFftPlot, 'gyroFftChartLegendHost');
+    updatePeakFrequencyBadge('gyroFftPeakBadge', null, null);
+}
+
+function updatePeakFrequencyBadge(elementId, freqs, mags) {
+    const badge = document.getElementById(elementId);
+    if (!badge) {
+        return;
+    }
+
+    if (!freqs || !mags || freqs.length === 0 || mags.length === 0) {
+        badge.textContent = 'Peak -- Hz | Amp --';
+        return;
+    }
+
+    let bestIndex = -1;
+    let bestMagnitude = -Infinity;
+    const startIndex = freqs.length > 1 ? 1 : 0;
+
+    for (let index = startIndex; index < freqs.length && index < mags.length; index++) {
+        const frequency = Number(freqs[index]);
+        const magnitude = Number(mags[index]);
+        if (!Number.isFinite(frequency) || !Number.isFinite(magnitude)) {
+            continue;
+        }
+
+        if (magnitude > bestMagnitude) {
+            bestMagnitude = magnitude;
+            bestIndex = index;
+        }
+    }
+
+    if (bestIndex < 0) {
+        badge.textContent = 'Peak -- Hz | Amp --';
+        return;
+    }
+
+    const peakFrequency = Number(freqs[bestIndex]);
+    const peakMagnitude = Number(mags[bestIndex]);
+    const formattedFrequency = peakFrequency >= 100
+        ? peakFrequency.toFixed(0)
+        : peakFrequency.toFixed(1);
+    const formattedMagnitude = peakMagnitude >= 1000
+        ? peakMagnitude.toFixed(0)
+        : peakMagnitude.toFixed(1);
+    badge.textContent = `Peak ${formattedFrequency} Hz | Amp ${formattedMagnitude}`;
 }
 
 function initGyroRMSChart() {
     const rmsSize = getGyroRmsChartSize();
+    const gyroRmsLegendHost = document.getElementById('gyroRmsChartLegendHost');
 
     const rmsopts = {
         ...rmsSize,
@@ -3872,10 +4054,16 @@ function initGyroRMSChart() {
         ],
         cursor: {
             drag: { x: true, y: true, setScale: true }
-        }
+        },
+        legend: {
+            mount: (u, table) => {
+                gyroRmsLegendHost?.replaceChildren(table);
+            },
+        },
     };
 
     gyroRmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById('gyroRmsChart'));
+    installManualLegendToggle(gyroRmsPlot, 'gyroRmsChartLegendHost');
 }
 
 // FFT Worker initialisieren
@@ -3943,6 +4131,7 @@ function setupFFTWorker() {
 
             //fftPlot.setData([plotFreqs, maxValues, plotMags]);
             fftPlot.setData([toRegularArray(freqs), maxValues, toRegularArray(meanValues), toRegularArray(mags)]);
+            updatePeakFrequencyBadge('fftPeakBadge', freqs, mags);
             if (fftDBoutput) {
                 // Logarithmische Skala für dB-Ausgabe
                 fftPlot.setScale("y", [0.0, 100.0]);
@@ -3994,6 +4183,7 @@ function setupGyroFFTWorker() {
             }
 
             gyroFftPlot.setData([toRegularArray(freqs), maxValues, toRegularArray(meanValues), toRegularArray(mags)]);
+            updatePeakFrequencyBadge('gyroFftPeakBadge', freqs, mags);
 
             if (fftDBoutput) {
                 gyroFftPlot.setScale('y', [0.0, 100.0]);
@@ -4579,7 +4769,7 @@ console.log(`[FFT] Effektive Samplerate: ${SAMPLE_RATE.toFixed(1)} Hz`);
 
 
 function getSize() {
-    const container = document.getElementById("livechart2");
+    const container = document.getElementById("accChartHost");
     const rect = container.getBoundingClientRect();
     return {
         width: Math.max(0, Math.round(rect.width || container.clientWidth)),
@@ -4588,7 +4778,7 @@ function getSize() {
 }
 
 function getGyroChartSize() {
-    const container = document.getElementById("gyrochart");
+    const container = document.getElementById("gyroChartHost");
     const rect = container.getBoundingClientRect();
     return {
         width: Math.max(0, Math.round(rect.width || container.clientWidth)),
@@ -4597,7 +4787,7 @@ function getGyroChartSize() {
 }
 
 function getFftChartSize() {
-    const container = document.getElementById("fftPanel") || document.getElementById("fftChart");
+    const container = document.getElementById("fftChart");
     const rect = container.getBoundingClientRect();
     return {
         width: Math.max(0, Math.round(rect.width || container.clientWidth)),
@@ -4606,7 +4796,7 @@ function getFftChartSize() {
 }
 
 function getRmsChartSize() {
-    const container = document.getElementById("rmsPanel") || document.getElementById("rmsChart");
+    const container = document.getElementById("rmsChart");
     const rect = container.getBoundingClientRect();
     return {
         width: Math.max(0, Math.round(rect.width || container.clientWidth)),
@@ -4615,7 +4805,7 @@ function getRmsChartSize() {
 }
 
 function getGyroFftChartSize() {
-    const container = document.getElementById('gyroFftPanel') || document.getElementById('gyroFftChart');
+    const container = document.getElementById('gyroFftChart');
     const rect = container.getBoundingClientRect();
     return {
         width: Math.max(0, Math.round(rect.width || container.clientWidth)),
@@ -4624,7 +4814,7 @@ function getGyroFftChartSize() {
 }
 
 function getGyroRmsChartSize() {
-    const container = document.getElementById('gyroRmsPanel') || document.getElementById('gyroRmsChart');
+    const container = document.getElementById('gyroRmsChart');
     const rect = container.getBoundingClientRect();
     return {
         width: Math.max(0, Math.round(rect.width || container.clientWidth)),
@@ -4801,8 +4991,8 @@ window.addEventListener("resize", e => {
     updateLiveChartPanelHeights();
     updateFftRmsPanelHeights();
     updateGyroFftRmsPanelHeights();
-    chart.setSize(getSize());
-    gyroChart.setSize(getGyroChartSize());
+    chart?.setSize(getSize());
+    gyroChart?.setSize(getGyroChartSize());
     fftPlot?.setSize(getFftChartSize());
     rmsPlot?.setSize(getRmsChartSize());
     gyroFftPlot?.setSize(getGyroFftChartSize());
@@ -4825,7 +5015,133 @@ for (let i = -99; i <= 0; i++) {
     values3.push(Math.tan(i / 10) * 5 + 30);
     values4.push(Math.sqrt(values1[i + 99] ** 2 + values2[i + 99] ** 2 + values3[i + 99] ** 2));
 }
+
+function createCanvasCursorPointsPlugin() {
+    let overlayCanvas = null;
+    let overlayContext = null;
+
+    function ensureOverlayCanvas(u) {
+        const wrap = u.root?.querySelector?.('.u-wrap');
+        if (!wrap || !u.bbox) {
+            return null;
+        }
+
+        if (!overlayCanvas) {
+            overlayCanvas = document.createElement('canvas');
+            overlayCanvas.className = 'u-cursor-pts-canvas';
+            overlayCanvas.style.position = 'absolute';
+            overlayCanvas.style.pointerEvents = 'none';
+            overlayCanvas.style.zIndex = '101';
+            wrap.appendChild(overlayCanvas);
+            overlayContext = overlayCanvas.getContext('2d');
+        }
+
+        const pixelRatio = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+        const width = Math.max(1, Math.round(wrap.clientWidth));
+        const height = Math.max(1, Math.round(wrap.clientHeight));
+        const targetWidth = Math.max(1, Math.round(width * pixelRatio));
+        const targetHeight = Math.max(1, Math.round(height * pixelRatio));
+
+        if (overlayCanvas.width !== targetWidth || overlayCanvas.height !== targetHeight) {
+            overlayCanvas.width = targetWidth;
+            overlayCanvas.height = targetHeight;
+        }
+
+        overlayCanvas.style.left = '0px';
+        overlayCanvas.style.top = '0px';
+        overlayCanvas.style.width = `${width}px`;
+        overlayCanvas.style.height = `${height}px`;
+
+        overlayContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+        return overlayContext;
+    }
+
+    function resolveSeriesColor(u, seriesIndex) {
+        const series = u.series?.[seriesIndex];
+        if (!series) {
+            return '#ffffff';
+        }
+
+        if (typeof series.stroke === 'function') {
+            return series.stroke(u, seriesIndex) || '#ffffff';
+        }
+
+        return series.stroke || '#ffffff';
+    }
+
+    function drawCursorPoints(u) {
+        const context = ensureOverlayCanvas(u);
+        if (!context || !u.bbox) {
+            return;
+        }
+
+        context.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        const cursorIndex = u.cursor?.idx;
+        if (cursorIndex == null || cursorIndex < 0) {
+            return;
+        }
+
+        const xData = u.data?.[0];
+        if (!xData || cursorIndex >= xData.length) {
+            return;
+        }
+
+        const xValue = Number(xData[cursorIndex]);
+        if (!Number.isFinite(xValue)) {
+            return;
+        }
+
+        const xPos = u.valToPos(xValue, 'x', false) + u.bbox.left;
+        if (!Number.isFinite(xPos)) {
+            return;
+        }
+
+        for (let seriesIndex = 1; seriesIndex < u.series.length; seriesIndex++) {
+            const series = u.series[seriesIndex];
+            if (!series?.show) {
+                continue;
+            }
+
+            const yData = u.data?.[seriesIndex];
+            if (!yData || cursorIndex >= yData.length) {
+                continue;
+            }
+
+            const yValue = Number(yData[cursorIndex]);
+            if (!Number.isFinite(yValue)) {
+                continue;
+            }
+
+            const yScaleKey = series.scale || 'y';
+            const yPos = u.valToPos(yValue, yScaleKey, false) + u.bbox.top;
+            if (!Number.isFinite(yPos)) {
+                continue;
+            }
+
+            context.beginPath();
+            context.arc(xPos, yPos, 4.5, 0, Math.PI * 2);
+            context.fillStyle = resolveSeriesColor(u, seriesIndex);
+            context.fill();
+            context.lineWidth = 2;
+            context.strokeStyle = 'rgba(17, 24, 39, 0.9)';
+            context.stroke();
+        }
+    }
+
+    return {
+        hooks: {
+            ready: [drawCursorPoints],
+            setCursor: [drawCursorPoints],
+            setData: [drawCursorPoints],
+            setScale: [drawCursorPoints],
+            draw: [drawCursorPoints],
+        },
+    };
+}
+
 const container = document.getElementById("livechart2");
+const accChartLegendHost = document.getElementById("accChartLegendHost");
 const options = {
     ...getSize(),
     title: "ACC Live-Daten",
@@ -4866,13 +5182,21 @@ const options = {
 
     ],
     cursor: {
-        drag: { x: false, y: false, setScale: false }
+        points: {},
+        drag: { x: true, y: true, setScale: true }
     },
+    legend: {
+        mount: (u, table) => {
+            accChartLegendHost?.replaceChildren(table);
+        },
+    },
+    plugins: [],
 };
 
-const chart = new uPlot(options, [timestamps.slice(), values1.slice(), values2.slice(), values3.slice(), values4.slice()], document.getElementById("accChartHost"));
+chart = new uPlot(options, [timestamps.slice(), values1.slice(), values2.slice(), values3.slice(), values4.slice()], document.getElementById("accChartHost"));
 
 const gyroContainer = document.getElementById("gyrochart");
+const gyroChartLegendHost = document.getElementById("gyroChartLegendHost");
 const gyroOptions = {
     ...getGyroChartSize(),
     title: "Gyro Live-Daten",
@@ -4910,11 +5234,18 @@ const gyroOptions = {
         { label: "Gyro Z (mdps)", stroke: "#81c784" },
     ],
     cursor: {
+        points: {},
         drag: { x: true, y: true, setScale: true }
     },
+    legend: {
+        mount: (u, table) => {
+            gyroChartLegendHost?.replaceChildren(table);
+        },
+    },
+    plugins: [],
 };
 
-const gyroChart = new uPlot(
+gyroChart = new uPlot(
     gyroOptions,
     [timestamps.slice(), values1.slice(), values2.slice(), values3.slice()],
     document.getElementById("gyroChartHost")
@@ -4943,10 +5274,11 @@ function syncAxisOverlayPositions(chartInstance, panelId, yOverlayId, xOverlayId
 
     const xTop = wrapTop + bbox.top + bbox.height;
     const xHeight = Math.max(0, (wrapRect.bottom - panelRect.top) - xTop);
+    const xOverlayHeight = Math.max(0, Math.min(xHeight, 18));
     xOverlay.style.left = `${Math.max(0, wrapLeft + bbox.left)}px`;
     xOverlay.style.top = `${Math.max(0, xTop)}px`;
     xOverlay.style.width = `${Math.max(0, bbox.width)}px`;
-    xOverlay.style.height = `${xHeight}px`;
+    xOverlay.style.height = `${xOverlayHeight}px`;
     xOverlay.style.bottom = "auto";
 }
 
@@ -4986,8 +5318,10 @@ function preserveScalesOnSeriesToggle(chartInstance) {
     };
 }
 
-function installManualLegendToggle(chartInstance) {
-    const legendRoot = chartInstance?.root?.querySelector?.(".u-legend");
+function installManualLegendToggle(chartInstance, legendHostId = null) {
+    const legendRoot = legendHostId
+        ? document.getElementById(legendHostId)?.querySelector?.(".u-legend")
+        : chartInstance?.root?.querySelector?.(".u-legend");
     if (!legendRoot) {
         return;
     }
@@ -5020,8 +5354,8 @@ function installManualLegendToggle(chartInstance) {
 
 preserveScalesOnSeriesToggle(chart);
 preserveScalesOnSeriesToggle(gyroChart);
-installManualLegendToggle(chart);
-installManualLegendToggle(gyroChart);
+installManualLegendToggle(chart, "accChartLegendHost");
+installManualLegendToggle(gyroChart, "gyroChartLegendHost");
 
 syncAxisOverlayPositions(chart, "livechart2", "y-axis-overlay", "x-axis-overlay");
 syncAxisOverlayPositions(gyroChart, "gyrochart", "gyro-y-axis-overlay", "gyro-x-axis-overlay");
@@ -5040,11 +5374,11 @@ let liveChartResizeObserver = new ResizeObserver(() => {
         const accSize = getSize();
         const gyroSize = getGyroChartSize();
 
-        if (accSize.width > 0 && accSize.height > 0) {
+        if (chart && accSize.width > 0 && accSize.height > 0) {
             chart.setSize(accSize);
         }
 
-        if (gyroSize.width > 0 && gyroSize.height > 0) {
+        if (gyroChart && gyroSize.width > 0 && gyroSize.height > 0) {
             gyroChart.setSize(gyroSize);
         }
 
@@ -5464,69 +5798,6 @@ screenshotButton.addEventListener('click', () => {
     saveUplotAsPNG(chart, 'uplot-screenshot.png');
 });
 
-// Button-Eventlistener setzen
-const screenshotButton2 = document.getElementById('SSBtn3');
-screenshotButton2.addEventListener('click', () => {
-    // Beispiel: Variante 2 mit zwei beliebigen Achsen
-    // Beispiel: Variante 1 mit Gravitation + Bewegung entlang X
-
-    const xs = accBuffer.getFieldTypedArray('x', 1200);
-    const ys = accBuffer.getFieldTypedArray('y', 1200);
-    const zs = accBuffer.getFieldTypedArray('z', 1200);
-
-
-
-    const accelIdleData = [xs, ys, zs];
-
-
-
-    const motionData = [
-        [0.3, 0.1, -0.02],
-        [0.35, 0.15, 0.01],
-        [0.32, 0.05, -0.03],
-        [0.28, 0.12, -0.01],
-        [0.33, 0.11, 0.00],
-        [0.31, 0.09, -0.02],
-        [0.34, 0.14, 0.01]
-    ];
-
-    const motionDataA = [
-        [0.3, 0.1, -0.02],
-        [0.35, 0.15, 0.01],
-        [0.32, 0.05, -0.03],
-        [0.33, 0.11, 0.00],
-        [0.29, 0.13, -0.01],
-        [0.30, 0.10, -0.02],
-        [0.36, 0.14, 0.02]
-    ];
-
-    const motionDataB = [
-        [0.1, 0.4, 0.02],
-        [0.15, 0.38, -0.01],
-        [0.05, 0.41, 0.03],
-        [0.11, 0.43, 0.01],
-        [0.09, 0.39, 0.00],
-        [0.12, 0.40, -0.02],
-        [0.13, 0.37, 0.01]
-    ];
-    console.log('accelIdleData:', accelIdleData);
-    //const quat1 = calibrateWithZPlusXYSimple(accelIdleData, motionData, 'x');
-    //const quatIdle = calibrateWithIdleDataOnly(accelIdleData);
-    const quatsimple = calibrateWithZPlusXYFixed(accelIdleData, motionData, 'x');
-
-    decodeWorker.postMessage({
-        type: "calibdata",
-        payload: {
-            quaternion: quatsimple,
-        }
-    });
-
-    console.log('Kalibrierungsquaternion Variante simplezcalibration:', quatsimple);
-    quater = quatsimple;
-    console.log('Quaternion:', quater);
-
-});
-
 // POPUP
 
 const popup = document.getElementById("popup");
@@ -5585,6 +5856,8 @@ function closePopup() {
 function startCalibWorldSimple(button, progressBar, statusText) {
     console.log("Starte Kalibrierung der Welt (einfach)...  kkk");
     accBufferCALIB.clear(); // Buffer leeren für Kalibrierung
+    gyroBufferCALIB.clear();
+    worldSimpleGyroCaptureActive = true;
     // START-Kommando senden
     decodeWorker.postMessage({
         type: "calibcommand",
@@ -5603,6 +5876,7 @@ function startCalibWorldSimple(button, progressBar, statusText) {
         result1.textContent = `${accBufferCALIB.length} Samples`
         if (value >= 100) {
             clearInterval(interval);
+            worldSimpleGyroCaptureActive = false;
             statusText.textContent = "Fertig!";
 
             // NÄCHSTEN Button aktivieren
@@ -5641,6 +5915,13 @@ function startCalibWorldSimple(button, progressBar, statusText) {
                 y: getBufferAxisStats(accBufferCALIB, 'y'),
                 z: getBufferAxisStats(accBufferCALIB, 'z'),
             };
+            const gyroZeroState = gyroBufferCALIB.length > 0
+                ? {
+                    x: gyroBufferCALIB.getMean('x'),
+                    y: gyroBufferCALIB.getMean('y'),
+                    z: gyroBufferCALIB.getMean('z'),
+                }
+                : null;
 
             command.textContent = "Kalibrierung abgeschlossen!";
             result1.innerHTML = buildSingleSensorStatsTableHtml('ACC', N, accStats, 'mg');
@@ -5670,6 +5951,7 @@ function startCalibWorldSimple(button, progressBar, statusText) {
                     gravity: tempgravity,
                 }
             });
+            setWorldSimpleGyroState(gyroZeroState, { persistState: false });
 
 
 

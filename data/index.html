@@ -398,11 +398,11 @@
               <div class="livecharts-grid" id="livechartsGrid">
               <div id="livechart2" class="livechart-panel">
                 <div id="accChartHost" class="chart-plot-host"></div>
+                <div id="accChartLegendHost" class="chart-legend-host"></div>
                 <div id="inchartcontrols" class="chart-overlay-controls">
                   <button id="pauseBtn2" title="Liveanzeige pausieren">Pause</button>
                   <button id="recBtn2" title="CSV erzeugen">🔴</button>
                   <button id="SSBtn2" title="Screenshot speichern">⎙</button>
-                  <button id="SSBtn3" title="Screenshot speichern">KALIB</button>
                 </div>
                 <div id="y-axis-overlay" title="Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 <div id="x-axis-overlay" title="X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
@@ -410,6 +410,7 @@
 
               <div id="gyrochart" class="livechart-panel">
                 <div id="gyroChartHost" class="chart-plot-host"></div>
+                <div id="gyroChartLegendHost" class="chart-legend-host"></div>
                 <div id="gyro-y-axis-overlay" title="Gyro Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 <div id="gyro-x-axis-overlay" title="Gyro X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
               </div>
@@ -510,10 +511,13 @@
               <div class="livecharts-grid" id="fftRmsGrid">
                 <div id="fftPanel" class="livechart-panel">
                   <div id="fftChart" class="chart-plot-host"></div>
+                  <div id="fftChartLegendHost" class="chart-legend-host"></div>
+                  <div id="fftPeakBadge" class="chart-info-badge">Peak -- Hz</div>
                 </div>
 
                 <div id="rmsPanel" class="livechart-panel">
                   <div id="rmsChart" class="chart-plot-host"></div>
+                  <div id="rmsChartLegendHost" class="chart-legend-host"></div>
                   <div id="rmsInChartControls" class="chart-overlay-controls">
                     <button id="rmsPauseBtn" title="RMS-Anzeige pausieren">Pause</button>
                     <button id="rmsRecordBtn" title="CSV erzeugen">🔴</button>
@@ -593,10 +597,13 @@
               <div class="livecharts-grid" id="gyroFftRmsGrid">
                 <div id="gyroFftPanel" class="livechart-panel">
                   <div id="gyroFftChart" class="chart-plot-host"></div>
+                  <div id="gyroFftChartLegendHost" class="chart-legend-host"></div>
+                  <div id="gyroFftPeakBadge" class="chart-info-badge">Peak -- Hz</div>
                 </div>
 
                 <div id="gyroRmsPanel" class="livechart-panel">
                   <div id="gyroRmsChart" class="chart-plot-host"></div>
+                  <div id="gyroRmsChartLegendHost" class="chart-legend-host"></div>
                   <div id="gyroRmsInChartControls" class="chart-overlay-controls">
                     <button id="gyroRmsPauseBtn" title="Gyro RMS-Anzeige pausieren">Pause</button>
                     <button id="gyroRmsRecordBtn" title="CSV erzeugen">🔴</button>
@@ -692,13 +699,13 @@
                   </section>
 
                   <section class="vector-align-card vector-align-card--metrics">
-                    <div class="vector-align-card-title">Gedrehter Frame</div>
+                    <div class="vector-align-card-title">Result-Vektor</div>
                     <div class="vector-align-readout-grid">
-                      <div class="vector-align-readout-label">X'</div>
+                      <div class="vector-align-readout-label">X</div>
                       <div id="alignRotatedX" class="vector-align-readout-value">0.0</div>
-                      <div class="vector-align-readout-label">Y'</div>
+                      <div class="vector-align-readout-label">Y</div>
                       <div id="alignRotatedY" class="vector-align-readout-value">0.0</div>
-                      <div class="vector-align-readout-label">Z'</div>
+                      <div class="vector-align-readout-label">Z</div>
                       <div id="alignRotatedZ" class="vector-align-readout-value">0.0</div>
                       <div class="vector-align-readout-label">|a|</div>
                       <div id="alignRotatedMagnitude" class="vector-align-readout-value">0.0</div>

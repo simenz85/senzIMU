@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "LSM6DSO.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include <sys/param.h>
 #include "freertos/ringbuf.h"
@@ -73,6 +74,8 @@
 #define CFG_ID_TEMPSAMPLERATE    106
 #define CFG_ID_FRQFINE           107
 
+#define TAG "app"
+
 
 // 7-Byte-Paketstruktur für Config
 typedef struct __attribute__((packed)) {
@@ -129,7 +132,7 @@ typedef struct {
     // weitere Parameter nach Bedarf
 } imu_config_t;
 
-static imu_config_t pendingConfig = {
+static const imu_config_t kDefaultImuConfig = {
     .accelDataRate = 833,
     .gyroDataRate = 833,
     .accelRange = 4,
@@ -138,7 +141,153 @@ static imu_config_t pendingConfig = {
     .gyroFilter = 1,
     .tempSampleRate = 1
 };
+
+static imu_config_t pendingConfig = kDefaultImuConfig;
 static volatile bool imuConfigChanged = false;
+static volatile bool imuConfigPersistPending = false;
+static const char *IMU_CONFIG_NVS_NAMESPACE = "imu_cfg";
+static const char *IMU_CONFIG_NVS_KEY = "sensor_cfg";
+
+static bool is_supported_odr_value(uint16_t value) {
+    switch (value) {
+        case 0:
+        case 16:
+        case 125:
+        case 26:
+        case 52:
+        case 104:
+        case 208:
+        case 416:
+        case 833:
+        case 1660:
+        case 3330:
+        case 6660:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool sanitize_imu_config(imu_config_t *config) {
+    if (config == NULL) {
+        return false;
+    }
+
+    bool changed = false;
+
+    if (!is_supported_odr_value(config->accelDataRate)) {
+        config->accelDataRate = kDefaultImuConfig.accelDataRate;
+        changed = true;
+    }
+
+    if (!is_supported_odr_value(config->gyroDataRate)) {
+        config->gyroDataRate = kDefaultImuConfig.gyroDataRate;
+        changed = true;
+    }
+
+    switch (config->accelRange) {
+        case 2:
+        case 4:
+        case 8:
+        case 16:
+            break;
+        default:
+            config->accelRange = kDefaultImuConfig.accelRange;
+            changed = true;
+            break;
+    }
+
+    switch (config->gyroRange) {
+        case 125:
+        case 250:
+        case 500:
+        case 1000:
+        case 2000:
+            break;
+        default:
+            config->gyroRange = kDefaultImuConfig.gyroRange;
+            changed = true;
+            break;
+    }
+
+    if (config->accelFilter > 3) {
+        config->accelFilter = kDefaultImuConfig.accelFilter;
+        changed = true;
+    }
+
+    if (config->gyroFilter > 3) {
+        config->gyroFilter = kDefaultImuConfig.gyroFilter;
+        changed = true;
+    }
+
+    if (config->tempSampleRate > 3) {
+        config->tempSampleRate = kDefaultImuConfig.tempSampleRate;
+        changed = true;
+    }
+
+    return changed;
+}
+
+static esp_err_t save_imu_config_to_nvs(const imu_config_t *config) {
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(IMU_CONFIG_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open for save failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_set_blob(handle, IMU_CONFIG_NVS_KEY, config, sizeof(*config));
+    if (ret == ESP_OK) {
+        ret = nvs_commit(handle);
+    }
+
+    nvs_close(handle);
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Sensor-Konfiguration in NVS gespeichert");
+    } else {
+        ESP_LOGE(TAG, "Sensor-Konfiguration konnte nicht gespeichert werden: %s", esp_err_to_name(ret));
+    }
+
+    return ret;
+}
+
+static esp_err_t load_imu_config_from_nvs(imu_config_t *config) {
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(IMU_CONFIG_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    size_t required_size = sizeof(*config);
+    ret = nvs_get_blob(handle, IMU_CONFIG_NVS_KEY, config, &required_size);
+    nvs_close(handle);
+
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (required_size != sizeof(*config)) {
+        ESP_LOGW(TAG, "Persistierte Sensor-Konfiguration hat unerwartete Größe: %u", (unsigned)required_size);
+        *config = kDefaultImuConfig;
+        return ESP_ERR_NVS_INVALID_LENGTH;
+    }
+
+    const bool sanitized = sanitize_imu_config(config);
+    if (sanitized) {
+        ESP_LOGW(TAG, "Persistierte Sensor-Konfiguration enthielt ungueltige Werte und wurde bereinigt");
+    }
+
+    return ESP_OK;
+}
 
 static uint16_t normalize_odr_value(float rate) {
     if (rate < 0.8f) return 0;
@@ -181,9 +330,6 @@ static uint16_t parse_rate_config_value(const cJSON *item) {
 
 float AccelMulti    = 0;
 float FREQ_FINE     = 25;
-
-static const char *TAG = "app";
-static const char *WIFI_TAG = "wifi_ap";
 
 RingbufHandle_t sensor_ringbuf = NULL;
 
@@ -624,7 +770,8 @@ esp_err_t websocket_handler(httpd_req_t *req)
                             uint16_t rate = parse_rate_config_value(item);
                             pendingConfig.accelDataRate = rate;
                     
-                              imuConfigChanged = true;
+                                                            imuConfigChanged = true;
+                                                        imuConfigPersistPending = true;
                             send_config_value(CFG_ID_ACCELSAMPLERATE, rate);
                         }
                         else if (strcmp(key, "ACCELRANGE") == 0) {
@@ -632,6 +779,7 @@ esp_err_t websocket_handler(httpd_req_t *req)
                                                                   : (uint16_t)atoi(item->valuestring);
                             pendingConfig.accelRange = range;
                             imuConfigChanged = true;
+                            imuConfigPersistPending = true;
                             send_config_value(CFG_ID_ACCELRANGE, range);
                         }
                         else if (strcmp(key, "ACCELFILTER") == 0) {
@@ -639,12 +787,14 @@ esp_err_t websocket_handler(httpd_req_t *req)
                                                                   : (uint16_t)atoi(item->valuestring);
                             pendingConfig.accelFilter = range;
                             imuConfigChanged = true;
+                            imuConfigPersistPending = true;
                             send_config_value(CFG_ID_ACCELFILTER, range);
                         }
                         else if (strcmp(key, "GYROSAMPLERATE") == 0) {
                             uint16_t range = parse_rate_config_value(item);
                             pendingConfig.gyroDataRate = range;
                             imuConfigChanged = true;
+                            imuConfigPersistPending = true;
                             send_config_value(CFG_ID_GYROSAMPLERATE, range);
                         }
                         else if (strcmp(key, "GYRORANGE") == 0) {
@@ -652,6 +802,7 @@ esp_err_t websocket_handler(httpd_req_t *req)
                                                                   : (uint16_t)atoi(item->valuestring);
                             pendingConfig.gyroRange = range;
                             imuConfigChanged = true;
+                            imuConfigPersistPending = true;
                             send_config_value(CFG_ID_GYRORANGE, range);
                         }
                         else if (strcmp(key, "GYROFILTER") == 0) {
@@ -659,6 +810,7 @@ esp_err_t websocket_handler(httpd_req_t *req)
                                                                   : (uint16_t)atoi(item->valuestring);
                             pendingConfig.gyroFilter = range;
                             imuConfigChanged = true;
+                            imuConfigPersistPending = true;
                             send_config_value(CFG_ID_GYROFILTER, range);
                         }
                         else if (strcmp(key, "TEMPSAMPLERATE") == 0) {
@@ -666,6 +818,7 @@ esp_err_t websocket_handler(httpd_req_t *req)
                                                                   : (uint16_t)atoi(item->valuestring);
                             pendingConfig.tempSampleRate = range;
                             imuConfigChanged = true;
+                            imuConfigPersistPending = true;
                             send_config_value(CFG_ID_TEMPSAMPLERATE, range);
                         }
                         else {
@@ -910,6 +1063,7 @@ void sensor_task(void* pvParameters) {
 
         pendingConfig.accelDataRate = normalize_odr_value(imu.getAccelDataRate());
         pendingConfig.gyroDataRate = normalize_odr_value(imu.getGyroDataRate());
+        sanitize_imu_config(&pendingConfig);
        
 
 
@@ -926,6 +1080,12 @@ void sensor_task(void* pvParameters) {
                 send_config_value(CFG_ID_GYROSAMPLERATE, pendingConfig.gyroDataRate);
                 send_config_value(CFG_ID_GYROFILTER, pendingConfig.gyroFilter);
                 send_config_value(CFG_ID_TEMPSAMPLERATE, pendingConfig.tempSampleRate);
+
+        if (imuConfigPersistPending) {
+            if (save_imu_config_to_nvs(&pendingConfig) == ESP_OK) {
+                imuConfigPersistPending = false;
+            }
+        }
 
 
     }
@@ -1152,6 +1312,21 @@ extern "C" void app_main() {
     }
     ESP_ERROR_CHECK(ret);
     init_psram();
+
+    pendingConfig = kDefaultImuConfig;
+    ret = load_imu_config_from_nvs(&pendingConfig);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Sensor-Konfiguration aus NVS geladen: ACC_DR=%u, GYRO_DR=%u, ACC_RANGE=%u, GYRO_RANGE=%u",
+                 pendingConfig.accelDataRate,
+                 pendingConfig.gyroDataRate,
+                 pendingConfig.accelRange,
+                 pendingConfig.gyroRange);
+    } else if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "Keine gespeicherte Sensor-Konfiguration gefunden, verwende Defaults");
+    } else {
+        ESP_LOGW(TAG, "Gespeicherte Sensor-Konfiguration konnte nicht geladen werden (%s), verwende Defaults", esp_err_to_name(ret));
+        pendingConfig = kDefaultImuConfig;
+    }
 
     ret = mount_littlefs();
     if (ret != ESP_OK) {

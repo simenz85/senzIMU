@@ -344,11 +344,9 @@ body {
 .uplot {
   background: #232a36 !important;
   border-radius: 18px;
-  padding: 6px 8px 6px;
-  width: 100% !important;
-  height: 100% !important;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .u-title {
@@ -359,6 +357,10 @@ body {
 .u-wrap {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.u-cursor-pt {
+  translate: none;
 }
 
 .u-axis-title {
@@ -382,11 +384,25 @@ body {
 
 .u-legend {
   color: #b0b8c1 !important;
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   flex: 0 0 auto;
   position: relative;
   z-index: 2;
-  margin-top: 4px;
+  margin-top: 2px;
+}
+
+.u-legend .u-series > * {
+  padding: 2px 4px;
+}
+
+.u-inline tr {
+  margin-right: 10px;
+}
+
+.u-legend .u-marker {
+  width: 0.7em;
+  height: 0.7em;
+  margin-right: 3px;
 }
 
 .u-axis, .u-ticks {
@@ -494,6 +510,7 @@ body {
 .livechart-panel {
   position: relative;
   display: flex;
+  flex-direction: column;
   min-height: 250px;
   height: clamp(250px, 31vh, 340px);
   overflow: hidden;
@@ -505,7 +522,7 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
-  height: 100%;
+  height: auto;
   z-index: 1;
 }
 
@@ -523,6 +540,44 @@ body {
   top: 10px;
   right: 10px;
   z-index: 20;
+}
+
+.chart-legend-host {
+  position: relative;
+  z-index: 12;
+  display: flex;
+  justify-content: center;
+  padding: 1px 12px 5px;
+  margin-top: -3px;
+  pointer-events: auto;
+}
+
+.chart-legend-host .u-legend {
+  margin: 0;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: rgba(17, 24, 39, 0.48);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+}
+
+.chart-info-badge {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 19;
+  padding: 11px 18px;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 999px;
+  background: rgba(12, 20, 30, 0.82);
+  color: #eef6ff;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.015em;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.22);
+  pointer-events: none;
 }
 
 #y-axis-overlay,

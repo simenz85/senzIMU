@@ -325,7 +325,7 @@ export class AccVectorViewport {
         this.rotatedVectorArrow = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x00e5ff, { length: 1, shaftRadius: 0.08, headRadius: 0.2, headLength: 0.38 });
         this.scene.add(this.rawVectorArrow);
         this.rotatedVectorArrow.position.set(0, 0.03, 0);
-        this.rotatedFrameGroup.add(this.rotatedVectorArrow);
+        this.scene.add(this.rotatedVectorArrow);
 
         this.gyroGroup = new THREE.Group();
         this.scene.add(this.gyroGroup);
@@ -813,7 +813,7 @@ export class AccVectorViewport {
         );
 
         this.rotationQuaternion.setFromEuler(euler);
-        const displayQuaternion = this.getAppliedQuaternionObject();
+        const displayQuaternion = this.rotationQuaternion.clone().normalize();
         this.rotatedFrameGroup.quaternion.copy(displayQuaternion);
         this.updateQuaternionReadout(displayQuaternion);
         this.updateVectors();
@@ -899,11 +899,14 @@ export class AccVectorViewport {
         }
 
         const rawVector = this.latestVector.clone();
-        const rotatedVector = rawVector.clone().applyQuaternion(this.rotationQuaternion.clone().invert());
+        const appliedQuaternion = this.getAppliedQuaternionObject();
+        const resultVector = appliedQuaternion
+            ? rawVector.clone().applyQuaternion(appliedQuaternion)
+            : rawVector.clone();
 
         this.updateArrow(this.rawVectorArrow, rawVector);
-        this.updateArrow(this.rotatedVectorArrow, rotatedVector);
-        this.updateReadout(rawVector, rotatedVector);
+        this.updateArrow(this.rotatedVectorArrow, resultVector);
+        this.updateReadout(rawVector, resultVector);
         this.updateGyroVectors();
     }
 
@@ -912,8 +915,12 @@ export class AccVectorViewport {
             return;
         }
 
-        const rotatedVector = this.latestGyroVector.clone().applyQuaternion(this.rotationQuaternion.clone().invert());
-        this.updateGyroRingSet(this.gyroRotatedRingSet, rotatedVector, this.rotatedAxes, this.rotatedFrameGroup.quaternion);
+        const localGyroVector = this.latestGyroVector.clone();
+        const appliedQuaternion = this.getAppliedQuaternionObject();
+        const rotatedVector = appliedQuaternion
+            ? localGyroVector.clone().applyQuaternion(appliedQuaternion)
+            : localGyroVector.clone();
+        this.updateGyroRingSet(this.gyroRotatedRingSet, localGyroVector, this.rotatedAxes, this.rotatedFrameGroup.quaternion);
 
         this.updateVectorValues(this.gyroRotatedValueElements, rotatedVector);
 
@@ -1077,7 +1084,7 @@ export class AccVectorViewport {
             return null;
         }
 
-        return this.rotationQuaternion.clone().invert().normalize();
+        return this.rotationQuaternion.clone().normalize();
     }
 
     getAppliedQuaternion() {
@@ -1099,7 +1106,7 @@ export class AccVectorViewport {
             return false;
         }
 
-        this.rotationQuaternion.copy(normalizedQuaternion.clone().invert().normalize());
+        this.rotationQuaternion.copy(normalizedQuaternion);
 
         const euler = new this.THREE.Euler().setFromQuaternion(this.rotationQuaternion, 'XYZ');
         this.setSliderValue('x', this.THREE.MathUtils.radToDeg(euler.x).toFixed(0));
