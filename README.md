@@ -160,6 +160,10 @@ Vorhandene Projektdokumente:
 - docs/spi-ueber-distanz.md: Hauptdokument zur SPI-Verdrahtung
 - docs/spi-ueber-distanz-fallback.md: alternative Darstellung mit Tabelle und ASCII-Fallback
 
+Geplantes eingebettetes Referenzbild fuer das XIAO-Pinout:
+
+- docs/assets/seeed_s3_pinout.jpg
+
 ## Hinweise
 
 - Die Weboberflaeche unter data/ enthaelt mehrere Backup- und Experimentdateien. Nicht jede Datei ist Teil des aktiven Hauptpfads.

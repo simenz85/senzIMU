@@ -12,6 +12,12 @@ Hier ist die visuelle Darstellung der Verkabelung passend zur aktuellen Firmware
 
 Die folgende Skizze ist keine komplette Pinout-Grafik des Boards, sondern eine vereinfachte Schemaansicht mit den fuer diese SPI-Verdrahtung relevanten Anschluessen.
 
+## XIAO Pinout Referenzbild
+
+Das folgende Referenzbild zeigt die XIAO-ESP32-S3-Pinbelegung als Board-Pinout.
+
+![XIAO ESP32-S3 Pinout](assets/seeed_s3_pinout.jpg)
+
 ```text
         XIAO ESP32-S3
     ---------------------
