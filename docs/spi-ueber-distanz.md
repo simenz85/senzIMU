@@ -6,17 +6,17 @@ Um das zu lösen, machen wir uns die Struktur des LAN-Kabels zunutze. Jedes Ader
 
 ## Der Verdrahtungsplan
 
-Hier ist die visuelle Darstellung der Verkabelung. Du bündelst auf der Seite des XIAO drei weiße Adern und verbindest sie mit dem einzigen GND-Pin. Dasselbe machst du auf der Seite des Sensors.
+Hier ist die visuelle Darstellung der Verkabelung passend zur aktuellen Firmware in src/main.cpp. Du bündelst auf der Seite des XIAO drei weiße Adern und verbindest sie mit dem einzigen GND-Pin. Dasselbe machst du auf der Seite des Sensors.
 
 ## Code-Snippet
 
 ```mermaid
 flowchart LR
     subgraph XIAO["XIAO ESP32-S3"]
-        X_SCK["D8 : SCK"]
-        X_MOSI["D10 : MOSI"]
-        X_MISO["D9 : MISO"]
-        X_CS["D7 : CS"]
+        X_SCK["GPIO7 : SCK"]
+        X_MOSI["GPIO9 : MOSI"]
+        X_MISO["GPIO8 : MISO"]
+        X_CS["GPIO4 : CS"]
         X_3V3["3V3"]
         X_GND["GND"]
     end
@@ -45,7 +45,16 @@ flowchart LR
 
 ## Paar-Zuordnung
 
-1. Paar 1 (Orange): D8 an SCL/SPC. Das weiße Kabel an GND.
-2. Paar 2 (Grün): D10 an SDA/SDI. Das weiße Kabel an GND.
-3. Paar 3 (Braun): D9 an SDO. Das weiße Kabel an GND.
-4. Paar 4 (Blau): D7 an CS/NCS. Das weiße Kabel an 3V3 (XIAO) bzw. VDD/VDDIO (Sensor).
+1. Paar 1 (Orange): GPIO7 an SCL/SPC. Das weiße Kabel an GND.
+2. Paar 2 (Grün): GPIO9 an SDA/SDI. Das weiße Kabel an GND.
+3. Paar 3 (Braun): GPIO8 an SDO. Das weiße Kabel an GND.
+4. Paar 4 (Blau): GPIO4 an CS/NCS. Das weiße Kabel an 3V3 (XIAO) bzw. VDD/VDDIO (Sensor).
+
+## Firmware-Bezug
+
+Die aktuelle Zuordnung stammt direkt aus src/main.cpp:
+
+- SCK = GPIO7
+- MISO = GPIO8
+- MOSI = GPIO9
+- CS = GPIO4
