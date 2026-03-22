@@ -12,8 +12,8 @@ let fusionWorker = null;
 onmessage = (e) => {
     const msg = e.data;
 
-    if(msg.type === "init" && msg.fusionWorker){
-        fusionWorker = msg.fusionWorker;
+    if (msg?.type === "init") {
+        fusionWorker = msg.fusionWorker ?? null;
         return;
     }
 

@@ -544,22 +544,10 @@ export function simpleZCalibration(accelIdleData) {
   const meanNorm = normalizeVector(mean);
   console.log('Normalized mean:', meanNorm);
   
-  // Quaternion, das den Ruhebeschleunigungsvektor auf ENU-Down [0,0,-1] rotiert
-  const q = quat.create();
-  const axis = vec3.create();
-  
-  // Kreuzprodukt für Rotationsachse
-  vec3.cross(axis, meanNorm, ENU_GRAVITY_DOWN);
-  vec3.normalize(axis, axis);
-  
-  // Winkel berechnen
+  // Robuste Rotation Sensor -> ENU, inklusive 180°-Sonderfall.
+  const q = safeRotationTo(meanNorm, ENU_GRAVITY_DOWN);
   const dot = vec3.dot(meanNorm, ENU_GRAVITY_DOWN);
-  const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
-  
-  console.log('Rotation axis:', axis);
-  console.log('Rotation angle:', angle * (180/Math.PI) + '°');
-  
-  quat.setAxisAngle(q, axis, angle);
+  console.log('Rotation angle:', Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI) + '°');
   
   // Verifikation
   const testVec = vec3.fromValues(...mean);

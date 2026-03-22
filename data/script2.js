@@ -1,6 +1,7 @@
 import { calibrateWithZPlusXYFixed, calibrateWithZPlusXYSuperSimple, simpleZCalibration, calibrateWithZPlusXYSimple, calibrateWithIdleDataOnly, calibrateWithZPlusXY, calibrateWithZPlusXY2, calibrateTwoAxesFlexible, applyCalibrationToAccel, calibrateWithZPlusXYStrict } from './imuCalibration.js';
 import { MultiRingBuffer2, UniDropdown } from './helperclasses.js';
 import { AccVectorViewport } from './ui/acc-vector-viewport.js';
+import { MotionViewport } from './ui/motion-viewport.js';
 import { formatMicrosecondsToHMS, toRegularArray } from './utils/format-utils.js';
 
 const FiliLib = globalThis.Fili;
@@ -31,7 +32,12 @@ const CALIBRATION_CAPTURE_STEPS = 100;
 const REFERENCE_CAPTURE_MIN_SAMPLES = 8;
 const CALIBRATION_COOKIE_NAME = 'imuCalibrationState';
 const CALIBRATION_COOKIE_VERSION = 1;
-const CALIBRATION_COOKIE_MAX_AGE_SECONDS = 24 * 60 * 60;
+const CALIBRATION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const CALIBRATION_STORAGE_KEY = 'imuCalibrationState.local';
+const APP_SETTINGS_COOKIE_NAME = 'imuAppSettings';
+const APP_SETTINGS_COOKIE_VERSION = 1;
+const APP_SETTINGS_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const APP_SETTINGS_STORAGE_KEY = 'imuAppSettings.local';
 let referenceCaptureActive = false;
 let worldSimpleGyroCaptureActive = false;
 let currentOrientationMode = 0;
@@ -40,6 +46,8 @@ let gravityCutEnabled = false;
 let currentReferenceState = null;
 let currentWorldSimpleGyroState = null;
 let currentAccelCalibrationScale = 1;
+let currentFusionCalibrationState = null;
+let appSettingsBindingsInitialized = false;
 let chart = null;
 let gyroChart = null;
 
@@ -171,21 +179,262 @@ const FILTER_ZERO_PHASE_PAD_MIN_SAMPLES = 96;
 const FILTER_ZERO_PHASE_PAD_MAX_SAMPLES = 1024;
 const lastAppliedFilterSettings = { acc: null, gyro: null };
 const accVectorViewport = new AccVectorViewport();
+const motionViewport = new MotionViewport();
+const motionWorker = new Worker('motion-worker.js');
+const motionModeMotionBtn = document.getElementById('motionModeMotionBtn');
+const motionModeVibrationBtn = document.getElementById('motionModeVibrationBtn');
+const motionResetBtn = document.getElementById('motionResetBtn');
+const motionTrailSecondsSlider = document.getElementById('motionTrailSeconds');
+const motionTrailSecondsInput = document.getElementById('motionTrailSecondsInput');
+const motionTrailSecondsValue = document.getElementById('motionTrailSecondsValue');
+const motionDisplayScaleSlider = document.getElementById('motionDisplayScale');
+const motionDisplayScaleInput = document.getElementById('motionDisplayScaleInput');
+const motionDisplayScaleValue = document.getElementById('motionDisplayScaleValue');
+const motionDeadbandSlider = document.getElementById('motionDeadband');
+const motionDeadbandInput = document.getElementById('motionDeadbandInput');
+const motionDeadbandValue = document.getElementById('motionDeadbandValue');
+const motionStationarySlider = document.getElementById('motionStationary');
+const motionStationaryInput = document.getElementById('motionStationaryInput');
+const motionStationaryValue = document.getElementById('motionStationaryValue');
+const motionVibrationLeakSlider = document.getElementById('motionVibrationLeak');
+const motionVibrationLeakInput = document.getElementById('motionVibrationLeakInput');
+const motionVibrationLeakValue = document.getElementById('motionVibrationLeakValue');
+const motionModeReadout = document.getElementById('motionModeReadout');
+const motionOrientationReadout = document.getElementById('motionOrientationReadout');
+const motionTrailCountReadout = document.getElementById('motionTrailCountReadout');
+const motionTrailWindowReadout = document.getElementById('motionTrailWindowReadout');
+const motionAccX = document.getElementById('motionAccX');
+const motionAccY = document.getElementById('motionAccY');
+const motionAccZ = document.getElementById('motionAccZ');
+const motionAccMagnitude = document.getElementById('motionAccMagnitude');
+const motionVelocityX = document.getElementById('motionVelocityX');
+const motionVelocityY = document.getElementById('motionVelocityY');
+const motionVelocityZ = document.getElementById('motionVelocityZ');
+const motionVelocityMagnitude = document.getElementById('motionVelocityMagnitude');
+const motionPositionX = document.getElementById('motionPositionX');
+const motionPositionY = document.getElementById('motionPositionY');
+const motionPositionZ = document.getElementById('motionPositionZ');
+const motionPositionMagnitude = document.getElementById('motionPositionMagnitude');
+const motionUiState = {
+    mode: 'motion',
+    trailSeconds: 5,
+    displayScale: 3,
+    deadbandMg: 10,
+    stationaryAccelThresholdMs2: 0.12,
+    stationaryGyroThresholdMdps: 8000,
+    motionVelocityLeak: 0.99998,
+    vibrationVelocityLeak: 0.94,
+    vibrationPositionLeak: 0.985,
+    vibrationHighPassAlpha: 0.92,
+};
+
+function setMotionSliderState(slider, input, label, value, suffix = '') {
+    const normalized = Number(value);
+    if (slider) {
+        slider.value = String(normalized);
+    }
+    if (input) {
+        input.value = String(normalized);
+    }
+    if (label) {
+        label.textContent = `${normalized}${suffix}`;
+    }
+}
+
+function updateMotionControlLabels() {
+    setMotionSliderState(motionTrailSecondsSlider, motionTrailSecondsInput, motionTrailSecondsValue, motionUiState.trailSeconds, ' s');
+    setMotionSliderState(motionDisplayScaleSlider, motionDisplayScaleInput, motionDisplayScaleValue, motionUiState.displayScale, 'x');
+    setMotionSliderState(motionDeadbandSlider, motionDeadbandInput, motionDeadbandValue, motionUiState.deadbandMg, ' mg');
+
+    const stationaryBasisPoints = Math.round(motionUiState.stationaryAccelThresholdMs2 * 100);
+    if (motionStationarySlider) {
+        motionStationarySlider.value = String(stationaryBasisPoints);
+    }
+    if (motionStationaryInput) {
+        motionStationaryInput.value = String(stationaryBasisPoints);
+    }
+    if (motionStationaryValue) {
+        motionStationaryValue.textContent = motionUiState.stationaryAccelThresholdMs2.toFixed(2);
+    }
+
+    const leakPercent = Math.round(motionUiState.vibrationVelocityLeak * 100);
+    if (motionVibrationLeakSlider) {
+        motionVibrationLeakSlider.value = String(leakPercent);
+    }
+    if (motionVibrationLeakInput) {
+        motionVibrationLeakInput.value = String(leakPercent);
+    }
+    if (motionVibrationLeakValue) {
+        motionVibrationLeakValue.textContent = `${leakPercent}%`;
+    }
+
+    if (motionTrailWindowReadout) {
+        motionTrailWindowReadout.textContent = `${motionUiState.trailSeconds.toFixed(1)} s`;
+    }
+}
+
+function updateMotionModeButtons() {
+    motionModeMotionBtn?.classList.toggle('active', motionUiState.mode === 'motion');
+    motionModeVibrationBtn?.classList.toggle('active', motionUiState.mode === 'vibration');
+    if (motionModeReadout) {
+        motionModeReadout.textContent = motionUiState.mode === 'vibration' ? 'Vibration' : 'Bewegung';
+    }
+}
+
+function updateMotionReadouts(payload = {}) {
+    const acc = payload.linearAcc || {};
+    const velocity = payload.velocity || {};
+    const position = payload.position || {};
+    const accNorm = Math.hypot(Number(acc.x || 0), Number(acc.y || 0), Number(acc.z || 0));
+    const velocityNorm = Math.hypot(Number(velocity.x || 0), Number(velocity.y || 0), Number(velocity.z || 0));
+    const positionNorm = Math.hypot(Number(position.x || 0), Number(position.y || 0), Number(position.z || 0));
+    if (motionAccX) motionAccX.textContent = Number(acc.x || 0).toFixed(3);
+    if (motionAccY) motionAccY.textContent = Number(acc.y || 0).toFixed(3);
+    if (motionAccZ) motionAccZ.textContent = Number(acc.z || 0).toFixed(3);
+    if (motionAccMagnitude) motionAccMagnitude.textContent = accNorm.toFixed(3);
+    if (motionVelocityX) motionVelocityX.textContent = Number(velocity.x || 0).toFixed(3);
+    if (motionVelocityY) motionVelocityY.textContent = Number(velocity.y || 0).toFixed(3);
+    if (motionVelocityZ) motionVelocityZ.textContent = Number(velocity.z || 0).toFixed(3);
+    if (motionVelocityMagnitude) motionVelocityMagnitude.textContent = velocityNorm.toFixed(3);
+    if (motionPositionX) motionPositionX.textContent = Number(position.x || 0).toFixed(3);
+    if (motionPositionY) motionPositionY.textContent = Number(position.y || 0).toFixed(3);
+    if (motionPositionZ) motionPositionZ.textContent = Number(position.z || 0).toFixed(3);
+    if (motionPositionMagnitude) motionPositionMagnitude.textContent = positionNorm.toFixed(3);
+    if (motionOrientationReadout) motionOrientationReadout.textContent = payload.orientationActive ? 'aktiv' : 'inaktiv';
+    if (motionTrailCountReadout) {
+        const trailCount = Number.isFinite(Number(payload.trailCount))
+            ? Number(payload.trailCount)
+            : (Array.isArray(payload.trail) ? payload.trail.length : 0);
+        motionTrailCountReadout.textContent = String(trailCount);
+    }
+}
+
+function syncMotionWorkerConfig({ reset = false } = {}) {
+    motionWorker.postMessage({
+        type: 'config',
+        payload: {
+            ...motionUiState,
+            reset,
+        },
+    });
+    motionViewport.setDisplayScale(motionUiState.displayScale);
+    updateMotionControlLabels();
+    updateMotionModeButtons();
+}
+
 accVectorViewport.options.onDisplaySettingsChange = () => {
     persistCalibrationCookie();
+};
+motionViewport.options.onDisplaySettingsChange = () => {
+    persistCalibrationCookie();
+};
+accVectorViewport.options.onQuaternionChange = (payload) => {
+    syncViewportPostTransformQuaternion({
+        persistState: true,
+        resetLiveBuffers: Boolean(payload?.commit),
+    });
+    syncMotionWorkerTransform({ reset: Boolean(payload?.commit) });
 };
 const alignLoadQuatBtn = document.getElementById('alignLoadQuatBtn');
 const alignApplyQuatBtn = document.getElementById('alignApplyQuatBtn');
 
+motionWorker.onmessage = (event) => {
+    if (event.data?.type !== 'state') {
+        return;
+    }
+
+    motionViewport.setState(event.data);
+    updateMotionReadouts(event.data);
+    motionViewport.setStatus(
+        event.data.orientationActive
+            ? (motionUiState.mode === 'vibration' ? 'Vibrationsspur aktiv' : 'Bewegungsspur aktiv')
+            : 'Orientation erforderlich für Weltintegration'
+    );
+};
+
 window.addEventListener('dashboardTabChanged', (event) => {
     console.log('[ACC-3D] dashboardTabChanged', event.detail);
     accVectorViewport.setVisible(event.detail?.sectionId === 'vectorAlignArea');
+    motionViewport.setVisible(event.detail?.sectionId === 'motionViewportArea');
 });
 
 console.log('[ACC-3D] initial visibility', {
     vectorAlignAreaDisplay: document.getElementById('vectorAlignArea')?.style.display,
+    motionViewportAreaDisplay: document.getElementById('motionViewportArea')?.style.display,
 });
 accVectorViewport.setVisible(document.getElementById('vectorAlignArea')?.style.display !== 'none');
+motionViewport.setVisible(document.getElementById('motionViewportArea')?.style.display !== 'none');
+updateMotionControlLabels();
+updateMotionModeButtons();
+motionViewport.setDisplayScale(motionUiState.displayScale);
+
+motionModeMotionBtn?.addEventListener('click', () => {
+    motionUiState.mode = 'motion';
+    syncMotionWorkerConfig({ reset: true });
+});
+
+motionModeVibrationBtn?.addEventListener('click', () => {
+    motionUiState.mode = 'vibration';
+    syncMotionWorkerConfig({ reset: true });
+});
+
+motionResetBtn?.addEventListener('click', () => {
+    motionWorker.postMessage({ type: 'reset' });
+    motionViewport.setStatus('Spur zurückgesetzt');
+});
+
+const bindMotionNumericControl = (slider, input, onCommit) => {
+    slider?.addEventListener('input', () => onCommit(slider.value, false));
+    slider?.addEventListener('change', () => onCommit(slider.value, true));
+    input?.addEventListener('input', () => onCommit(input.value, false));
+    input?.addEventListener('change', () => onCommit(input.value, true));
+    input?.addEventListener('blur', () => onCommit(input.value, true));
+};
+
+bindMotionNumericControl(motionTrailSecondsSlider, motionTrailSecondsInput, (value, commit) => {
+    const nextValue = Math.max(1, Math.min(20, Math.round(Number(value) || motionUiState.trailSeconds)));
+    motionUiState.trailSeconds = nextValue;
+    updateMotionControlLabels();
+    if (commit) {
+        syncMotionWorkerConfig({ reset: false });
+    }
+});
+
+bindMotionNumericControl(motionDisplayScaleSlider, motionDisplayScaleInput, (value) => {
+    const nextValue = Math.max(1, Math.min(40, Math.round(Number(value) || motionUiState.displayScale)));
+    motionUiState.displayScale = nextValue;
+    updateMotionControlLabels();
+    motionViewport.setDisplayScale(nextValue);
+});
+
+bindMotionNumericControl(motionDeadbandSlider, motionDeadbandInput, (value, commit) => {
+    const nextValue = Math.max(0, Math.min(120, Math.round(Number(value) || motionUiState.deadbandMg)));
+    motionUiState.deadbandMg = nextValue;
+    updateMotionControlLabels();
+    if (commit) {
+        syncMotionWorkerConfig({ reset: true });
+    }
+});
+
+bindMotionNumericControl(motionStationarySlider, motionStationaryInput, (value, commit) => {
+    const nextValue = Math.max(5, Math.min(150, Math.round(Number(value) || 22)));
+    motionUiState.stationaryAccelThresholdMs2 = nextValue / 100;
+    updateMotionControlLabels();
+    if (commit) {
+        syncMotionWorkerConfig({ reset: false });
+    }
+});
+
+bindMotionNumericControl(motionVibrationLeakSlider, motionVibrationLeakInput, (value, commit) => {
+    const nextValue = Math.max(70, Math.min(99, Math.round(Number(value) || 94)));
+    motionUiState.vibrationVelocityLeak = nextValue / 100;
+    updateMotionControlLabels();
+    if (commit) {
+        syncMotionWorkerConfig({ reset: true });
+    }
+});
+
+syncMotionWorkerConfig({ reset: true });
 
 // Regelmäßiges Update, Standard: 30 fps
 let FFT_UPDATE_INTERVAL = 1000 / 30;
@@ -1809,6 +2058,14 @@ function setCookieValue(name, value, maxAgeSeconds) {
     document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; samesite=lax`;
 }
 
+function setLocalStorageValue(name, value) {
+    try {
+        globalThis.localStorage?.setItem(name, value);
+    } catch (error) {
+        console.warn('Lokaler Persistenzspeicher konnte nicht geschrieben werden:', error);
+    }
+}
+
 function getCookieValue(name) {
     const prefix = `${name}=`;
     const cookies = document.cookie ? document.cookie.split('; ') : [];
@@ -1822,8 +2079,540 @@ function getCookieValue(name) {
     return null;
 }
 
+function getLocalStorageValue(name) {
+    try {
+        return globalThis.localStorage?.getItem(name) ?? null;
+    } catch (error) {
+        console.warn('Lokaler Persistenzspeicher konnte nicht gelesen werden:', error);
+        return null;
+    }
+}
+
 function clearCookieValue(name) {
     document.cookie = `${name}=; max-age=0; path=/; samesite=lax`;
+}
+
+function clearLocalStorageValue(name) {
+    try {
+        globalThis.localStorage?.removeItem(name);
+    } catch (error) {
+        console.warn('Lokaler Persistenzspeicher konnte nicht gelöscht werden:', error);
+    }
+}
+
+function parseAppSettingsPersistedState(rawState) {
+    const parsed = JSON.parse(rawState);
+    if (!parsed || typeof parsed !== 'object') {
+        return null;
+    }
+
+    const version = Number(parsed.version);
+    if (version !== APP_SETTINGS_COOKIE_VERSION) {
+        return null;
+    }
+
+    return parsed;
+}
+
+function readAppSettingsCookieState() {
+    const rawCookie = getCookieValue(APP_SETTINGS_COOKIE_NAME);
+    if (rawCookie) {
+        try {
+            const state = parseAppSettingsPersistedState(rawCookie);
+            if (!state) {
+                clearCookieValue(APP_SETTINGS_COOKIE_NAME);
+                return null;
+            }
+
+            return { state, source: 'cookie' };
+        } catch (error) {
+            console.warn('App-Settings-Cookie konnte nicht gelesen werden:', error);
+            clearCookieValue(APP_SETTINGS_COOKIE_NAME);
+        }
+    }
+
+    const rawStorage = getLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
+    if (!rawStorage) {
+        return null;
+    }
+
+    try {
+        const state = parseAppSettingsPersistedState(rawStorage);
+        if (!state) {
+            clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
+            return null;
+        }
+
+        return { state, source: 'localStorage' };
+    } catch (error) {
+        console.warn('App-Settings-Backup konnte nicht gelesen werden:', error);
+        clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
+        return null;
+    }
+}
+
+function wrapDropdownWithSettingsPersistence(dropdown) {
+    if (!dropdown || dropdown.__appSettingsPersistWrapped) {
+        return;
+    }
+
+    if (dropdown.type === 'slider') {
+        const originalOnChange = dropdown.onChange;
+        if (typeof originalOnChange === 'function') {
+            dropdown.onChange = (...args) => {
+                originalOnChange(...args);
+                persistAppSettingsCookie();
+            };
+        }
+    } else {
+        const originalOnChange = dropdown.options?.onChange;
+        if (typeof originalOnChange === 'function') {
+            dropdown.options.onChange = (...args) => {
+                originalOnChange(...args);
+                persistAppSettingsCookie();
+            };
+        }
+    }
+
+    dropdown.__appSettingsPersistWrapped = true;
+}
+
+function addPersistentListener(element, eventName) {
+    if (!element) {
+        return;
+    }
+
+    const marker = `__appSettings_${eventName}`;
+    if (element[marker]) {
+        return;
+    }
+
+    element.addEventListener(eventName, () => {
+        persistAppSettingsCookie();
+    });
+    element[marker] = true;
+}
+
+function serializeFilterPanelState(panel) {
+    if (!panel) {
+        return null;
+    }
+
+    return {
+        type: panel.typeDropdown?.getValue?.()?.value ?? null,
+        design: panel.designDropdown?.getValue?.()?.value ?? null,
+        transform: panel.transformDropdown?.getValue?.()?.value ?? null,
+        order: Number(panel.orderDropdown?.getValue?.()),
+        cutoff: Number(panel.cutoffDropdown?.getValue?.()),
+        gain: Number(panel.gainDropdown?.getValue?.()),
+        ripple: Number(panel.rippleDropdown?.getValue?.()),
+        attenuation: Number(panel.attenuationDropdown?.getValue?.()),
+        bandwidth: Number(panel.bandwidthDropdown?.getValue?.()),
+        preGain: !!panel.preGainCheckbox?.checked,
+        oneDb: !!panel.oneDbCheckbox?.checked,
+    };
+}
+
+function applyFilterPanelState(panel, state) {
+    if (!panel || !state || typeof state !== 'object') {
+        return;
+    }
+
+    const type = typeof state.type === 'string' ? state.type : 'none';
+    panel.typeDropdown?.setValue?.(type, true);
+    panel.onTypeChange?.(type);
+
+    if (typeof state.design === 'string') {
+        panel.designDropdown?.setValue?.(state.design, true);
+        panel.onDesignChange?.(type, state.design);
+    }
+
+    if (typeof state.transform === 'string') {
+        panel.transformDropdown?.setValue?.(state.transform, true);
+    }
+
+    if (Number.isFinite(Number(state.order))) panel.orderDropdown?.setValue?.(Number(state.order), true);
+    if (Number.isFinite(Number(state.cutoff))) panel.cutoffDropdown?.setValue?.(Number(state.cutoff), true);
+    if (Number.isFinite(Number(state.gain))) panel.gainDropdown?.setValue?.(Number(state.gain), true);
+    if (Number.isFinite(Number(state.ripple))) panel.rippleDropdown?.setValue?.(Number(state.ripple), true);
+    if (Number.isFinite(Number(state.attenuation))) panel.attenuationDropdown?.setValue?.(Number(state.attenuation), true);
+    if (Number.isFinite(Number(state.bandwidth))) panel.bandwidthDropdown?.setValue?.(Number(state.bandwidth), true);
+
+    if (typeof state.preGain === 'boolean' && panel.preGainCheckbox) {
+        panel.preGainCheckbox.checked = state.preGain;
+    }
+    if (typeof state.oneDb === 'boolean' && panel.oneDbCheckbox) {
+        panel.oneDbCheckbox.checked = state.oneDb;
+    }
+
+    panel.sendSettings?.(false);
+}
+
+function getCurrentAppSettingsState() {
+    const syncFilterToggle = document.getElementById('syncFilterToggle');
+    const showAccChartToggle = document.getElementById('showAccChartToggle');
+    const showGyroChartToggle = document.getElementById('showGyroChartToggle');
+    const filterDrawer = document.getElementById('filterDrawer');
+    const livechartsGrid = document.getElementById('livechartsGrid');
+    const fftRmsGrid = document.getElementById('fftRmsGrid');
+    const gyroFftRmsGrid = document.getElementById('gyroFftRmsGrid');
+    const sidebar = document.getElementById('sidebar');
+    const fpsSlider = document.getElementById('fpsSlider');
+    const timeSlider = document.getElementById('timeSlider');
+
+    return {
+        version: APP_SETTINGS_COOKIE_VERSION,
+        savedAt: Date.now(),
+        fft: {
+            windowSize: FFT_WINDOW_SIZE,
+            updateInterval: FFT_UPDATE_INTERVAL,
+            averageCount: N_AVG,
+            windowType: FFT_WINDOW_TYPE,
+            dcCutoff: !!DC_CUTOFF,
+            axisMode: FFT_AXIS_MODE,
+            highPass: fftHighPass,
+            dbOutput: !!fftDBoutput,
+            dropdown1: dropdown1?.getValue?.()?.value ?? null,
+            dropdown2: dropdown2?.getValue?.()?.value ?? null,
+            dropdown3: dropdown3?.getValue?.()?.value ?? null,
+            dropdown4: dropdown4?.getValue?.()?.value ?? null,
+            dropdown5: dropdown5?.getValue?.()?.value ?? null,
+            dropdown6: dropdown6?.getValue?.()?.value ?? null,
+            highPassControl: logSliderDropdown?.getValue?.() ?? null,
+        },
+        gyroFft: {
+            windowSize: GYRO_FFT_WINDOW_SIZE,
+            updateInterval: GYRO_FFT_UPDATE_INTERVAL,
+            averageCount: gyroN_AVG,
+            windowType: GYRO_FFT_WINDOW_TYPE,
+            dcCutoff: !!GYRO_DC_CUTOFF,
+            axisMode: GYRO_FFT_AXIS_MODE,
+            highPass: gyroFftHighPass,
+            dropdown1: gyroDropdown1?.getValue?.()?.value ?? null,
+            dropdown2: gyroDropdown2?.getValue?.()?.value ?? null,
+            dropdown3: gyroDropdown3?.getValue?.()?.value ?? null,
+            dropdown4: gyroDropdown4?.getValue?.()?.value ?? null,
+            dropdown5: gyroDropdown5?.getValue?.()?.value ?? null,
+            dropdown6: gyroDropdown6?.getValue?.()?.value ?? null,
+            highPassControl: gyroLogSliderDropdown?.getValue?.() ?? null,
+        },
+        motion: {
+            mode: motionUiState.mode,
+            trailSeconds: motionUiState.trailSeconds,
+            displayScale: motionUiState.displayScale,
+            deadbandMg: motionUiState.deadbandMg,
+            stationaryAccelThresholdMs2: motionUiState.stationaryAccelThresholdMs2,
+            vibrationVelocityLeak: motionUiState.vibrationVelocityLeak,
+        },
+        charts: {
+            displayDurationSeconds,
+            updateIntervalMs,
+            livePaused: !!paused,
+            gyroPaused: !!paused2,
+            accVisible: !!showAccChartToggle?.checked,
+            gyroVisible: !!showGyroChartToggle?.checked,
+            fpsSlider: fpsSlider ? Number(fpsSlider.value) : null,
+            timeSlider: timeSlider ? Number(timeSlider.value) : null,
+        },
+        filters: {
+            syncEnabled: !!filterSyncEnabled,
+            syncToggle: !!syncFilterToggle?.checked,
+            accVisible: !!accChartVisible,
+            gyroVisible: !!gyroChartVisible,
+            accPanel: serializeFilterPanelState(accFilterUi),
+            gyroPanel: serializeFilterPanelState(gyroFilterUi),
+        },
+        layout: {
+            filterDrawerOpen: !!filterDrawer?.classList.contains('open'),
+            liveChartsSideBySide: !!livechartsGrid?.classList.contains('is-side-by-side'),
+            fftRmsSideBySide: !!fftRmsGrid?.classList.contains('is-side-by-side'),
+            gyroFftRmsSideBySide: !!gyroFftRmsGrid?.classList.contains('is-side-by-side'),
+            sidebarExpanded: !!sidebar?.classList.contains('expanded'),
+        },
+        imu: {
+            accelRange: accelRangeDD2?.getValue?.()?.value ?? null,
+            accelSampleRate: accelSampleRateDD2?.getValue?.()?.value ?? null,
+            accelFilter: accelFilterDD2?.getValue?.()?.value ?? null,
+            gyroRange: gyroRangeDD2?.getValue?.()?.value ?? null,
+            gyroSampleRate: gyroSampleRateDD2?.getValue?.()?.value ?? null,
+            gyroFilter: gyroFilterDD2?.getValue?.()?.value ?? null,
+            tempSampleRate: tempSampleRateDD2?.getValue?.()?.value ?? null,
+            axis: axisselector2?.getValue?.()?.value ?? null,
+        },
+        rms: {
+            accDuration: displayDurationSecondsRMS,
+            accPaused: !!rmsPaused,
+            gyroDuration: gyroDisplayDurationSecondsRMS,
+            gyroPaused: !!gyroRmsPaused,
+        },
+    };
+}
+
+function persistAppSettingsCookie() {
+    try {
+        const serializedState = JSON.stringify(getCurrentAppSettingsState());
+        setCookieValue(APP_SETTINGS_COOKIE_NAME, serializedState, APP_SETTINGS_COOKIE_MAX_AGE_SECONDS);
+        setLocalStorageValue(APP_SETTINGS_STORAGE_KEY, serializedState);
+        return true;
+    } catch (error) {
+        console.warn('App-Settings konnten nicht gespeichert werden:', error);
+        return false;
+    }
+}
+
+function initializeAppSettingsPersistenceBindings() {
+    if (appSettingsBindingsInitialized) {
+        return;
+    }
+
+    [
+        dropdown1, dropdown2, dropdown3, dropdown4, dropdown5, dropdown6,
+        gyroDropdown1, gyroDropdown2, gyroDropdown3, gyroDropdown4, gyroDropdown5, gyroDropdown6,
+        logSliderDropdown, gyroLogSliderDropdown,
+        accelRangeDD2, accelSampleRateDD2, accelFilterDD2,
+        gyroRangeDD2, gyroSampleRateDD2, gyroFilterDD2,
+        tempSampleRateDD2, axisselector2,
+        accFilterUi?.typeDropdown, accFilterUi?.designDropdown, accFilterUi?.transformDropdown,
+        accFilterUi?.orderDropdown, accFilterUi?.cutoffDropdown, accFilterUi?.gainDropdown,
+        accFilterUi?.rippleDropdown, accFilterUi?.attenuationDropdown, accFilterUi?.bandwidthDropdown,
+        gyroFilterUi?.typeDropdown, gyroFilterUi?.designDropdown, gyroFilterUi?.transformDropdown,
+        gyroFilterUi?.orderDropdown, gyroFilterUi?.cutoffDropdown, gyroFilterUi?.gainDropdown,
+        gyroFilterUi?.rippleDropdown, gyroFilterUi?.attenuationDropdown, gyroFilterUi?.bandwidthDropdown,
+    ].forEach(wrapDropdownWithSettingsPersistence);
+
+    [
+        ['fpsSlider', 'input'],
+        ['timeSlider', 'input'],
+        ['pauseBtn', 'click'],
+        ['pauseBtn2', 'click'],
+        ['chartLayoutToggle', 'click'],
+        ['fftRmsLayoutToggle', 'click'],
+        ['gyroFftRmsLayoutToggle', 'click'],
+        ['sidebarToggle', 'click'],
+        ['filterDrawerToggle', 'click'],
+        ['syncFilterToggle', 'change'],
+        ['showAccChartToggle', 'change'],
+        ['showGyroChartToggle', 'change'],
+        ['motionModeMotionBtn', 'click'],
+        ['motionModeVibrationBtn', 'click'],
+        ['motionTrailSeconds', 'input'],
+        ['motionTrailSecondsInput', 'input'],
+        ['motionDisplayScale', 'input'],
+        ['motionDisplayScaleInput', 'input'],
+        ['motionDeadband', 'input'],
+        ['motionDeadbandInput', 'input'],
+        ['motionStationary', 'input'],
+        ['motionStationaryInput', 'input'],
+        ['motionVibrationLeak', 'input'],
+        ['motionVibrationLeakInput', 'input'],
+        ['rmsTimeSlider', 'input'],
+        ['rmsPauseBtn', 'click'],
+        ['gyroRmsTimeSlider', 'input'],
+        ['gyroRmsPauseBtn', 'click'],
+    ].forEach(([id, eventName]) => addPersistentListener(document.getElementById(id), eventName));
+
+    addPersistentListener(accFilterUi?.preGainCheckbox, 'change');
+    addPersistentListener(accFilterUi?.oneDbCheckbox, 'change');
+    addPersistentListener(gyroFilterUi?.preGainCheckbox, 'change');
+    addPersistentListener(gyroFilterUi?.oneDbCheckbox, 'change');
+
+    appSettingsBindingsInitialized = true;
+}
+
+function restoreAppSettingsFromCookie() {
+    const persisted = readAppSettingsCookieState();
+    if (!persisted?.state) {
+        return false;
+    }
+
+    const { state, source } = persisted;
+
+    try {
+        if (state.fft) {
+            if (state.fft.dropdown1 != null) dropdown1?.setValue?.(state.fft.dropdown1, true);
+            if (state.fft.dropdown2 != null) dropdown2?.setValue?.(state.fft.dropdown2, true);
+            if (state.fft.dropdown3 != null) dropdown3?.setValue?.(state.fft.dropdown3, true);
+            if (state.fft.dropdown4 != null) dropdown4?.setValue?.(state.fft.dropdown4, true);
+            if (state.fft.dropdown5 != null) dropdown5?.setValue?.(state.fft.dropdown5, true);
+            if (state.fft.dropdown6 != null) dropdown6?.setValue?.(state.fft.dropdown6, true);
+            if (state.fft.highPassControl != null) logSliderDropdown?.setValue?.(state.fft.highPassControl, true);
+
+            if (Number.isFinite(Number(state.fft.windowSize))) FFT_WINDOW_SIZE = Number(state.fft.windowSize);
+            if (Number.isFinite(Number(state.fft.updateInterval))) FFT_UPDATE_INTERVAL = Number(state.fft.updateInterval);
+            if (Number.isFinite(Number(state.fft.averageCount))) {
+                N_AVG = Number(state.fft.averageCount);
+                setAverageCount(N_AVG);
+            }
+            if (typeof state.fft.windowType === 'string') FFT_WINDOW_TYPE = state.fft.windowType;
+            if (typeof state.fft.axisMode === 'string') FFT_AXIS_MODE = state.fft.axisMode;
+            if (typeof state.fft.dcCutoff === 'boolean') DC_CUTOFF = state.fft.dcCutoff;
+            if (Number.isFinite(Number(state.fft.highPass))) fftHighPass = Number(state.fft.highPass);
+            if (typeof state.fft.dbOutput === 'boolean') fftDBoutput = state.fft.dbOutput;
+        }
+
+        if (state.gyroFft) {
+            if (state.gyroFft.dropdown1 != null) gyroDropdown1?.setValue?.(state.gyroFft.dropdown1, true);
+            if (state.gyroFft.dropdown2 != null) gyroDropdown2?.setValue?.(state.gyroFft.dropdown2, true);
+            if (state.gyroFft.dropdown3 != null) gyroDropdown3?.setValue?.(state.gyroFft.dropdown3, true);
+            if (state.gyroFft.dropdown4 != null) gyroDropdown4?.setValue?.(state.gyroFft.dropdown4, true);
+            if (state.gyroFft.dropdown5 != null) gyroDropdown5?.setValue?.(state.gyroFft.dropdown5, true);
+            if (state.gyroFft.dropdown6 != null) gyroDropdown6?.setValue?.(state.gyroFft.dropdown6, true);
+            if (state.gyroFft.highPassControl != null) gyroLogSliderDropdown?.setValue?.(state.gyroFft.highPassControl, true);
+
+            if (Number.isFinite(Number(state.gyroFft.windowSize))) GYRO_FFT_WINDOW_SIZE = Number(state.gyroFft.windowSize);
+            if (Number.isFinite(Number(state.gyroFft.updateInterval))) GYRO_FFT_UPDATE_INTERVAL = Number(state.gyroFft.updateInterval);
+            if (Number.isFinite(Number(state.gyroFft.averageCount))) {
+                gyroN_AVG = Number(state.gyroFft.averageCount);
+                setAverageCount(gyroN_AVG, gyroAvgFFTBuffer);
+            }
+            if (typeof state.gyroFft.windowType === 'string') GYRO_FFT_WINDOW_TYPE = state.gyroFft.windowType;
+            if (typeof state.gyroFft.axisMode === 'string') GYRO_FFT_AXIS_MODE = state.gyroFft.axisMode;
+            if (typeof state.gyroFft.dcCutoff === 'boolean') GYRO_DC_CUTOFF = state.gyroFft.dcCutoff;
+            if (Number.isFinite(Number(state.gyroFft.highPass))) gyroFftHighPass = Number(state.gyroFft.highPass);
+        }
+
+        if (state.motion) {
+            if (typeof state.motion.mode === 'string') motionUiState.mode = state.motion.mode;
+            if (Number.isFinite(Number(state.motion.trailSeconds))) motionUiState.trailSeconds = Number(state.motion.trailSeconds);
+            if (Number.isFinite(Number(state.motion.displayScale))) motionUiState.displayScale = Number(state.motion.displayScale);
+            if (Number.isFinite(Number(state.motion.deadbandMg))) motionUiState.deadbandMg = Number(state.motion.deadbandMg);
+            if (Number.isFinite(Number(state.motion.stationaryAccelThresholdMs2))) motionUiState.stationaryAccelThresholdMs2 = Number(state.motion.stationaryAccelThresholdMs2);
+            if (Number.isFinite(Number(state.motion.vibrationVelocityLeak))) motionUiState.vibrationVelocityLeak = Number(state.motion.vibrationVelocityLeak);
+            updateMotionControlLabels();
+            updateMotionModeButtons();
+            syncMotionWorkerConfig({ reset: true });
+        }
+
+        if (state.charts) {
+            if (Number.isFinite(Number(state.charts.displayDurationSeconds))) {
+                displayDurationSeconds = Number(state.charts.displayDurationSeconds);
+            }
+            if (Number.isFinite(Number(state.charts.updateIntervalMs))) {
+                updateIntervalMs = Number(state.charts.updateIntervalMs);
+            }
+            if (typeof state.charts.livePaused === 'boolean') {
+                paused = state.charts.livePaused;
+                const pauseBtn = document.getElementById('pauseBtn');
+                if (pauseBtn) {
+                    pauseBtn.classList.toggle('active', paused);
+                    pauseBtn.innerHTML = paused
+                        ? '<i class="fas fa-play"></i> Play'
+                        : '<i class="fas fa-pause"></i> Pause';
+                }
+            }
+            if (typeof state.charts.gyroPaused === 'boolean') {
+                paused2 = state.charts.gyroPaused;
+                const pauseBtn2 = document.getElementById('pauseBtn2');
+                if (pauseBtn2) {
+                    pauseBtn2.innerHTML = paused2 ? '<i class="fa-solid fa-play"></i>' : '<i class="fa-solid fa-pause"></i>';
+                }
+            }
+            if (Number.isFinite(Number(state.charts.fpsSlider))) {
+                const fpsSlider = document.getElementById('fpsSlider');
+                if (fpsSlider) {
+                    fpsSlider.value = String(state.charts.fpsSlider);
+                    fpsSlider.dispatchEvent(new Event('input'));
+                }
+            }
+            if (Number.isFinite(Number(state.charts.timeSlider))) {
+                const timeSlider = document.getElementById('timeSlider');
+                if (timeSlider) {
+                    timeSlider.value = String(state.charts.timeSlider);
+                    timeSlider.dispatchEvent(new Event('input'));
+                }
+            }
+        }
+
+        if (state.filters) {
+            const syncFilterToggle = document.getElementById('syncFilterToggle');
+            if (syncFilterToggle && typeof state.filters.syncToggle === 'boolean') {
+                syncFilterToggle.checked = state.filters.syncToggle;
+                syncFilterToggle.dispatchEvent(new Event('change'));
+            }
+
+            const showAccChartToggle = document.getElementById('showAccChartToggle');
+            if (showAccChartToggle && typeof state.filters.accVisible === 'boolean') {
+                showAccChartToggle.checked = state.filters.accVisible;
+                showAccChartToggle.dispatchEvent(new Event('change'));
+            }
+
+            const showGyroChartToggle = document.getElementById('showGyroChartToggle');
+            if (showGyroChartToggle && typeof state.filters.gyroVisible === 'boolean') {
+                showGyroChartToggle.checked = state.filters.gyroVisible;
+                showGyroChartToggle.dispatchEvent(new Event('change'));
+            }
+
+            applyFilterPanelState(accFilterUi, state.filters.accPanel);
+            applyFilterPanelState(gyroFilterUi, state.filters.gyroPanel);
+        }
+
+        if (state.layout) {
+            const filterDrawer = document.getElementById('filterDrawer');
+            const filterDrawerToggle = document.getElementById('filterDrawerToggle');
+            if (filterDrawer && typeof state.layout.filterDrawerOpen === 'boolean') {
+                filterDrawer.classList.toggle('open', state.layout.filterDrawerOpen);
+                filterDrawer.setAttribute('aria-hidden', state.layout.filterDrawerOpen ? 'false' : 'true');
+            }
+            if (filterDrawerToggle && typeof state.layout.filterDrawerOpen === 'boolean') {
+                filterDrawerToggle.setAttribute('aria-pressed', state.layout.filterDrawerOpen ? 'true' : 'false');
+            }
+
+            const livechartsGrid = document.getElementById('livechartsGrid');
+            if (livechartsGrid && typeof state.layout.liveChartsSideBySide === 'boolean') {
+                livechartsGrid.classList.toggle('is-side-by-side', state.layout.liveChartsSideBySide);
+            }
+
+            const fftRmsGrid = document.getElementById('fftRmsGrid');
+            if (fftRmsGrid && typeof state.layout.fftRmsSideBySide === 'boolean') {
+                fftRmsGrid.classList.toggle('is-side-by-side', state.layout.fftRmsSideBySide);
+            }
+
+            const gyroFftRmsGrid = document.getElementById('gyroFftRmsGrid');
+            if (gyroFftRmsGrid && typeof state.layout.gyroFftRmsSideBySide === 'boolean') {
+                gyroFftRmsGrid.classList.toggle('is-side-by-side', state.layout.gyroFftRmsSideBySide);
+            }
+
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar && typeof state.layout.sidebarExpanded === 'boolean') {
+                sidebar.classList.toggle('expanded', state.layout.sidebarExpanded);
+            }
+        }
+
+        if (state.imu) {
+            if (state.imu.accelRange != null) accelRangeDD2?.setValue?.(state.imu.accelRange, true);
+            if (state.imu.accelSampleRate != null) accelSampleRateDD2?.setValue?.(state.imu.accelSampleRate, true);
+            if (state.imu.accelFilter != null) accelFilterDD2?.setValue?.(state.imu.accelFilter, true);
+            if (state.imu.gyroRange != null) gyroRangeDD2?.setValue?.(state.imu.gyroRange, true);
+            if (state.imu.gyroSampleRate != null) gyroSampleRateDD2?.setValue?.(state.imu.gyroSampleRate, true);
+            if (state.imu.gyroFilter != null) gyroFilterDD2?.setValue?.(state.imu.gyroFilter, true);
+            if (state.imu.tempSampleRate != null) tempSampleRateDD2?.setValue?.(state.imu.tempSampleRate, true);
+            if (state.imu.axis != null) axisselector2?.setValue?.(state.imu.axis, true);
+        }
+
+        if (state.rms) {
+            if (Number.isFinite(Number(state.rms.accDuration))) {
+                displayDurationSecondsRMS = Number(state.rms.accDuration);
+            }
+            if (typeof state.rms.accPaused === 'boolean') {
+                rmsPaused = state.rms.accPaused;
+            }
+            if (Number.isFinite(Number(state.rms.gyroDuration))) {
+                gyroDisplayDurationSecondsRMS = Number(state.rms.gyroDuration);
+            }
+            if (typeof state.rms.gyroPaused === 'boolean') {
+                gyroRmsPaused = state.rms.gyroPaused;
+            }
+        }
+
+        if (source === 'localStorage') {
+            persistAppSettingsCookie();
+        }
+
+        return true;
+    } catch (error) {
+        console.warn('App-Settings konnten nicht wiederhergestellt werden:', error);
+        return false;
+    }
 }
 
 function sanitizeReferenceState(referenceState) {
@@ -1874,6 +2663,31 @@ function sanitizeAccelCalibrationScale(scale) {
     return normalizedScale;
 }
 
+function sanitizeFusionCalibrationState(calibrationState) {
+    if (!calibrationState || typeof calibrationState !== 'object') {
+        return null;
+    }
+
+    const gyroBias = {
+        x: Number(calibrationState.gyroBias?.x),
+        y: Number(calibrationState.gyroBias?.y),
+        z: Number(calibrationState.gyroBias?.z),
+    };
+    const accVar = Array.isArray(calibrationState.accVar)
+        ? calibrationState.accVar.slice(0, 3).map((value) => Number(value))
+        : [];
+
+    if (![gyroBias.x, gyroBias.y, gyroBias.z].every(Number.isFinite)) {
+        return null;
+    }
+
+    if (accVar.length < 3 || !accVar.every((value) => Number.isFinite(value) && value >= 0)) {
+        return null;
+    }
+
+    return { gyroBias, accVar };
+}
+
 function sanitizeViewportDisplaySettings(settings) {
     if (!settings || typeof settings !== 'object') {
         return null;
@@ -1901,7 +2715,50 @@ function sanitizeViewportDisplaySettings(settings) {
         result: sanitizeAxisColor(rawVectorColors?.result, '#00e5ff'),
     };
 
-    return { arrowOpacity, axisColors, vectorColors };
+    const allowedBackgroundPresets = new Set(['steel', 'steel-soft', 'steel-light', 'aurora', 'dusk', 'ember', 'polar', 'mint', 'sunrise', 'noir', 'lab']);
+    const backgroundPreset = typeof settings.backgroundPreset === 'string'
+        && allowedBackgroundPresets.has(settings.backgroundPreset.trim().toLowerCase())
+        ? settings.backgroundPreset.trim().toLowerCase()
+        : 'steel';
+
+    return { arrowOpacity, axisColors, vectorColors, backgroundPreset };
+}
+
+function sanitizeMotionViewportDisplaySettings(settings) {
+    if (!settings || typeof settings !== 'object') {
+        return null;
+    }
+
+    const rawArrowOpacity = settings.arrowOpacity;
+    const rawAxisColors = settings.axisColors;
+
+    const arrowOpacity = {
+        world: sanitizeArrowOpacity(rawArrowOpacity?.world, 0.42),
+        trail: sanitizeArrowOpacity(rawArrowOpacity?.trail, 0.9),
+        velocity: sanitizeArrowOpacity(rawArrowOpacity?.velocity, 0.86),
+        acceleration: sanitizeArrowOpacity(rawArrowOpacity?.acceleration, 0.82),
+    };
+
+    const axisColors = {
+        x: sanitizeAxisColor(rawAxisColors?.x, '#ff0000'),
+        y: sanitizeAxisColor(rawAxisColors?.y, '#00ff00'),
+        z: sanitizeAxisColor(rawAxisColors?.z, '#0000ff'),
+    };
+
+    const rawVectorColors = settings.vectorColors;
+    const vectorColors = {
+        trail: sanitizeAxisColor(rawVectorColors?.trail, '#00e5ff'),
+        velocity: sanitizeAxisColor(rawVectorColors?.velocity, '#ffa000'),
+        acceleration: sanitizeAxisColor(rawVectorColors?.acceleration, '#ffd400'),
+    };
+
+    const allowedBackgroundPresets = new Set(['steel', 'steel-soft', 'steel-light', 'aurora', 'dusk', 'ember', 'polar', 'mint', 'sunrise', 'noir', 'lab']);
+    const backgroundPreset = typeof settings.backgroundPreset === 'string'
+        && allowedBackgroundPresets.has(settings.backgroundPreset.trim().toLowerCase())
+        ? settings.backgroundPreset.trim().toLowerCase()
+        : 'steel';
+
+    return { arrowOpacity, axisColors, vectorColors, backgroundPreset };
 }
 
 function sanitizeArrowOpacity(value, fallback) {
@@ -1960,6 +2817,11 @@ function getCurrentCalibrationCookieState() {
         state.worldSimpleQuaternion = normalizedQuaternion;
     }
 
+    const viewportAdjustmentQuaternion = getViewportAdjustmentQuaternionXYZW();
+    if (viewportAdjustmentQuaternion && !isIdentityQuaternionXYZW(viewportAdjustmentQuaternion)) {
+        state.viewportAdjustmentQuaternion = viewportAdjustmentQuaternion;
+    }
+
     const referenceState = sanitizeReferenceState(currentReferenceState);
     if (referenceState) {
         state.referenceState = referenceState;
@@ -1975,6 +2837,11 @@ function getCurrentCalibrationCookieState() {
         state.accelCalibrationScale = accelCalibrationScale;
     }
 
+    const fusionCalibrationState = sanitizeFusionCalibrationState(currentFusionCalibrationState);
+    if (fusionCalibrationState) {
+        state.fusionCalibrationState = fusionCalibrationState;
+    }
+
     if (Number.isFinite(tempgravity) && tempgravity > 0) {
         state.gravityMagnitude = Number(tempgravity);
     }
@@ -1982,6 +2849,11 @@ function getCurrentCalibrationCookieState() {
     const viewportDisplaySettings = sanitizeViewportDisplaySettings(accVectorViewport.getDisplaySettings?.());
     if (viewportDisplaySettings) {
         state.viewportDisplaySettings = viewportDisplaySettings;
+    }
+
+    const motionViewportDisplaySettings = sanitizeMotionViewportDisplaySettings(motionViewport.getDisplaySettings?.());
+    if (motionViewportDisplaySettings) {
+        state.motionViewportDisplaySettings = motionViewportDisplaySettings;
     }
 
     const orientationLabel = getOrientationLabelForMode(state.mode);
@@ -1999,69 +2871,99 @@ function persistCalibrationCookie() {
         || state.referenceState
         || state.worldSimpleGyroState
         || (Number.isFinite(state.accelCalibrationScale) && Math.abs(state.accelCalibrationScale - 1) > 1e-6)
+        || state.fusionCalibrationState
         || state.gravityMagnitude
+        || state.viewportAdjustmentQuaternion
         || state.viewportDisplaySettings
+        || state.motionViewportDisplaySettings
     );
 
     if (!hasCalibrationPayload && state.mode === 0) {
         clearCookieValue(CALIBRATION_COOKIE_NAME);
+        clearLocalStorageValue(CALIBRATION_STORAGE_KEY);
         return;
     }
 
-    setCookieValue(CALIBRATION_COOKIE_NAME, JSON.stringify(state), CALIBRATION_COOKIE_MAX_AGE_SECONDS);
+    const serializedState = JSON.stringify(state);
+    setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
+    setLocalStorageValue(CALIBRATION_STORAGE_KEY, serializedState);
+}
+
+function parseCalibrationPersistedState(rawState) {
+    const parsed = JSON.parse(rawState);
+    const state = {
+        version: Number(parsed?.version),
+        mode: Number.isFinite(Number(parsed?.mode)) ? Number(parsed.mode) : 0,
+        orientationLabel: typeof parsed?.orientationLabel === 'string' ? parsed.orientationLabel : null,
+        worldSimpleQuaternion: normalizeQuaternionXYZW(parsed?.worldSimpleQuaternion),
+        viewportAdjustmentQuaternion: normalizeQuaternionXYZW(parsed?.viewportAdjustmentQuaternion),
+        referenceState: sanitizeReferenceState(parsed?.referenceState),
+        worldSimpleGyroState: sanitizeGyroZeroState(parsed?.worldSimpleGyroState),
+        accelCalibrationScale: sanitizeAccelCalibrationScale(parsed?.accelCalibrationScale),
+        fusionCalibrationState: sanitizeFusionCalibrationState(parsed?.fusionCalibrationState),
+        gravityMagnitude: Number(parsed?.gravityMagnitude),
+        viewportDisplaySettings: sanitizeViewportDisplaySettings(parsed?.viewportDisplaySettings),
+        motionViewportDisplaySettings: sanitizeMotionViewportDisplaySettings(parsed?.motionViewportDisplaySettings),
+    };
+
+    if (state.version !== CALIBRATION_COOKIE_VERSION) {
+        return null;
+    }
+
+    if (!Number.isFinite(state.gravityMagnitude) || state.gravityMagnitude <= 0) {
+        state.gravityMagnitude = null;
+    }
+
+    return state;
 }
 
 function readCalibrationCookieState() {
     const rawCookie = getCookieValue(CALIBRATION_COOKIE_NAME);
-    if (!rawCookie) {
+    if (rawCookie) {
+        try {
+            const state = parseCalibrationPersistedState(rawCookie);
+            if (!state) {
+                clearCookieValue(CALIBRATION_COOKIE_NAME);
+                return null;
+            }
+
+            return { state, source: 'cookie' };
+        } catch (error) {
+            console.warn('Kalibrierungs-Cookie konnte nicht gelesen werden:', error);
+            clearCookieValue(CALIBRATION_COOKIE_NAME);
+        }
+    }
+
+    const rawStorage = getLocalStorageValue(CALIBRATION_STORAGE_KEY);
+    if (!rawStorage) {
         return null;
     }
 
     try {
-        const parsed = JSON.parse(rawCookie);
-        const state = {
-            version: Number(parsed?.version),
-            mode: Number.isFinite(Number(parsed?.mode)) ? Number(parsed.mode) : 0,
-            orientationLabel: typeof parsed?.orientationLabel === 'string' ? parsed.orientationLabel : null,
-            worldSimpleQuaternion: normalizeQuaternionXYZW(parsed?.worldSimpleQuaternion),
-            referenceState: sanitizeReferenceState(parsed?.referenceState),
-            worldSimpleGyroState: sanitizeGyroZeroState(parsed?.worldSimpleGyroState),
-            accelCalibrationScale: sanitizeAccelCalibrationScale(parsed?.accelCalibrationScale),
-            gravityMagnitude: Number(parsed?.gravityMagnitude),
-            viewportDisplaySettings: sanitizeViewportDisplaySettings(parsed?.viewportDisplaySettings),
-        };
-
-        if (state.version !== CALIBRATION_COOKIE_VERSION) {
+        const state = parseCalibrationPersistedState(rawStorage);
+        if (!state) {
+            clearLocalStorageValue(CALIBRATION_STORAGE_KEY);
             return null;
         }
 
-        if (!Number.isFinite(state.gravityMagnitude) || state.gravityMagnitude <= 0) {
-            state.gravityMagnitude = null;
-        }
-
-        return state;
+        return { state, source: 'localStorage' };
     } catch (error) {
-        console.warn('Kalibrierungs-Cookie konnte nicht gelesen werden:', error);
-        clearCookieValue(CALIBRATION_COOKIE_NAME);
+        console.warn('Kalibrierungs-Backup konnte nicht gelesen werden:', error);
+        clearLocalStorageValue(CALIBRATION_STORAGE_KEY);
         return null;
     }
 }
 
 function restoreCalibrationFromCookie() {
-    const state = readCalibrationCookieState();
-    if (!state) {
+    const persisted = readCalibrationCookieState();
+    if (!persisted?.state) {
         return;
     }
 
+    const { state, source } = persisted;
+
     if (state.worldSimpleQuaternion) {
-        calibrationMemory[1] = state.worldSimpleQuaternion.slice();
-        decodeWorker.postMessage({
-            type: 'calibdata',
-            payload: {
-                type: 2,
-                quaternion: state.worldSimpleQuaternion,
-            }
-        });
+        setOrientationCalibrationQuaternion(state.worldSimpleQuaternion, { persistState: false });
     }
 
     if (state.referenceState) {
@@ -2077,6 +2979,14 @@ function restoreCalibrationFromCookie() {
     }
 
     setAccelCalibrationScale(state.accelCalibrationScale, { persistState: false });
+
+    if (state.fusionCalibrationState) {
+        currentFusionCalibrationState = state.fusionCalibrationState;
+        fusionWorker.postMessage({
+            type: 'setCalibrationState',
+            payload: state.fusionCalibrationState,
+        });
+    }
 
     if (state.gravityMagnitude) {
         tempgravity = state.gravityMagnitude;
@@ -2094,9 +3004,26 @@ function restoreCalibrationFromCookie() {
         persistState: false,
     });
 
+    accVectorViewport.setAdjustmentQuaternion(state.viewportAdjustmentQuaternion || getIdentityQuaternionXYZW(), {
+        silent: true,
+        commit: false,
+    });
+    syncViewportPostTransformQuaternion({ persistState: false, resetLiveBuffers: false });
+
     if (state.viewportDisplaySettings) {
         accVectorViewport.applyDisplaySettings(state.viewportDisplaySettings, { silent: true });
     }
+
+    if (state.motionViewportDisplaySettings) {
+        motionViewport.applyDisplaySettings(state.motionViewportDisplaySettings, { silent: true });
+    }
+
+    if (source === 'localStorage') {
+        const serializedState = JSON.stringify(getCurrentCalibrationCookieState());
+        setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
+    }
+
+    persistCalibrationCookie();
 
     console.log('Kalibrierung aus Cookie wiederhergestellt:', state);
 }
@@ -2150,6 +3077,9 @@ function applyOrientationMode(mode, { syncDropdown = false, optionLabel = null, 
         }
     });
 
+    syncViewportBaseQuaternion({ silent: true });
+    syncMotionWorkerTransform({ reset: true });
+
     resetOrientationLiveBuffers();
 
     if (syncDropdown) {
@@ -2164,7 +3094,9 @@ function applyOrientationMode(mode, { syncDropdown = false, optionLabel = null, 
 function normalizeQuaternionXYZW(quaternion) {
     const source = Array.isArray(quaternion)
         ? quaternion
-        : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w];
+        : (ArrayBuffer.isView(quaternion) || (typeof quaternion?.length === 'number' && quaternion.length >= 4))
+            ? Array.from(quaternion).slice(0, 4)
+            : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w];
 
     if (!source || source.length < 4) {
         return null;
@@ -2181,6 +3113,22 @@ function normalizeQuaternionXYZW(quaternion) {
     }
 
     return values.map((value) => value / length);
+}
+
+function getIdentityQuaternionXYZW() {
+    return [0, 0, 0, 1];
+}
+
+function isIdentityQuaternionXYZW(quaternion) {
+    const normalizedQuaternion = normalizeQuaternionXYZW(quaternion);
+    if (!normalizedQuaternion) {
+        return false;
+    }
+
+    return Math.abs(normalizedQuaternion[0]) <= 1e-6
+        && Math.abs(normalizedQuaternion[1]) <= 1e-6
+        && Math.abs(normalizedQuaternion[2]) <= 1e-6
+        && Math.abs(normalizedQuaternion[3] - 1) <= 1e-6;
 }
 
 function convertQuaternionWXYZtoXYZW(quaternion) {
@@ -2220,6 +3168,30 @@ function applyQuaternionXYZWToSample(sample, quaternion) {
         z: rz,
         total: Math.hypot(rx, ry, rz),
     };
+}
+
+function multiplyQuaternionsXYZW(leftQuaternion, rightQuaternion) {
+    const left = normalizeQuaternionXYZW(leftQuaternion);
+    const right = normalizeQuaternionXYZW(rightQuaternion);
+    if (!left && !right) {
+        return null;
+    }
+    if (!left) {
+        return right;
+    }
+    if (!right) {
+        return left;
+    }
+
+    const [lx, ly, lz, lw] = left;
+    const [rx, ry, rz, rw] = right;
+
+    return normalizeQuaternionXYZW([
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+        lw * rw - lx * rx - ly * ry - lz * rz,
+    ]);
 }
 
 function applyQuaternionWXYZToSample(sample, quaternion) {
@@ -2263,15 +3235,52 @@ function applyQuaternionWXYZToSample(sample, quaternion) {
     };
 }
 
-function applyGravityCutToSample(sample, gravityMagnitude) {
+    function getGravityCutVectorSample(gravityMagnitude) {
+        const normalizedGravity = Number.isFinite(gravityMagnitude) && gravityMagnitude > 0 ? gravityMagnitude : 1000;
+
+        if (currentOrientationMode === 3) {
+            return {
+                time: 0,
+                x: 0,
+                y: 0,
+                z: 0,
+                total: 0,
+            };
+        }
+
+        const gravityVector = {
+            time: 0,
+            x: 0,
+            y: 0,
+            z: -normalizedGravity,
+            total: normalizedGravity,
+        };
+
+        if (currentOrientationMode === 0) {
+            return gravityVector;
+        }
+
+        const adjustmentQuaternion = getViewportAdjustmentQuaternionXYZW();
+        if (!adjustmentQuaternion || isIdentityQuaternionXYZW(adjustmentQuaternion)) {
+            return gravityVector;
+        }
+
+        return applyQuaternionXYZWToSample(gravityVector, adjustmentQuaternion) || gravityVector;
+    }
+
+    function applyGravityCutToSample(sample, gravityMagnitude, gravityVector = null) {
     if (!sample) {
         return null;
     }
 
     const normalizedGravity = Number.isFinite(gravityMagnitude) && gravityMagnitude > 0 ? gravityMagnitude : 1000;
-    const x = Number(sample.x || 0);
-    const y = Number(sample.y || 0);
-    const z = Number(sample.z || 0) + normalizedGravity;
+        const resolvedGravityVector = gravityVector || getGravityCutVectorSample(normalizedGravity);
+        const gravityX = Number(resolvedGravityVector?.x || 0);
+        const gravityY = Number(resolvedGravityVector?.y || 0);
+        const gravityZ = Number(resolvedGravityVector?.z ?? -normalizedGravity);
+        const x = Number(sample.x || 0) - gravityX;
+        const y = Number(sample.y || 0) - gravityY;
+        const z = Number(sample.z || 0) - gravityZ;
 
     return {
         time: Number(sample.time || 0),
@@ -2343,32 +3352,156 @@ function getViewportBaseQuaternionXYZW() {
     return normalizeQuaternionXYZW(calibrationMemory[1]) || convertQuaternionWXYZtoXYZW(ausrichtung);
 }
 
-function buildViewportAccelerationSamples(rawSample, processedSample) {
-    const raw = rawSample || processedSample || null;
-    let calibrated = processedSample || raw;
-    let calibratedCut = processedSample || raw;
-    const gravityMagnitude = getViewportGravityMagnitude();
+function getViewportAdjustmentQuaternionXYZW() {
+    return normalizeQuaternionXYZW(accVectorViewport.getAdjustmentQuaternion?.()) || getIdentityQuaternionXYZW();
+}
 
-    if (raw) {
-        if (currentOrientationMode === 3 && currentReferenceState) {
-            calibrated = applyReferenceToSample(raw, currentReferenceState) || calibrated;
-            calibratedCut = calibrated;
-        } else if (currentOrientationMode === 1) {
-            calibrated = applyQuaternionWXYZToSample(raw, ausrichtung) || calibrated;
-            calibratedCut = applyGravityCutToSample(calibrated, gravityMagnitude) || calibrated;
-        } else {
-            const calibrationQuaternion = getViewportBaseQuaternionXYZW();
-            if (calibrationQuaternion) {
-                calibrated = applyAccelCalibrationScale(applyQuaternionXYZWToSample(raw, calibrationQuaternion)) || calibrated;
-                calibratedCut = applyGravityCutToSample(calibrated, gravityMagnitude) || calibrated;
+function getViewportEffectiveQuaternionXYZW() {
+    if (currentOrientationMode === 0) {
+        return null;
+    }
+
+    return multiplyQuaternionsXYZW(
+        getViewportAdjustmentQuaternionXYZW(),
+        getViewportBaseQuaternionXYZW(),
+    ) || getViewportAdjustmentQuaternionXYZW();
+}
+
+function syncMotionWorkerTransform({ reset = false } = {}) {
+    motionWorker.postMessage({
+        type: 'transform',
+        payload: {
+            quaternion: getViewportEffectiveQuaternionXYZW(),
+            active: currentOrientationMode !== 0,
+            gravityMagnitudeMg: getViewportGravityMagnitude(),
+            samplesPreTransformed: true,
+            subtractGravity: false,
+            reset,
+        },
+    });
+}
+
+function syncViewportBaseQuaternion({ silent = true } = {}) {
+    const baseQuaternion = getViewportBaseQuaternionXYZW() || getIdentityQuaternionXYZW();
+    accVectorViewport.setBaseQuaternion(baseQuaternion, { silent, commit: false });
+}
+
+function syncViewportPostTransformQuaternion({ persistState = false, resetLiveBuffers = false } = {}) {
+    decodeWorker.postMessage({
+        type: 'postTransformQuaternion',
+        payload: {
+            quaternion: getIdentityQuaternionXYZW(),
+        }
+    });
+
+    if (resetLiveBuffers) {
+        resetOrientationLiveBuffers();
+    }
+
+    if (persistState) {
+        persistCalibrationCookie();
+    }
+}
+
+function buildLiveAccelerationSample(rawSample, processedSample) {
+    const raw = rawSample || processedSample || null;
+    if (!raw) {
+        return null;
+    }
+
+    if (currentOrientationMode === 0) {
+        return processedSample || raw;
+    }
+
+    const calibratedSample = buildViewportBaseAccelerationSample(raw) || processedSample || raw;
+    if (gravityCutEnabled) {
+        const gravityMagnitude = getViewportGravityMagnitude();
+        const gravityVector = getGravityCutVectorSample(gravityMagnitude);
+        return applyGravityCutToSample(calibratedSample, gravityMagnitude, gravityVector) || calibratedSample;
+    }
+
+    return calibratedSample;
+}
+
+function buildLiveGyroSample(rawSample, processedSample) {
+    const raw = rawSample || processedSample || null;
+    if (!raw) {
+        return null;
+    }
+
+    if (currentOrientationMode === 0) {
+        return processedSample || raw;
+    }
+
+    const samples = buildViewportGyroSamples(raw, processedSample);
+    return samples.calibrated || processedSample || raw;
+}
+
+function setOrientationCalibrationQuaternion(quaternion, { persistState = true } = {}) {
+    const normalizedQuaternion = normalizeQuaternionXYZW(quaternion);
+    calibrationMemory[1] = normalizedQuaternion ? normalizedQuaternion.slice() : null;
+    decodeWorker.postMessage({
+        type: 'calibdata',
+        payload: {
+            type: 2,
+            quaternion: normalizedQuaternion,
+        }
+    });
+    syncViewportBaseQuaternion({ silent: true });
+    syncMotionWorkerTransform({ reset: true });
+
+    if (persistState) {
+        persistCalibrationCookie();
+    }
+}
+
+function buildViewportBaseAccelerationSample(rawSample) {
+    if (!rawSample) {
+        return null;
+    }
+
+    if (currentOrientationMode === 3 && currentReferenceState) {
+        const referenceSample = applyReferenceToSample(rawSample, currentReferenceState);
+        const effectiveQuaternion = getViewportAdjustmentQuaternionXYZW();
+        if (!referenceSample || isIdentityQuaternionXYZW(effectiveQuaternion)) {
+            return referenceSample;
+        }
+
+        return applyQuaternionXYZWToSample(referenceSample, effectiveQuaternion) || referenceSample;
+    }
+
+    if (currentOrientationMode !== 0) {
+        const effectiveQuaternion = getViewportEffectiveQuaternionXYZW();
+        if (currentOrientationMode === 1) {
+            if (effectiveQuaternion) {
+                return applyQuaternionXYZWToSample(rawSample, effectiveQuaternion) || rawSample;
             }
+
+            return applyQuaternionWXYZToSample(rawSample, ausrichtung) || rawSample;
+        }
+
+        if (effectiveQuaternion) {
+            return applyAccelCalibrationScale(applyQuaternionXYZWToSample(rawSample, effectiveQuaternion)) || rawSample;
         }
     }
 
+    return rawSample;
+}
+
+function buildViewportAccelerationSamples(rawSample, processedSample) {
+    const raw = rawSample || processedSample || null;
+    let calibrated = processedSample || raw;
+    let calibratedCut = null;
+    const gravityMagnitude = getViewportGravityMagnitude();
+    const gravityVector = getGravityCutVectorSample(gravityMagnitude);
+
+    if (raw) {
+        calibrated = buildViewportBaseAccelerationSample(raw) || calibrated;
+        calibratedCut = applyGravityCutToSample(calibrated, gravityMagnitude, gravityVector) || calibrated;
+    }
+
     if (!calibratedCut) {
-        calibratedCut = gravityCutEnabled
-            ? (processedSample || calibrated || raw)
-            : applyGravityCutToSample(processedSample || calibrated || raw, gravityMagnitude) || calibrated || raw;
+        calibratedCut = applyGravityCutToSample(processedSample || calibrated || raw, gravityMagnitude, gravityVector) || calibrated || raw;
     }
 
     return {
@@ -2385,19 +3518,26 @@ function buildViewportGyroSamples(rawSample, processedSample) {
 
     if (raw) {
         if (currentOrientationMode === 3 && currentReferenceState) {
-            calibrated = {
+            const referenceGyro = {
                 time: Number(raw.time || 0),
                 x: Number(raw.x || 0) - Number(currentReferenceState.gx || 0),
                 y: Number(raw.y || 0) - Number(currentReferenceState.gy || 0),
                 z: Number(raw.z || 0) - Number(currentReferenceState.gz || 0),
             };
+            const adjustmentQuaternion = getViewportAdjustmentQuaternionXYZW();
+            calibrated = isIdentityQuaternionXYZW(adjustmentQuaternion)
+                ? referenceGyro
+                : (applyQuaternionXYZWToSample(referenceGyro, adjustmentQuaternion) || referenceGyro);
             calibrated.total = Math.hypot(calibrated.x, calibrated.y, calibrated.z);
             calibratedCut = calibrated;
         } else if (currentOrientationMode === 1) {
-            calibrated = applyQuaternionWXYZToSample(raw, ausrichtung) || calibrated;
+            const effectiveQuaternion = getViewportEffectiveQuaternionXYZW();
+            calibrated = effectiveQuaternion
+                ? (applyQuaternionXYZWToSample(raw, effectiveQuaternion) || calibrated)
+                : (applyQuaternionWXYZToSample(raw, ausrichtung) || calibrated);
             calibratedCut = calibrated;
         } else {
-            const calibrationQuaternion = getViewportBaseQuaternionXYZW();
+            const calibrationQuaternion = getViewportEffectiveQuaternionXYZW();
             if (calibrationQuaternion) {
                 const worldSimpleGyroRaw = currentOrientationMode === 2 && currentWorldSimpleGyroState
                     ? {
@@ -2414,59 +3554,24 @@ function buildViewportGyroSamples(rawSample, processedSample) {
     }
 
     return {
+        raw,
         calibrated,
         calibratedCut,
     };
 }
 
-function getPreferredQuaternionForViewportLoad() {
-    if (currentOrientationMode === 2) {
-        return normalizeQuaternionXYZW(calibrationMemory[1]);
-    }
-
-    if (currentOrientationMode === 1) {
-        return convertQuaternionWXYZtoXYZW(ausrichtung);
-    }
-
-    return normalizeQuaternionXYZW(calibrationMemory[1]) || convertQuaternionWXYZtoXYZW(ausrichtung);
-}
-
-function applyManualViewportQuaternion() {
-    const manualQuaternion = accVectorViewport.getAppliedQuaternion();
-    if (!manualQuaternion) {
-        accVectorViewport.setStatus('Manuelle Quaternion nicht verfuegbar');
-        return;
-    }
-
-    calibrationMemory[1] = manualQuaternion.slice();
-    decodeWorker.postMessage({
-        type: 'calibdata',
-        payload: {
-            type: 2,
-            quaternion: manualQuaternion,
-        }
-    });
-
-    applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World Simple' });
-    accVectorViewport.setStatus('Manuelle Quaternion als World Simple aktiv');
-}
-
 if (alignLoadQuatBtn) {
     alignLoadQuatBtn.addEventListener('click', () => {
-        const currentQuaternion = getPreferredQuaternionForViewportLoad();
-        if (!currentQuaternion) {
-            accVectorViewport.setStatus('Keine kalibrierte Quaternion vorhanden');
-            return;
-        }
-
-        accVectorViewport.setAppliedQuaternion(currentQuaternion, { silent: true });
-        accVectorViewport.setStatus('Kalibrierte Quaternion in den 3D-Tab geladen');
+        syncViewportBaseQuaternion({ silent: true });
+        accVectorViewport.setStatus('Basisrotation im Viewport synchronisiert');
     });
 }
 
 if (alignApplyQuatBtn) {
     alignApplyQuatBtn.addEventListener('click', () => {
-        applyManualViewportQuaternion();
+        syncViewportBaseQuaternion({ silent: true });
+        syncViewportPostTransformQuaternion({ persistState: true, resetLiveBuffers: true });
+        accVectorViewport.setStatus('Live-Pipeline mit Zusatzrotation synchronisiert');
     });
 }
 
@@ -2946,6 +4051,8 @@ document.addEventListener("DOMContentLoaded", () => {
     setupDecodeWorker();
     restoreCalibrationFromCookie();
     setupUIListeners();
+    initializeAppSettingsPersistenceBindings();
+    restoreAppSettingsFromCookie();
     connectWebSocket();
     startChartUpdates();
     initFFTChart();
@@ -2967,6 +4074,7 @@ document.addEventListener("DOMContentLoaded", () => {
         filterDrawer?.classList.toggle('open');
         const isOpen = filterDrawer?.classList.contains('open');
         filterDrawer?.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+        persistAppSettingsCookie();
     });
 
     const livechartsGrid = document.getElementById('livechartsGrid');
@@ -3007,6 +4115,7 @@ document.addEventListener("DOMContentLoaded", () => {
             chart?.setSize(getSize());
             gyroChart?.setSize(getGyroChartSize());
         });
+        persistAppSettingsCookie();
     });
     fftRmsLayoutToggle?.addEventListener('click', () => {
         fftRmsGrid?.classList.toggle('is-side-by-side');
@@ -3016,6 +4125,7 @@ document.addEventListener("DOMContentLoaded", () => {
             fftPlot?.setSize(getFftChartSize());
             rmsPlot?.setSize(getRmsChartSize());
         });
+        persistAppSettingsCookie();
     });
     gyroFftRmsLayoutToggle?.addEventListener('click', () => {
         gyroFftRmsGrid?.classList.toggle('is-side-by-side');
@@ -3025,6 +4135,7 @@ document.addEventListener("DOMContentLoaded", () => {
             gyroFftPlot?.setSize(getGyroFftChartSize());
             gyroRmsPlot?.setSize(getGyroRmsChartSize());
         });
+        persistAppSettingsCookie();
     });
 
 
@@ -3037,6 +4148,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateLiveChartPanelHeights();
         updateFftRmsPanelHeights();
         updateGyroFftRmsPanelHeights();
+        persistAppSettingsCookie();
     });
 
     updateLiveChartPanelHeights();
@@ -3115,9 +4227,9 @@ function startChartUpdates() {
 }
 
 
-//const roll = document.getElementById('roll');
-//const pitch = document.getElementById('pitch'); 
-//const yaw = document.getElementById('yaw');
+const roll = document.getElementById('roll');
+const pitch = document.getElementById('pitch');
+const yaw = document.getElementById('yaw');
 
 const posX = document.getElementById('posx');
 const posY = document.getElementById('posy');
@@ -3125,7 +4237,9 @@ const posZ = document.getElementById('posz');
 
 
 let latestFusionData = null;
-downsamplingWorker.postMessage('init');
+let fusionCalibrationSession = null;
+let discardFusionCalibrationResult = false;
+downsamplingWorker.postMessage({ type: 'init' });
 downsamplingWorker.onmessage = (e) => {
 fusionWorker.postMessage(e.data);
    // console.log(e.data);
@@ -3133,6 +4247,51 @@ fusionWorker.postMessage(e.data);
 
 // FusionWorker → Main-Thread
 fusionWorker.onmessage = (event) => {
+const message = event.data;
+
+if (!message?.type) {
+    return;
+}
+
+if (message.type === 'ack') {
+    if (fusionCalibrationSession) {
+        fusionCalibrationSession.statusText.textContent = 'Fusion-Kalibrierung läuft...';
+    }
+    return;
+}
+
+if (message.type === 'calibrated') {
+    if (discardFusionCalibrationResult) {
+        discardFusionCalibrationResult = false;
+        fusionCalibrationSession = null;
+        return;
+    }
+
+    const sanitizedState = sanitizeFusionCalibrationState(message);
+    if (sanitizedState) {
+        currentFusionCalibrationState = sanitizedState;
+        persistCalibrationCookie();
+    }
+
+    if (fusionCalibrationSession) {
+        clearInterval(fusionCalibrationSession.intervalId);
+        fusionCalibrationSession.progressBar.style.width = '100%';
+        fusionCalibrationSession.statusText.textContent = 'Fertig!';
+        fusionCalibrationSession.button.disabled = false;
+        command.textContent = 'AUTO-Fusion kalibriert';
+        result1.innerHTML = `Gyro-Bias [rad/s]: x=${sanitizedState?.gyroBias.x?.toFixed(4) ?? '0.0000'}, y=${sanitizedState?.gyroBias.y?.toFixed(4) ?? '0.0000'}, z=${sanitizedState?.gyroBias.z?.toFixed(4) ?? '0.0000'}<br>ACC-Varianz [g²]: x=${sanitizedState?.accVar?.[0]?.toExponential(2) ?? '0.00e+0'}, y=${sanitizedState?.accVar?.[1]?.toExponential(2) ?? '0.00e+0'}, z=${sanitizedState?.accVar?.[2]?.toExponential(2) ?? '0.00e+0'}`;
+        okBtn.style.display = 'flex';
+        cancelBtn.style.display = 'none';
+        fusionCalibrationSession = null;
+    }
+
+    applyOrientationMode(1, { syncDropdown: true, optionLabel: 'AUTO' });
+    return;
+}
+
+if (message.type !== 'state') {
+    return;
+}
 
 //console.log("FUSION UPDATE" + now);
 //console.log(event.data);
@@ -3141,17 +4300,22 @@ fusionWorker.onmessage = (event) => {
 
 
 
-roll.textContent = event.data.tiltHeadingRoll.roll.toFixed(0);
-pitch.textContent = event.data.tiltHeadingRoll.pitch.toFixed(0);
-yaw.textContent = event.data.tiltHeadingRoll.yaw.toFixed(0);
+latestFusionData = message;
 
-posX.textContent = event.data.accWorld.x.toFixed(4);
-posY.textContent = event.data.accWorld.y.toFixed(4);
-posZ.textContent = event.data.accWorld.z.toFixed(4);
+roll && (roll.textContent = message.tiltHeadingRoll.roll.toFixed(0));
+pitch && (pitch.textContent = message.tiltHeadingRoll.pitch.toFixed(0));
+yaw && (yaw.textContent = message.tiltHeadingRoll.yaw.toFixed(0));
 
-decodeWorker.postMessage({type: "calibdata", payload: {type: 1, quaternion: event.data.quaternion}});
+posX && (posX.textContent = message.accWorld.x.toFixed(4));
+posY && (posY.textContent = message.accWorld.y.toFixed(4));
+posZ && (posZ.textContent = message.accWorld.z.toFixed(4));
 
-ausrichtung = Array.isArray(event.data.quaternion) ? event.data.quaternion.slice() : Array.from(event.data.quaternion || []);
+decodeWorker.postMessage({type: "calibdata", payload: {type: 1, quaternion: message.quaternion}});
+
+ausrichtung = Array.isArray(message.quaternion) ? message.quaternion.slice() : Array.from(message.quaternion || []);
+if (currentOrientationMode === 1) {
+    syncViewportBaseQuaternion({ silent: true });
+}
 
 };
 
@@ -3163,6 +4327,16 @@ function setupDecodeWorker() {
     decodeWorker.onmessage = (event) => {
 
         const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = event.data;
+
+        if ((acc && acc.length > 0) || (gyro && gyro.length > 0)) {
+            motionWorker.postMessage({
+                type: 'batch',
+                payload: {
+                    acc: Array.isArray(acc) ? acc : [],
+                    gyro: Array.isArray(gyro) ? gyro : [],
+                },
+            });
+        }
 
 
         if (accraw && accraw.length > 0) {            
@@ -3227,7 +4401,7 @@ function setupDecodeWorker() {
             
             // Rohdaten pushen einmal komplett
             for (let index = 0; index < acc.length; index++) {
-                const sample = acc[index];
+                const sample = buildLiveAccelerationSample(accraw?.[index], acc[index]) || acc[index];
 
                 accBuffer.push([sample.time, sample.x, sample.y, sample.z, sample.total]);
                 batchTimes[index] = sample.time;
@@ -3279,7 +4453,7 @@ function setupDecodeWorker() {
                 }); */
 
             for (let index = 0; index < gyro.length; index++) {
-                const sample = gyro[index];
+                const sample = buildLiveGyroSample(gyroraw?.[index], gyro[index]) || gyro[index];
                 // sample ist { time, x, y, z }
                 // push als Array oder Objekt in deinen MultiRingBuffer
                 gyroBuffer.push([sample.time, sample.x, sample.y, sample.z]);
@@ -3353,6 +4527,7 @@ function setupDecodeWorker() {
                         console.warn("Unbekannte Config-SubID");
                 }
             });
+            persistAppSettingsCookie();
         }
     }
 }
@@ -4439,6 +5614,7 @@ function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, scr
             const nextDuration = parseInt(timeSlider.value, 10);
             setDuration(nextDuration);
             timeValue.textContent = String(nextDuration);
+            persistAppSettingsCookie();
         });
     }
 
@@ -4448,6 +5624,7 @@ function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, scr
             const nextPaused = !getPaused();
             setPaused(nextPaused);
             pauseBtn.textContent = nextPaused ? '▶' : 'Pause';
+            persistAppSettingsCookie();
         });
     }
 
@@ -4486,6 +5663,7 @@ function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, scr
 
             if (timeSlider) timeSlider.value = String(Math.round(nextDuration));
             if (timeValue) timeValue.textContent = String(Math.round(nextDuration));
+            persistAppSettingsCookie();
         }, { passive: false, capture: true });
     }
 }
@@ -5971,6 +7149,13 @@ function openPopup() {
 function closePopup() {
     popup.style.display = "none";
 
+    if (fusionCalibrationSession) {
+        discardFusionCalibrationResult = true;
+        fusionWorker.postMessage({ type: 'stopCalib' });
+        clearInterval(fusionCalibrationSession.intervalId);
+        fusionCalibrationSession = null;
+    }
+
     resetAll();
 
     //resetStatusbar();
@@ -6061,14 +7246,7 @@ function startCalibWorldSimple(button, progressBar, statusText) {
 
             const quatsimple = simpleZCalibration(accelIdleData);
 
-            decodeWorker.postMessage({
-                type: 'calibdata',
-                payload: {
-                    type: 2,
-                    quaternion: quatsimple,
-                }
-            });
-            calibrationMemory[1] = Array.from(quatsimple);
+            setOrientationCalibrationQuaternion(quatsimple, { persistState: false });
             decodeWorker.postMessage({
                 type: 'calibmode',
                 payload: {
@@ -6097,6 +7275,53 @@ function startCalibWorldSimple(button, progressBar, statusText) {
             console.log("CALIBRATION DONE");
         }
     }, 30);
+}
+
+function startAutoFusionCalibration(button, progressBar, statusText) {
+    if (fusionCalibrationSession) {
+        return;
+    }
+
+    fusionCalibrationSession = {
+        button,
+        progressBar,
+        statusText,
+        progress: 0,
+        intervalId: null,
+    };
+    discardFusionCalibrationResult = false;
+
+    command.textContent = 'Bitte halte das Geraet ruhig. Gyro-Bias und ACC-Rauschen werden fuer AUTO erfasst.';
+    result1.textContent = 'Warte auf Fusionsdaten...';
+    button.disabled = true;
+    okBtn.style.display = 'none';
+    cancelBtn.style.display = 'flex';
+    progressBar.style.width = '0%';
+    statusText.textContent = 'Starte Fusion-Kalibrierung...';
+
+    fusionWorker.postMessage({ type: 'startCalib' });
+    fusionCalibrationSession.intervalId = setInterval(() => {
+        if (!fusionCalibrationSession) {
+            return;
+        }
+
+        fusionCalibrationSession.progress = Math.min(CALIBRATION_CAPTURE_STEPS, fusionCalibrationSession.progress + 1);
+        progressBar.style.width = `${fusionCalibrationSession.progress}%`;
+        statusText.textContent = `Fortschritt: ${fusionCalibrationSession.progress}%`;
+
+        if (latestFusionData?.tiltHeadingRoll) {
+            result1.textContent = `Roll ${latestFusionData.tiltHeadingRoll.roll.toFixed(1)}°, Pitch ${latestFusionData.tiltHeadingRoll.pitch.toFixed(1)}°, Yaw ${latestFusionData.tiltHeadingRoll.yaw.toFixed(1)}°`;
+        }
+
+        if (fusionCalibrationSession.progress < CALIBRATION_CAPTURE_STEPS) {
+            return;
+        }
+
+        clearInterval(fusionCalibrationSession.intervalId);
+        fusionWorker.postMessage({ type: 'stopCalib' });
+        fusionCalibrationSession.intervalId = null;
+        statusText.textContent = 'Kalibrierung wird ausgewertet...';
+    }, CALIBRATION_CAPTURE_STEP_MS);
 }
 
 // WORLD + AXIS
@@ -6291,18 +7516,11 @@ function startCalibWorldAxisSTEP2(button, progressBar, statusText) {
 
             const quatsimple = calibrateWithZPlusXYFixed(accelIdleData, accCorrected, calibaxis1);
 
-            decodeWorker.postMessage({
-                type: 'calibdata',
-                payload: {
-                    type: 2,
-                    quaternion: quatsimple,
-                }
-            });
+            setOrientationCalibrationQuaternion(quatsimple, { persistState: false });
             console.log('Kalibrierungsquaternion Variante World + Axis:', quatsimple);
 
             document.getElementById("btn1").disabled = false; // Button wieder aktivieren
 
-            calibrationMemory[1] = Array.from(quatsimple);
             applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World + Axis' });
             //action2.style.display = "none";
             //const quatsimple = simpleZCalibration(accelIdleData);
@@ -6432,6 +7650,11 @@ document.getElementById("btn1").addEventListener("click", () => {
     const progressBar = document.getElementById("progress1");
     const statusText = document.getElementById("statusText1");
 
+    if (calibrationFlow === 'autoFusion') {
+        startAutoFusionCalibration(button, progressBar, statusText);
+        return;
+    }
+
     if (calibrationFlow === 'reference') {
         captureCurrentReferenceState(button, progressBar, statusText);
         return;
@@ -6463,6 +7686,13 @@ function resetAll() {
     document.getElementById("headline").textContent = "Koordinatensystem wählen";
     document.getElementById("btn1").textContent = "Starte Kalibrierung";
     calibrationFlow = 'worldSimple';
+
+    if (fusionCalibrationSession) {
+        discardFusionCalibrationResult = true;
+        fusionWorker.postMessage({ type: 'stopCalib' });
+        clearInterval(fusionCalibrationSession.intervalId);
+        fusionCalibrationSession = null;
+    }
 
 
     action1.style.display = "none";
@@ -6519,6 +7749,18 @@ document.getElementById("btnWorldSimple").addEventListener("click", () => {
     action3.style.display = "none";
 });
 
+document.getElementById("btnAutoFusion").addEventListener("click", () => {
+    calibrationFlow = 'autoFusion';
+    headline.textContent = "AUTO Fusion aktiviert";
+    command.textContent = "Bitte halte das Geraet ruhig. Die AUTO-Fusion kalibriert Gyro-Bias und ACC-Rauschen.";
+    document.getElementById("btn1").textContent = "AUTO kalibrieren";
+
+    buttonRow1.style.display = "none";
+    action1.style.display = "block";
+    action2.style.display = "none";
+    action3.style.display = "none";
+});
+
 
 
 document.getElementById("btnTwoAxis").addEventListener("click", () => {
@@ -6562,6 +7804,8 @@ btn.addEventListener('click', function () {
             }
         });
     }
+
+    syncMotionWorkerTransform({ reset: true });
 });
 
 

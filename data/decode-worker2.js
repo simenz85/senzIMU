@@ -57,6 +57,15 @@ let quatworldaxis = null;
 let quat2axis = null;
 let referenceState = null;
 let worldSimpleGyroState = null;
+let postTransformEnabled = false;
+let postQx = 0;
+let postQy = 0;
+let postQz = 0;
+let postQw = 1;
+let postQConjX = 0;
+let postQConjY = 0;
+let postQConjZ = 0;
+let postQConjW = 1;
 
 
 onmessage = function (event) {
@@ -157,6 +166,10 @@ onmessage = function (event) {
             z = z - referenceState.gyro.z;
           }
 
+          if (postTransformEnabled && IMUOrientation !== IMUOpt.NONE) {
+            [x, y, z] = applyPostTransformFast(x, y, z);
+          }
+
           gyroraw.push({ time: currentTimestamp, x: rawGyroX, y: rawGyroY, z: rawGyroZ });
           gyro.push({ time: currentTimestamp, x: x, y: y, z: z });
           samplesSinceLastTsGyro++;
@@ -190,11 +203,14 @@ onmessage = function (event) {
               
               fusionacc = rotateVectorByQuat({ x, y, z }, quatauto);
               
-              total = Math.sqrt(fusionacc.x * fusionacc.x + fusionacc.y * fusionacc.y + fusionacc.z * fusionacc.z);
               if (cutgravity === true) {
                 fusionacc.z = fusionacc.z + gravity;
                 //console.log("CUTGRAVITY");
               }
+              if (postTransformEnabled) {
+                [fusionacc.x, fusionacc.y, fusionacc.z] = applyPostTransformFast(fusionacc.x, fusionacc.y, fusionacc.z);
+              }
+              total = Math.sqrt(fusionacc.x * fusionacc.x + fusionacc.y * fusionacc.y + fusionacc.z * fusionacc.z);
               
               acc.push({ time: currentTimestamp, x: fusionacc.x, y: fusionacc.y, z: fusionacc.z, total: total });
               samplesSinceLastTsAcc++;
@@ -211,6 +227,9 @@ onmessage = function (event) {
                 //console.log("CUTGRAVITY");
                 z = z + gravity;
               }
+              if (postTransformEnabled) {
+                [x, y, z] = applyPostTransformFast(x, y, z);
+              }
               total = Math.sqrt(x * x + y * y + z * z);
               acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
               samplesSinceLastTsAcc++;
@@ -224,6 +243,9 @@ onmessage = function (event) {
               x = x - referenceAccel.x;
               y = y - referenceAccel.y;
               z = z - referenceAccel.z;
+              if (postTransformEnabled) {
+                [x, y, z] = applyPostTransformFast(x, y, z);
+              }
               total = Math.sqrt(x * x + y * y + z * z);
               acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
               samplesSinceLastTsAcc++;
@@ -234,6 +256,10 @@ onmessage = function (event) {
 
 
 
+          if (postTransformEnabled && IMUOrientation !== IMUOpt.NONE) {
+            [x, y, z] = applyPostTransformFast(x, y, z);
+          }
+          total = Math.sqrt(x * x + y * y + z * z);
           acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
           samplesSinceLastTsAcc++;
 
@@ -443,6 +469,13 @@ onmessage = function (event) {
     }
   }
 
+  else if (event.data.type === 'postTransformQuaternion') {
+    const payload = event.data.payload;
+    const nextQuaternion = payload?.quaternion ?? payload;
+    updatePostTransformQuaternion(nextQuaternion);
+    console.log("[DECODE-WORKER] Post-transform quaternion set:", postTransformEnabled ? [postQx, postQy, postQz, postQw] : null);
+  }
+
 
   else if (event.data.type === 'calibdata') {
 
@@ -544,6 +577,83 @@ function updateCalibrationQuaternion(calibArray) {
   //qConjW = qw;
 
 
+}
+
+function normalizeQuaternionArray(quaternion) {
+  const source = Array.isArray(quaternion)
+    ? quaternion
+    : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w];
+
+  if (!source || source.length < 4) {
+    return null;
+  }
+
+  const values = source.slice(0, 4).map((value) => Number(value));
+  if (values.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  const length = Math.hypot(values[0], values[1], values[2], values[3]);
+  if (length < 1e-12) {
+    return null;
+  }
+
+  return values.map((value) => value / length);
+}
+
+function updatePostTransformQuaternion(quaternion) {
+  const normalizedQuaternion = normalizeQuaternionArray(quaternion);
+  if (!normalizedQuaternion) {
+    postTransformEnabled = false;
+    postQx = 0;
+    postQy = 0;
+    postQz = 0;
+    postQw = 1;
+    postQConjX = 0;
+    postQConjY = 0;
+    postQConjZ = 0;
+    postQConjW = 1;
+    return;
+  }
+
+  if (Math.abs(normalizedQuaternion[0]) <= 1e-6
+    && Math.abs(normalizedQuaternion[1]) <= 1e-6
+    && Math.abs(normalizedQuaternion[2]) <= 1e-6
+    && Math.abs(normalizedQuaternion[3] - 1) <= 1e-6) {
+    postTransformEnabled = false;
+    postQx = 0;
+    postQy = 0;
+    postQz = 0;
+    postQw = 1;
+    postQConjX = 0;
+    postQConjY = 0;
+    postQConjZ = 0;
+    postQConjW = 1;
+    return;
+  }
+
+  postTransformEnabled = true;
+  postQx = normalizedQuaternion[0];
+  postQy = normalizedQuaternion[1];
+  postQz = normalizedQuaternion[2];
+  postQw = normalizedQuaternion[3];
+  postQConjX = -postQx;
+  postQConjY = -postQy;
+  postQConjZ = -postQz;
+  postQConjW = postQw;
+}
+
+function applyPostTransformFast(x, y, z) {
+  const tx = postQw * x + postQy * z - postQz * y;
+  const ty = postQw * y + postQz * x - postQx * z;
+  const tz = postQw * z + postQx * y - postQy * x;
+  const tw = -postQx * x - postQy * y - postQz * z;
+
+  return [
+    tw * postQConjX + tx * postQConjW + ty * postQConjZ - tz * postQConjY,
+    tw * postQConjY + ty * postQConjW + tz * postQConjX - tx * postQConjZ,
+    tw * postQConjZ + tz * postQConjW + tx * postQConjY - ty * postQConjX,
+  ];
 }
 
 // Hochperformante, in-place Kalibrierung

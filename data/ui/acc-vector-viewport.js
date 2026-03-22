@@ -34,6 +34,7 @@ export class AccVectorViewport {
         this.arrowOpacityElements = this.getArrowOpacityElements(options);
         this.axisColorElements = this.getAxisColorElements(options);
         this.vectorColorElements = this.getVectorColorElements(options);
+        this.backgroundPresetElement = document.getElementById(options.backgroundPresetId || 'alignBackgroundPreset');
 
         this.rawValueElements = {
             x: document.getElementById(options.rawXId || 'alignRawX'),
@@ -82,7 +83,8 @@ export class AccVectorViewport {
         this.latestVector = null;
         this.latestSamples = { raw: null, calibrated: null, calibratedCut: null };
         this.latestGyroVector = null;
-        this.latestGyroSamples = { calibrated: null, calibratedCut: null };
+        this.latestGyroSamples = { raw: null, calibrated: null, calibratedCut: null };
+        this.baseQuaternion = null;
         this.rotationQuaternion = null;
         this.initialized = false;
         this.initError = null;
@@ -96,9 +98,11 @@ export class AccVectorViewport {
         this.arrowOpacityBindings = { raw: [], result: [], world: [], frame: [] };
         this.axisColors = { x: '#ff0000', y: '#00ff00', z: '#0000ff' };
         this.vectorColors = { raw: '#ffa000', result: '#00e5ff' };
+        this.backgroundPreset = 'steel';
 
         this.boundHandleResize = this.handleResize.bind(this);
         this.boundHandleSliderInput = this.handleSliderInput.bind(this);
+        this.boundHandleSliderCommit = this.handleSliderCommit.bind(this);
         this.boundHandleSliderTextInput = this.handleSliderTextInput.bind(this);
         this.boundHandleSliderTextCommit = this.handleSliderTextCommit.bind(this);
         this.boundHandleStepperClick = this.handleStepperClick.bind(this);
@@ -106,6 +110,7 @@ export class AccVectorViewport {
         this.boundHandleArrowOpacityCommit = this.handleArrowOpacityCommit.bind(this);
         this.boundHandleAxisColorInput = this.handleAxisColorInput.bind(this);
         this.boundHandleVectorColorInput = this.handleVectorColorInput.bind(this);
+        this.boundHandleBackgroundPresetChange = this.handleBackgroundPresetChange.bind(this);
         this.boundResetRotation = this.resetRotation.bind(this);
         this.boundHandleViewcubeClick = this.handleViewcubeClick.bind(this);
 
@@ -203,6 +208,7 @@ export class AccVectorViewport {
         this.arrowOpacityElements = this.getArrowOpacityElements(this.options);
         this.axisColorElements = this.getAxisColorElements(this.options);
         this.vectorColorElements = this.getVectorColorElements(this.options);
+        this.backgroundPresetElement = document.getElementById(this.options.backgroundPresetId || 'alignBackgroundPreset');
 
         this.gyroCard = document.getElementById(this.options.gyroCardId || 'alignGyroCard');
         this.gyroRotatedValueElements = {
@@ -239,6 +245,7 @@ export class AccVectorViewport {
             axisColorZPresent: Boolean(this.axisColorElements.z),
             vectorColorRawPresent: Boolean(this.vectorColorElements.raw),
             vectorColorResultPresent: Boolean(this.vectorColorElements.result),
+            backgroundPresetPresent: Boolean(this.backgroundPresetElement),
         });
 
         return Boolean(this.root && this.viewport);
@@ -315,14 +322,15 @@ export class AccVectorViewport {
         }
 
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x040b10);
+        this.scene.background = null;
 
         this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
         this.camera.up.set(0, 0, 1);
         this.camera.position.set(4.8, -3.2, 5.2);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
+        this.renderer.setClearAlpha(0);
 
         if ('outputColorSpace' in this.renderer && THREE.SRGBColorSpace) {
             this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -331,6 +339,7 @@ export class AccVectorViewport {
         }
 
         this.viewport.appendChild(this.renderer.domElement);
+        this.applyBackgroundPreset(this.backgroundPreset, { silent: true });
         this.log('setupScene: renderer appended', {
             viewportWidth: this.viewport.clientWidth,
             viewportHeight: this.viewport.clientHeight,
@@ -366,33 +375,33 @@ export class AccVectorViewport {
         });
         this.worldAxesGroup = new THREE.Group();
         this.scene.add(this.worldAxesGroup);
+        this.worldAxesGroup.add(this.circularGrid);
 
-        const worldAxisX = this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xc62828, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
-        const worldAxisY = this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x2e7d32, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
-        const worldAxisZ = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1565c0, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
+        const worldAxisX = this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xc62828, { length: 2.8, negativeLength: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
+        const worldAxisY = this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x2e7d32, { length: 2.8, negativeLength: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
+        const worldAxisZ = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1565c0, { length: 2.8, negativeLength: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
         this.worldAxes = { x: worldAxisX, y: worldAxisY, z: worldAxisZ };
         this.worldAxesGroup.add(worldAxisX, worldAxisY, worldAxisZ);
         this.worldAxisLabels = {
-            x: this.createAxisLabel('X / E', 0xff0000, new THREE.Vector3(3.1, 0.1, 0)),
-            y: this.createAxisLabel('Y / N', 0x00ff00, new THREE.Vector3(0.12, 3.1, 0)),
-            z: this.createAxisLabel('Z / U', 0x0000ff, new THREE.Vector3(0, 0.12, 3.1)),
+            x: this.createAxisLabel('Xw', 0xff0000, new THREE.Vector3(3.1, 0.1, 0)),
+            y: this.createAxisLabel('Yw', 0x00ff00, new THREE.Vector3(0.12, 3.1, 0)),
+            z: this.createAxisLabel('Zw', 0x0000ff, new THREE.Vector3(0, 0.12, 3.1)),
         };
         this.worldAxesGroup.add(this.worldAxisLabels.x, this.worldAxisLabels.y, this.worldAxisLabels.z);
 
         this.rotatedFrameGroup = new THREE.Group();
         this.scene.add(this.rotatedFrameGroup);
-        this.rotatedFrameGroup.add(this.circularGrid);
 
         this.rotatedAxes = {
-            x: this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xe53935, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
-            y: this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x43a047, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
-            z: this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1e88e5, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
+            x: this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xe53935, { length: 2.1, negativeLength: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
+            y: this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x43a047, { length: 2.1, negativeLength: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
+            z: this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1e88e5, { length: 2.1, negativeLength: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
         };
         this.rotatedFrameGroup.add(this.rotatedAxes.x, this.rotatedAxes.y, this.rotatedAxes.z);
         this.rotatedAxisLabels = {
-            x: this.createAxisLabel("X' / E'", 0xff0000, new THREE.Vector3(2.32, 0.12, 0), 0.28),
-            y: this.createAxisLabel("Y' / N'", 0x00ff00, new THREE.Vector3(0.12, 2.32, 0), 0.28),
-            z: this.createAxisLabel("Z' / U'", 0x0000ff, new THREE.Vector3(0, 0.12, 2.32), 0.28),
+            x: this.createAxisLabel('Xs', 0xff0000, new THREE.Vector3(2.32, 0.12, 0), 0.28),
+            y: this.createAxisLabel('Ys', 0x00ff00, new THREE.Vector3(0.12, 2.32, 0), 0.28),
+            z: this.createAxisLabel('Zs', 0x0000ff, new THREE.Vector3(0, 0.12, 2.32), 0.28),
         };
         this.rotatedFrameGroup.add(this.rotatedAxisLabels.x, this.rotatedAxisLabels.y, this.rotatedAxisLabels.z);
 
@@ -424,6 +433,7 @@ export class AccVectorViewport {
         });
         this.gyroGroup.add(this.gyroRotatedRingSet.group);
 
+        this.baseQuaternion = new THREE.Quaternion();
         this.rotationQuaternion = new THREE.Quaternion();
         this.resize();
         this.log('setupScene: complete');
@@ -435,6 +445,7 @@ export class AccVectorViewport {
         Object.values(this.sliderElements).forEach((slider) => {
             if (slider) {
                 slider.addEventListener('input', this.boundHandleSliderInput);
+                slider.addEventListener('change', this.boundHandleSliderCommit);
             }
         });
 
@@ -488,6 +499,10 @@ export class AccVectorViewport {
             input.addEventListener('change', this.boundHandleVectorColorInput);
         });
 
+        if (this.backgroundPresetElement) {
+            this.backgroundPresetElement.addEventListener('change', this.boundHandleBackgroundPresetChange);
+        }
+
         if (this.sourceButtons.raw) {
             this.sourceButtons.raw.addEventListener('click', () => this.setSourceMode('raw'));
         }
@@ -520,6 +535,7 @@ export class AccVectorViewport {
     createArrowMesh(direction, color, options = {}) {
         const THREE = this.THREE;
         const length = options.length ?? 2.1;
+        const negativeLength = Math.max(0, options.negativeLength ?? 0);
         const headLength = options.headLength ?? 0.24;
         const headRadius = options.headRadius ?? 0.11;
         const shaftRadius = options.shaftRadius ?? 0.045;
@@ -529,21 +545,33 @@ export class AccVectorViewport {
         const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0 });
         const group = new THREE.Group();
         const shaft = new THREE.Mesh(new THREE.CylinderGeometry(shaftRadius, shaftRadius, 1, 18), material);
+        const tail = negativeLength > 0
+            ? new THREE.Mesh(new THREE.CylinderGeometry(shaftRadius, shaftRadius, 1, 18), material)
+            : null;
         const head = new THREE.Mesh(new THREE.ConeGeometry(headRadius, headLength, 24), material);
 
         shaft.position.y = shaftLength / 2;
         shaft.scale.y = shaftLength;
+        if (tail) {
+            tail.position.y = -negativeLength / 2;
+            tail.scale.y = negativeLength;
+        }
         head.position.y = shaftLength + headLength / 2;
 
         group.add(shaft);
+        if (tail) {
+            group.add(tail);
+        }
         group.add(head);
 
         group.userData = {
             shaft,
+            tail,
             head,
             material,
             headLength,
             shaftLength,
+            negativeLength,
             direction: direction.clone().normalize(),
             opacityGroup,
         };
@@ -709,6 +737,10 @@ export class AccVectorViewport {
 
         data.shaft.scale.y = shaftLength;
         data.shaft.position.y = shaftLength / 2;
+        if (data.tail) {
+            data.tail.scale.y = data.negativeLength;
+            data.tail.position.y = -data.negativeLength / 2;
+        }
         data.head.position.y = shaftLength + data.headLength / 2;
         data.direction.copy(normalized);
         data.currentLength = length;
@@ -743,7 +775,16 @@ export class AccVectorViewport {
             this.setSliderValue(axis, event.target.value);
         }
 
-        this.updateRotation();
+        this.updateRotation({ commit: false });
+    }
+
+    handleSliderCommit(event) {
+        const axis = this.getAxisForSlider(event?.target);
+        if (axis) {
+            this.setSliderValue(axis, event.target.value);
+        }
+
+        this.updateRotation({ commit: true });
     }
 
     handleSliderTextInput(event) {
@@ -758,7 +799,7 @@ export class AccVectorViewport {
         }
 
         this.setSliderValue(axis, value);
-        this.updateRotation();
+        this.updateRotation({ commit: false });
     }
 
     handleSliderTextCommit(event) {
@@ -771,7 +812,7 @@ export class AccVectorViewport {
         const value = Number(event.target.value);
         const nextValue = Number.isFinite(value) ? value : fallbackValue;
         this.setSliderValue(axis, nextValue);
-        this.updateRotation();
+        this.updateRotation({ commit: true });
     }
 
     handleStepperClick(event) {
@@ -784,7 +825,7 @@ export class AccVectorViewport {
 
         const currentValue = Number(this.sliderElements[axis]?.value || 0);
         this.setSliderValue(axis, currentValue + step);
-        this.updateRotation();
+        this.updateRotation({ commit: true });
     }
 
     handleArrowOpacityInput(event) {
@@ -829,11 +870,15 @@ export class AccVectorViewport {
         this.setVectorColor(colorGroup, colorValue, { silent: true });
     }
 
+    handleBackgroundPresetChange(event) {
+        this.setBackgroundPreset(event?.target?.value);
+    }
+
     resetRotation() {
         this.setSliderValue('x', 0);
         this.setSliderValue('y', 0);
         this.setSliderValue('z', 0);
-        this.updateRotation();
+        this.updateRotation({ commit: true });
     }
 
     setArrowOpacity(groupName, value, options = {}) {
@@ -1015,11 +1060,65 @@ export class AccVectorViewport {
         });
     }
 
+    getBackgroundPresets() {
+        return {
+            aurora: 'radial-gradient(circle at 18% 16%, rgba(68, 188, 224, 0.36), rgba(7, 20, 29, 0) 36%), radial-gradient(circle at 82% 18%, rgba(21, 97, 197, 0.22), rgba(7, 20, 29, 0) 28%), linear-gradient(180deg, rgba(10, 24, 31, 0.98), rgba(5, 14, 18, 0.98))',
+            dusk: 'linear-gradient(135deg, rgba(33, 58, 88, 0.96), rgba(73, 39, 92, 0.94) 48%, rgba(19, 20, 38, 0.98))',
+            steel: 'linear-gradient(180deg, rgba(29, 39, 49, 0.98), rgba(11, 17, 24, 0.98))',
+            'steel-soft': 'linear-gradient(180deg, rgba(57, 71, 84, 0.98), rgba(27, 37, 46, 0.98))',
+            'steel-light': 'linear-gradient(180deg, rgba(114, 129, 143, 0.98), rgba(70, 83, 95, 0.96) 48%, rgba(39, 48, 56, 0.98))',
+            ember: 'radial-gradient(circle at top, rgba(181, 87, 33, 0.34), rgba(42, 17, 18, 0) 34%), linear-gradient(180deg, rgba(34, 18, 20, 0.98), rgba(9, 10, 14, 0.98))',
+            polar: 'radial-gradient(circle at 22% 18%, rgba(214, 247, 255, 0.34), rgba(255, 255, 255, 0) 30%), linear-gradient(180deg, rgba(202, 226, 235, 0.98), rgba(108, 133, 149, 0.94) 58%, rgba(23, 34, 43, 0.98))',
+            mint: 'radial-gradient(circle at 15% 15%, rgba(140, 255, 216, 0.28), rgba(0, 0, 0, 0) 28%), linear-gradient(145deg, rgba(15, 54, 52, 0.98), rgba(18, 28, 36, 0.96) 52%, rgba(7, 11, 16, 0.98))',
+            sunrise: 'radial-gradient(circle at 50% 8%, rgba(255, 214, 125, 0.42), rgba(255, 214, 125, 0) 24%), linear-gradient(180deg, rgba(92, 123, 173, 0.98), rgba(222, 128, 92, 0.94) 54%, rgba(48, 24, 32, 0.98))',
+            noir: 'linear-gradient(180deg, rgba(18, 18, 20, 0.99), rgba(7, 7, 8, 0.99))',
+            lab: 'linear-gradient(180deg, rgba(244, 248, 251, 0.98), rgba(218, 226, 232, 0.96) 45%, rgba(171, 183, 194, 0.98))',
+        };
+    }
+
+    normalizeBackgroundPreset(value) {
+        const presets = this.getBackgroundPresets();
+        if (typeof value !== 'string') {
+            return this.backgroundPreset in presets ? this.backgroundPreset : 'steel';
+        }
+
+        const normalized = value.trim().toLowerCase();
+        return normalized in presets ? normalized : 'steel';
+    }
+
+    setBackgroundPreset(value, options = {}) {
+        const normalizedPreset = this.normalizeBackgroundPreset(value);
+        this.backgroundPreset = normalizedPreset;
+        this.applyBackgroundPreset(normalizedPreset, { silent: true });
+
+        if (!options.silent) {
+            this.log('background preset changed', { preset: normalizedPreset });
+            this.emitDisplaySettingsChange();
+        }
+    }
+
+    applyBackgroundPreset(value, options = {}) {
+        const normalizedPreset = this.normalizeBackgroundPreset(value);
+        const presets = this.getBackgroundPresets();
+        if (this.viewport) {
+            this.viewport.style.background = presets[normalizedPreset] || presets.steel;
+        }
+
+        if (this.backgroundPresetElement) {
+            this.backgroundPresetElement.value = normalizedPreset;
+        }
+
+        if (!options.silent) {
+            this.emitDisplaySettingsChange();
+        }
+    }
+
     getDisplaySettings() {
         return {
             arrowOpacity: { ...this.arrowOpacity },
             axisColors: { ...this.axisColors },
             vectorColors: { ...this.vectorColors },
+            backgroundPreset: this.backgroundPreset,
         };
     }
 
@@ -1049,6 +1148,10 @@ export class AccVectorViewport {
                     this.setVectorColor(groupName, value, { silent: true });
                 }
             });
+        }
+
+        if (settings?.backgroundPreset) {
+            this.setBackgroundPreset(settings.backgroundPreset, { silent: true });
         }
 
         if (!options.silent) {
@@ -1185,7 +1288,7 @@ export class AccVectorViewport {
         this.applyCurrentGyroSample();
     }
 
-    updateRotation() {
+    updateRotation(options = {}) {
         if (!this.rotationQuaternion) {
             return;
         }
@@ -1210,15 +1313,11 @@ export class AccVectorViewport {
             'XYZ'
         );
 
-        this.rotationQuaternion.setFromEuler(euler);
-        const displayQuaternion = this.rotationQuaternion.clone().normalize();
-        this.rotatedFrameGroup.quaternion.copy(this.getFrameQuaternionObject() || new THREE.Quaternion());
-        this.updateQuaternionReadout(displayQuaternion);
-        this.updateVectors();
-
-        if (typeof this.options.onQuaternionChange === 'function') {
-            this.options.onQuaternionChange(this.getAppliedQuaternion());
-        }
+        this.rotationQuaternion.setFromEuler(euler).normalize();
+        this.refreshQuaternionState({
+            silent: options.silent,
+            commit: options.commit,
+        });
     }
 
     updateSliderLabel(axis, value) {
@@ -1236,6 +1335,7 @@ export class AccVectorViewport {
     }
 
     setGyroSamples(samples = {}) {
+        this.latestGyroSamples.raw = samples.raw || this.latestGyroSamples.raw;
         this.latestGyroSamples.calibrated = samples.calibrated || this.latestGyroSamples.calibrated;
         this.latestGyroSamples.calibratedCut = samples.calibratedCut || this.latestGyroSamples.calibratedCut;
         this.applyCurrentGyroSample();
@@ -1275,9 +1375,9 @@ export class AccVectorViewport {
             return;
         }
 
-        let preferredSample = this.latestGyroSamples.calibrated || this.latestGyroSamples.calibratedCut;
+        let preferredSample = this.latestGyroSamples.calibrated || this.latestGyroSamples.calibratedCut || this.latestGyroSamples.raw;
         if (this.sourceMode === 'calibratedCut') {
-            preferredSample = this.latestGyroSamples.calibratedCut || this.latestGyroSamples.calibrated;
+            preferredSample = this.latestGyroSamples.calibratedCut || this.latestGyroSamples.calibrated || this.latestGyroSamples.raw;
         }
 
         if (!preferredSample) {
@@ -1297,9 +1397,9 @@ export class AccVectorViewport {
         }
 
         const rawVector = this.latestVector.clone();
-        const appliedQuaternion = this.getAppliedQuaternionObject();
-        const resultVector = appliedQuaternion
-            ? rawVector.clone().applyQuaternion(appliedQuaternion)
+        const resultQuaternion = this.getResultQuaternionObject();
+        const resultVector = resultQuaternion
+            ? rawVector.clone().applyQuaternion(resultQuaternion)
             : rawVector.clone();
 
         this.updateArrow(this.rawVectorArrow, rawVector);
@@ -1313,17 +1413,13 @@ export class AccVectorViewport {
             return;
         }
 
-        const localGyroVector = this.latestGyroVector.clone();
-        const appliedQuaternion = this.getAppliedQuaternionObject();
-        const rotatedVector = appliedQuaternion
-            ? localGyroVector.clone().applyQuaternion(appliedQuaternion)
-            : localGyroVector.clone();
-        this.updateGyroRingSet(this.gyroRotatedRingSet, localGyroVector, this.rotatedAxes, this.rotatedFrameGroup.quaternion);
+        const worldVector = this.latestGyroVector.clone();
+        this.updateGyroRingSet(this.gyroRotatedRingSet, worldVector, this.worldAxes, this.worldAxesGroup?.quaternion);
 
-        this.updateVectorValues(this.gyroRotatedValueElements, rotatedVector);
+        this.updateVectorValues(this.gyroRotatedValueElements, worldVector);
 
         if (this.gyroMagnitudeElements.rotated) {
-            this.gyroMagnitudeElements.rotated.textContent = rotatedVector.length().toFixed(1);
+            this.gyroMagnitudeElements.rotated.textContent = worldVector.length().toFixed(1);
         }
     }
 
@@ -1477,12 +1573,46 @@ export class AccVectorViewport {
         }
     }
 
-    getAppliedQuaternionObject() {
+    getBaseQuaternionObject() {
+        if (!this.baseQuaternion) {
+            return null;
+        }
+
+        return this.baseQuaternion.clone().normalize();
+    }
+
+    getAdjustmentQuaternionObject() {
         if (!this.rotationQuaternion) {
             return null;
         }
 
         return this.rotationQuaternion.clone().normalize();
+    }
+
+    getAppliedQuaternionObject() {
+        const baseQuaternion = this.getBaseQuaternionObject();
+        const adjustmentQuaternion = this.getAdjustmentQuaternionObject();
+        if (!baseQuaternion && !adjustmentQuaternion) {
+            return null;
+        }
+
+        if (!baseQuaternion) {
+            return adjustmentQuaternion;
+        }
+
+        if (!adjustmentQuaternion) {
+            return baseQuaternion;
+        }
+
+        return adjustmentQuaternion.multiply(baseQuaternion).normalize();
+    }
+
+    getResultQuaternionObject() {
+        if (this.sourceMode === 'raw') {
+            return this.getAppliedQuaternionObject();
+        }
+
+        return null;
     }
 
     getFrameQuaternionObject() {
@@ -1491,7 +1621,7 @@ export class AccVectorViewport {
             return null;
         }
 
-        return appliedQuaternion.clone().invert().normalize();
+        return appliedQuaternion.clone().normalize();
     }
 
     getAppliedQuaternion() {
@@ -1501,6 +1631,73 @@ export class AccVectorViewport {
         }
 
         return [quaternion.x, quaternion.y, quaternion.z, quaternion.w];
+    }
+
+    getAdjustmentQuaternion() {
+        const quaternion = this.getAdjustmentQuaternionObject();
+        if (!quaternion) {
+            return null;
+        }
+
+        return [quaternion.x, quaternion.y, quaternion.z, quaternion.w];
+    }
+
+    refreshQuaternionState(options = {}) {
+        const THREE = this.THREE;
+        if (!THREE) {
+            return;
+        }
+
+        this.rotatedFrameGroup.quaternion.copy(this.getFrameQuaternionObject() || new THREE.Quaternion());
+        this.updateQuaternionReadout(this.getAppliedQuaternionObject());
+        this.updateVectors();
+
+        if (!options.silent && typeof this.options.onQuaternionChange === 'function') {
+            this.options.onQuaternionChange({
+                adjustmentQuaternion: this.getAdjustmentQuaternion(),
+                appliedQuaternion: this.getAppliedQuaternion(),
+                commit: Boolean(options.commit),
+            });
+        }
+    }
+
+    setBaseQuaternion(quaternion, options = {}) {
+        if (!this.ensureInitialized()) {
+            return false;
+        }
+
+        const normalizedQuaternion = this.normalizeQuaternion(quaternion) || new this.THREE.Quaternion();
+        this.baseQuaternion.copy(normalizedQuaternion);
+        this.refreshQuaternionState({
+            silent: options.silent,
+            commit: options.commit,
+        });
+        return true;
+    }
+
+    setAdjustmentQuaternion(quaternion, options = {}) {
+        if (!this.ensureInitialized()) {
+            return false;
+        }
+
+        const normalizedQuaternion = this.normalizeQuaternion(quaternion) || new this.THREE.Quaternion();
+        this.rotationQuaternion.copy(normalizedQuaternion);
+
+        const euler = new this.THREE.Euler().setFromQuaternion(this.rotationQuaternion, 'XYZ');
+        this.setSliderValue('x', this.THREE.MathUtils.radToDeg(euler.x).toFixed(0));
+        this.setSliderValue('y', this.THREE.MathUtils.radToDeg(euler.y).toFixed(0));
+        this.setSliderValue('z', this.THREE.MathUtils.radToDeg(euler.z).toFixed(0));
+
+        this.updateSliderLabel('x', Number(this.sliderElements.x?.value || 0));
+        this.updateSliderLabel('y', Number(this.sliderElements.y?.value || 0));
+        this.updateSliderLabel('z', Number(this.sliderElements.z?.value || 0));
+
+        this.refreshQuaternionState({
+            silent: options.silent,
+            commit: options.commit,
+        });
+
+        return true;
     }
 
     setAppliedQuaternion(quaternion, options = {}) {
@@ -1513,26 +1710,13 @@ export class AccVectorViewport {
             return false;
         }
 
-        this.rotationQuaternion.copy(normalizedQuaternion);
-
-        const euler = new this.THREE.Euler().setFromQuaternion(this.rotationQuaternion, 'XYZ');
-        this.setSliderValue('x', this.THREE.MathUtils.radToDeg(euler.x).toFixed(0));
-        this.setSliderValue('y', this.THREE.MathUtils.radToDeg(euler.y).toFixed(0));
-        this.setSliderValue('z', this.THREE.MathUtils.radToDeg(euler.z).toFixed(0));
-
-        this.updateSliderLabel('x', Number(this.sliderElements.x?.value || 0));
-        this.updateSliderLabel('y', Number(this.sliderElements.y?.value || 0));
-        this.updateSliderLabel('z', Number(this.sliderElements.z?.value || 0));
-
-        this.rotatedFrameGroup.quaternion.copy(this.getFrameQuaternionObject() || new this.THREE.Quaternion());
-        this.updateQuaternionReadout(normalizedQuaternion);
-        this.updateVectors();
-
-        if (!options.silent && typeof this.options.onQuaternionChange === 'function') {
-            this.options.onQuaternionChange(this.getAppliedQuaternion());
+        const baseQuaternion = this.getBaseQuaternionObject();
+        const nextAdjustment = normalizedQuaternion.clone();
+        if (baseQuaternion) {
+            nextAdjustment.multiply(baseQuaternion.clone().invert()).normalize();
         }
 
-        return true;
+        return this.setAdjustmentQuaternion(nextAdjustment, options);
     }
 
     normalizeQuaternion(quaternion) {
@@ -1542,6 +1726,8 @@ export class AccVectorViewport {
 
         const components = Array.isArray(quaternion)
             ? quaternion
+            : (ArrayBuffer.isView(quaternion) || (typeof quaternion?.length === 'number' && quaternion.length >= 4))
+                ? Array.from(quaternion).slice(0, 4)
             : [quaternion.x, quaternion.y, quaternion.z, quaternion.w];
 
         if (components.length < 4 || components.some((value) => !Number.isFinite(Number(value)))) {

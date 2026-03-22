@@ -1,463 +1,389 @@
-// fusion-worker-kalman-adaptive-r.js
 importScripts('numeric.min.js');
 
-
-const GYRO_SCALE = Math.PI/180000;
-const ACC_SCALE = 1/1000;
+const GYRO_SCALE = Math.PI / 180000;
+const ACC_SCALE = 1 / 1000;
 const RAD_TO_DEG = 180 / Math.PI;
-
-let lastOutputTimeUs = null;
+const MIN_ACC_NORM = 1e-6;
+const MAX_DT_SECONDS = 0.05;
+const OUTPUT_INTERVAL_US = 50_000;
 
 const CONFIG = {
-  Q: numeric.diag([1e-5,1e-5,1e-5,1e-5, 1e-7,1e-7,1e-7]), // Prozessrauschen
-  R: numeric.diag([0.05,0.05,0.05]), // Initiales Messrauschen (wird kalibriert)
-  CALIBRATION_SAMPLES: 800
+  processNoise: numeric.diag([1e-5, 1e-5, 1e-5, 1e-5, 1e-7, 1e-7, 1e-7]),
+  measurementNoise: numeric.diag([0.05, 0.05, 0.05]),
+  calibrationSamples: 800,
 };
 
-// SPEICHER ALLOKATIONEN
-const tmpVec4 = [0,0,0,0];
-const tmpGyroVec = [0,0,0];
-
-const tmpZ = [0,0,0];
-const tmpGPred = [0,0,0];
-const tmpY = [0,0,0];
-const tmpH = new Array(3*7);
-const tmpHt = new Array(7*3);
-
-
-
-
-
-
-let kalman = {
-  x: [1,0,0,0, 0,0,0], // [q0,q1,q2,q3, bgx,bgy,bgz]
-  P: numeric.identity(7)
+const filterState = {
+  x: [1, 0, 0, 0, 0, 0, 0],
+  P: numeric.identity(7),
 };
 
-let lastTimeUs = null;
-let calibrating = false;
-let calibSamples = [];
+const runtimeState = {
+  lastPacketTimeUs: null,
+  lastOutputTimeUs: null,
+  calibrating: false,
+  calibrationSamples: [],
+};
 
-
-function normalizeQ(q) {
-  const norm = Math.sqrt(numeric.dot(q, q));
-  if (norm === 0) return q;
-  return numeric.div(q, norm);
-}
-
-
-function kalmanPredict(gyro, dt) {
-  let [q0,q1,q2,q3,bgx,bgy,bgz] = kalman.x;
-  tmpGyroVec[0] = gyro.x - bgx;
-  tmpGyroVec[1] = gyro.y - bgy;
-  tmpGyroVec[2] = gyro.z - bgz;
-
-  tmpVec4[0] = 0.5 * (-q1*tmpGyroVec[0] - q2*tmpGyroVec[1] - q3*tmpGyroVec[2]);
-  tmpVec4[1] = 0.5 * ( q0*tmpGyroVec[0] + q2*tmpGyroVec[2] - q3*tmpGyroVec[1]);
-  tmpVec4[2] = 0.5 * ( q0*tmpGyroVec[1] - q1*tmpGyroVec[2] + q3*tmpGyroVec[0]);
-  tmpVec4[3] = 0.5 * ( q0*tmpGyroVec[2] + q1*tmpGyroVec[1] - q2*tmpGyroVec[0]);
-
-  let qNew = numeric.add([q0,q1,q2,q3], numeric.mul(tmpVec4, dt));
-  qNew = normalizeQ(qNew);
-
-  kalman.x[0] = qNew[0]; kalman.x[1] = qNew[1]; kalman.x[2] = qNew[2]; kalman.x[3] = qNew[3];
-  kalman.x[4] = bgx; kalman.x[5] = bgy; kalman.x[6] = bgz;
-
-  kalman.P = numeric.add(kalman.P, CONFIG.Q);
-}
-
-
-let y;
-let H;
-let gPred;
-let z;
-let Ht;
-let S;
-let S_inv;
-let K;
-let dx;
-let qnorm;
-let I = numeric.identity(7);
-
-function kalmanUpdate(acc) {
-  z = normalizeQ([acc.x, acc.y, acc.z]);
-  let [q0,q1,q2,q3] = kalman.x;
-
-  gPred = [
-    2*(q1*q3 - q0*q2),
-    2*(q0*q1 + q2*q3),
-    q0*q0 - q1*q1 - q2*q2 + q3*q3
-  ];
-
-  y = numeric.sub(z, gPred);
-
-  H = [
-    [-2*q2, 2*q3, -2*q0, 2*q1, 0, 0, 0],
-    [2*q1, 2*q0, 2*q3, 2*q2, 0, 0, 0],
-    [2*q0, -2*q1, -2*q2, 2*q3, 0, 0, 0]
-  ];
-
-  Ht = numeric.transpose(H);
-  S = numeric.add(numeric.dot(H, numeric.dot(kalman.P, Ht)), CONFIG.R);
-  S_inv = numeric.inv(S);
-  
-  
-  K = numeric.dot(kalman.P, numeric.dot(Ht, S_inv));
-  dx = numeric.dot(K, y);
-
-  kalman.x = numeric.add(kalman.x, dx);
-
-  qnorm = Math.sqrt(kalman.x[0]*kalman.x[0] + kalman.x[1]*kalman.x[1] + kalman.x[2]*kalman.x[2] + kalman.x[3]*kalman.x[3]);
-  kalman.x[0] /= qnorm;
-  kalman.x[1] /= qnorm;
-  kalman.x[2] /= qnorm;
-  kalman.x[3] /= qnorm;
-
-  I = numeric.identity(7);
-  kalman.P = numeric.dot(numeric.sub(I, numeric.dot(K, H)), kalman.P);
-}
-
-function radToDeg(rad) {
-  return rad * RAD_TO_DEG;
-}
-
-
-let sinr, cosr, roll, sinp, pitch, siny, cosy, yaw;
-function quatToEuler(q) {
-  let [w,x,y,z] = q;
-  sinr = 2 * (w*x + y*z);
-  cosr = 1 - 2*(x*x + y*y);
-  roll = Math.atan2(sinr, cosr);
-
-  sinp = 2 * (w*y - z*x);
-  pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp)*Math.PI/2 : Math.asin(sinp);
-
-  siny = 2 * (w*z + x*y);
-  cosy = 1 - 2*(y*y + z*z);
-  yaw = Math.atan2(siny, cosy);
-
-  return {roll, pitch, yaw};
-}
-
-let w1, w2;
-
-function quatMultiply(q1, q2) {
-  w1 = q1[0], x1 = q1[1], y1 = q1[2], z1 = q1[3];
-  w2 = q2[0], x2 = q2[1], y2 = q2[2], z2 = q2[3];
-
-  return [
-    w1*w2 - x1*x2 - y1*y2 - z1*z2,
-    w1*x2 + x1*w2 + y1*z2 - z1*y2,
-    w1*y2 - x1*z2 + y1*w2 + z1*x2,
-    w1*z2 + x1*y2 - y1*x2 + z1*w2
-  ];
-}
-
-
-let roll1, pitch1, yaw1;
-
-function qToTiltHeadingRoll(q) {
-  const [w,x,y,z] = q;
-
-  // Berechnungen wiederverwenden
-  roll1  = Math.atan2(2*(w*x + y*z), 1 - 2*(x*x + y*y));
-  pitch1 = Math.atan2(2*(w*y - z*x), 1 - 2*(y*y + x*x));
-  yaw1   = Math.atan2(2*(w*z + x*y), 1 - 2*(z*z + y*y));
-
-  return {roll: radToDeg(roll1), pitch: radToDeg(pitch1), yaw: radToDeg(yaw1)};
-}
-
-function rotateVectorByQuat(v, q) {
-  const [w,x,y,z] = q;
-  const t = {
-    x: 2*(y*v.z - z*v.y),
-    y: 2*(z*v.x - x*v.z),
-    z: 2*(x*v.y - y*v.x)
-  };
-  return {
-    x: v.x + w*t.x + (y*t.z - z*t.y),
-    y: v.y + w*t.y + (z*t.x - x*t.z),
-    z: v.z + w*t.z + (x*t.y - y*t.x)
-  };
-}
-
-let siny1, cosy2
-
-function getYawFromQuaternion(q) {
-  let [w,x,y,z] = q;
-  siny2 = 2 * (w*z + x*y);
-  cosy2 = 1 - 2*(y*y + z*z);
-  return Math.atan2(siny2, cosy2);
-}
-
-// globale temporäre Variablen für setQuaternionYaw
-let sqy_w, sqy_x, sqy_y, sqy_z;
-let sqy_sinRoll, sqy_cosRoll, sqy_roll;
-let sqy_sinPitch, sqy_pitch;
-let sqy_cy, sqy_sy, sqy_cp, sqy_sp, sqy_cr, sqy_sr;
-
-function setQuaternionYaw(q, newYaw) {
-  [sqy_w, sqy_x, sqy_y, sqy_z] = q;
-
-  // Roll berechnen
-  sqy_sinRoll = 2*(sqy_w*sqy_x + sqy_y*sqy_z);
-  sqy_cosRoll = 1 - 2*(sqy_x*sqy_x + sqy_y*sqy_y);
-  sqy_roll = Math.atan2(sqy_sinRoll, sqy_cosRoll);
-
-  // Pitch berechnen
-  sqy_sinPitch = 2*(sqy_w*sqy_y - sqy_z*sqy_x);
-  sqy_pitch = Math.abs(sqy_sinPitch) >= 1 ? Math.sign(sqy_sinPitch)*Math.PI/2 : Math.asin(sqy_sinPitch);
-
-  // Hilfsgrößen für Quaternion berechnen
-  sqy_cy = Math.cos(newYaw*0.5);
-  sqy_sy = Math.sin(newYaw*0.5);
-  sqy_cp = Math.cos(sqy_pitch*0.5);
-  sqy_sp = Math.sin(sqy_pitch*0.5);
-  sqy_cr = Math.cos(sqy_roll*0.5);
-  sqy_sr = Math.sin(sqy_roll*0.5);
-
-  return [
-    sqy_cr*sqy_cp*sqy_cy + sqy_sr*sqy_sp*sqy_sy,
-    sqy_sr*sqy_cp*sqy_cy - sqy_cr*sqy_sp*sqy_sy,
-    sqy_cr*sqy_sp*sqy_cy + sqy_sr*sqy_cp*sqy_sy,
-    sqy_cr*sqy_cp*sqy_sy - sqy_sr*sqy_sp*sqy_cy
-  ];
-}
-
-
-let myc_accnorm, myc_gyronorm, myc_quat,myc_yawCur, myc_qReset;
-
-function maybeYawCorrection(acc, gyro) {
-  myc_accNorm = Math.sqrt(acc.x*acc.x + acc.y*acc.y + acc.z*acc.z);
-  myc_gyronorm = Math.sqrt(gyro.x*gyro.x + gyro.y*gyro.y + gyro.z*gyro.z);
-
-  // Thresholds: ~0.03 g tolerance, ~1 deg/s in rad/s
-  if(Math.abs(myc_accNorm-1.0) < 0.03 && myc_gyronorm < 0.017) {
-    myc_quat = kalman.x.slice(0,4);
-    myc_yawCur = getYawFromQuaternion(myc_quat);
-    myc_qReset = setQuaternionYaw(myc_quat, myc_yawCur);
-    kalman.x[0] = myc_qReset[0];
-    kalman.x[1] = myc_qReset[1];
-    kalman.x[2] = myc_qReset[2];
-    kalman.x[3] = myc_qReset[3];
+function normalizeQuaternion(quaternion) {
+  const norm = Math.hypot(quaternion[0], quaternion[1], quaternion[2], quaternion[3]);
+  if (!Number.isFinite(norm) || norm <= 1e-12) {
+    return [1, 0, 0, 0];
   }
+
+  return quaternion.map((value) => value / norm);
+}
+
+function normalizeVector3(vector) {
+  const norm = Math.hypot(vector.x, vector.y, vector.z);
+  if (!Number.isFinite(norm) || norm < MIN_ACC_NORM) {
+    return null;
+  }
+
+  return {
+    x: vector.x / norm,
+    y: vector.y / norm,
+    z: vector.z / norm,
+  };
+}
+
+function clampDt(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+
+  return Math.min(seconds, MAX_DT_SECONDS);
+}
+
+function quaternionToEuler(quaternion) {
+  const [w, x, y, z] = quaternion;
+
+  const sinr = 2 * (w * x + y * z);
+  const cosr = 1 - 2 * (x * x + y * y);
+  const roll = Math.atan2(sinr, cosr);
+
+  const sinp = 2 * (w * y - z * x);
+  const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * (Math.PI / 2) : Math.asin(sinp);
+
+  const siny = 2 * (w * z + x * y);
+  const cosy = 1 - 2 * (y * y + z * z);
+  const yaw = Math.atan2(siny, cosy);
+
+  return { roll, pitch, yaw };
+}
+
+function quaternionToTiltHeadingRoll(quaternion) {
+  const euler = quaternionToEuler(quaternion);
+  return {
+    roll: euler.roll * RAD_TO_DEG,
+    pitch: euler.pitch * RAD_TO_DEG,
+    yaw: euler.yaw * RAD_TO_DEG,
+  };
+}
+
+function rotateVectorByQuaternion(vector, quaternion) {
+  const [w, x, y, z] = quaternion;
+  const tx = 2 * (y * vector.z - z * vector.y);
+  const ty = 2 * (z * vector.x - x * vector.z);
+  const tz = 2 * (x * vector.y - y * vector.x);
+
+  return {
+    x: vector.x + w * tx + (y * tz - z * ty),
+    y: vector.y + w * ty + (z * tx - x * tz),
+    z: vector.z + w * tz + (x * ty - y * tx),
+  };
+}
+
+function predictWithGyro(gyro, dtSeconds) {
+  const [q0, q1, q2, q3, bgx, bgy, bgz] = filterState.x;
+  const gx = gyro.x - bgx;
+  const gy = gyro.y - bgy;
+  const gz = gyro.z - bgz;
+
+  const qDot = [
+    0.5 * (-q1 * gx - q2 * gy - q3 * gz),
+    0.5 * (q0 * gx + q2 * gz - q3 * gy),
+    0.5 * (q0 * gy - q1 * gz + q3 * gx),
+    0.5 * (q0 * gz + q1 * gy - q2 * gx),
+  ];
+
+  const nextQuaternion = normalizeQuaternion(numeric.add([q0, q1, q2, q3], numeric.mul(qDot, dtSeconds)));
+  filterState.x[0] = nextQuaternion[0];
+  filterState.x[1] = nextQuaternion[1];
+  filterState.x[2] = nextQuaternion[2];
+  filterState.x[3] = nextQuaternion[3];
+  filterState.P = numeric.add(filterState.P, CONFIG.processNoise);
+}
+
+function updateWithAccelerometer(acc) {
+  const normalizedAcc = normalizeVector3(acc);
+  if (!normalizedAcc) {
+    return false;
+  }
+
+  const [q0, q1, q2, q3] = filterState.x;
+  const measurement = [normalizedAcc.x, normalizedAcc.y, normalizedAcc.z];
+  const gravityPrediction = [
+    2 * (q1 * q3 - q0 * q2),
+    2 * (q0 * q1 + q2 * q3),
+    q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3,
+  ];
+
+  const innovation = numeric.sub(measurement, gravityPrediction);
+  const H = [
+    [-2 * q2, 2 * q3, -2 * q0, 2 * q1, 0, 0, 0],
+    [2 * q1, 2 * q0, 2 * q3, 2 * q2, 0, 0, 0],
+    [2 * q0, -2 * q1, -2 * q2, 2 * q3, 0, 0, 0],
+  ];
+
+  const Ht = numeric.transpose(H);
+  const S = numeric.add(numeric.dot(H, numeric.dot(filterState.P, Ht)), CONFIG.measurementNoise);
+  const K = numeric.dot(filterState.P, numeric.dot(Ht, numeric.inv(S)));
+  const correction = numeric.dot(K, innovation);
+
+  filterState.x = numeric.add(filterState.x, correction);
+  const normalizedQuaternion = normalizeQuaternion(filterState.x.slice(0, 4));
+  filterState.x[0] = normalizedQuaternion[0];
+  filterState.x[1] = normalizedQuaternion[1];
+  filterState.x[2] = normalizedQuaternion[2];
+  filterState.x[3] = normalizedQuaternion[3];
+
+  const identity = numeric.identity(7);
+  filterState.P = numeric.dot(numeric.sub(identity, numeric.dot(K, H)), filterState.P);
+  return true;
+}
+
+function getYawFromQuaternion(quaternion) {
+  const [w, x, y, z] = quaternion;
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+}
+
+function setQuaternionYaw(quaternion, newYaw) {
+  const [w, x, y, z] = quaternion;
+  const roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
+  const sinPitch = 2 * (w * y - z * x);
+  const pitch = Math.abs(sinPitch) >= 1 ? Math.sign(sinPitch) * (Math.PI / 2) : Math.asin(sinPitch);
+
+  const cy = Math.cos(newYaw * 0.5);
+  const sy = Math.sin(newYaw * 0.5);
+  const cp = Math.cos(pitch * 0.5);
+  const sp = Math.sin(pitch * 0.5);
+  const cr = Math.cos(roll * 0.5);
+  const sr = Math.sin(roll * 0.5);
+
+  return [
+    cr * cp * cy + sr * sp * sy,
+    sr * cp * cy - cr * sp * sy,
+    cr * sp * cy + sr * cp * sy,
+    cr * cp * sy - sr * sp * cy,
+  ];
+}
+
+function maybeApplyStationaryYawHold(acc, gyro) {
+  const accNorm = Math.hypot(acc.x, acc.y, acc.z);
+  const gyroNorm = Math.hypot(gyro.x, gyro.y, gyro.z);
+  if (Math.abs(accNorm - 1) >= 0.03 || gyroNorm >= 0.017) {
+    return;
+  }
+
+  const quaternion = filterState.x.slice(0, 4);
+  const yaw = getYawFromQuaternion(quaternion);
+  const adjusted = setQuaternionYaw(quaternion, yaw);
+  filterState.x[0] = adjusted[0];
+  filterState.x[1] = adjusted[1];
+  filterState.x[2] = adjusted[2];
+  filterState.x[3] = adjusted[3];
+}
+
+function resetTiming() {
+  runtimeState.lastPacketTimeUs = null;
+  runtimeState.lastOutputTimeUs = null;
 }
 
 function startCalibration() {
-  calibrating = true;
-  calibSamples = [];
-  postMessage({type:"ack", msg:"calibration started"});
+  runtimeState.calibrating = true;
+  runtimeState.calibrationSamples = [];
+  resetTiming();
+  postMessage({ type: 'ack', msg: 'calibration started' });
 }
 
-let fc_sumG, fc_accSampels,fc_mean, fc_n;
+function buildCalibrationStateFromSamples(samples) {
+  if (!samples.length) {
+    return null;
+  }
+
+  const gyroBias = { x: 0, y: 0, z: 0 };
+  const accAxisSamples = { x: [], y: [], z: [] };
+  for (const sample of samples) {
+    gyroBias.x += sample.gx;
+    gyroBias.y += sample.gy;
+    gyroBias.z += sample.gz;
+    accAxisSamples.x.push(sample.ax);
+    accAxisSamples.y.push(sample.ay);
+    accAxisSamples.z.push(sample.az);
+  }
+
+  const count = samples.length;
+  gyroBias.x /= count;
+  gyroBias.y /= count;
+  gyroBias.z /= count;
+
+  const variance = (values) => {
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    return values.reduce((sum, value) => sum + ((value - mean) * (value - mean)), 0) / values.length;
+  };
+
+  const accVar = [
+    variance(accAxisSamples.x),
+    variance(accAxisSamples.y),
+    variance(accAxisSamples.z),
+  ];
+
+  return { gyroBias, accVar };
+}
+
+function applyCalibrationState(calibrationState) {
+  if (!calibrationState) {
+    return false;
+  }
+
+  const gyroBias = calibrationState.gyroBias;
+  const accVar = calibrationState.accVar;
+  if (!gyroBias || !Array.isArray(accVar) || accVar.length < 3) {
+    return false;
+  }
+
+  const bgx = Number(gyroBias.x);
+  const bgy = Number(gyroBias.y);
+  const bgz = Number(gyroBias.z);
+  const varX = Number(accVar[0]);
+  const varY = Number(accVar[1]);
+  const varZ = Number(accVar[2]);
+  if (![bgx, bgy, bgz, varX, varY, varZ].every(Number.isFinite)) {
+    return false;
+  }
+
+  filterState.x[4] = bgx;
+  filterState.x[5] = bgy;
+  filterState.x[6] = bgz;
+  CONFIG.measurementNoise = numeric.diag([
+    Math.max(varX, 1e-6),
+    Math.max(varY, 1e-6),
+    Math.max(varZ, 1e-6),
+  ]);
+  return true;
+}
 
 function finishCalibration() {
-  if(calibSamples.length === 0) return;
-
-  fc_sumG = {x:0,y:0,z:0};
-  fc_accSamples = {x:[], y:[], z:[]};
-
-  for(const s of calibSamples){
-    sumG.x += s.gx; sumG.y += s.gy; sumG.z += s.gz;
-    fc_accSamples.x.push(s.ax);
-    fc_accSamples.y.push(s.ay);
-    fc_accSamples.z.push(s.az);
-  }
-  fc_n = calibSamples.length;
-
-  kalman.x[4] = fc_sumG.x / fc_n;
-  kalman.x[5] = fc_sumG.y / fc_n;
-  kalman.x[6] = fc_sumG.z / fc_n;
-
-  function variance(arr){
-    fc_mean = arr.reduce((a,b) => a+b,0)/arr.length;
-    return arr.reduce((a,b) => a + (b-fc_mean)*(b-fc_mean), 0)/arr.length;
+  if (!runtimeState.calibrationSamples.length) {
+    runtimeState.calibrating = false;
+    return;
   }
 
-  CONFIG.R = numeric.diag([
-    variance(accSamples.x),
-    variance(accSamples.y),
-    variance(accSamples.z)
-  ]);
+  const calibrationState = buildCalibrationStateFromSamples(runtimeState.calibrationSamples);
+  runtimeState.calibrating = false;
+  runtimeState.calibrationSamples = [];
+  resetTiming();
 
-  calibrating = false;
+  if (!applyCalibrationState(calibrationState)) {
+    return;
+  }
 
   postMessage({
-    type:"calibrated",
-    gyroBias:{x:kalman.x[4], y:kalman.x[5], z:kalman.x[6]},
-    accVar:[CONFIG.R[0][0], CONFIG.R[1][1], CONFIG.R[2][2]]
+    type: 'calibrated',
+    gyroBias: calibrationState.gyroBias,
+    accVar: calibrationState.accVar,
   });
 }
 
-
-// MATRIX FUNCTIONS
-
-/* function identity7() {
-  let I = new Array(49);
-  for(let i=0; i<49; i++) I[i] = 0;
-  for(let i=0; i<7; i++) I[i*7 + i] = 1;
-  return I;
-}
-
-function matAdd7(A, B) {
-  let out = new Array(49);
-  for (let i = 0; i < 49; i++) {
-    out[i] = A[i] + B[i];
+function emitState(timeUs, acc) {
+  if (runtimeState.lastOutputTimeUs !== null && (timeUs - runtimeState.lastOutputTimeUs) < OUTPUT_INTERVAL_US) {
+    return;
   }
-  return out;
+
+  const quaternion = filterState.x.slice(0, 4);
+  const euler = quaternionToEuler(quaternion);
+  postMessage({
+    type: 'state',
+    om_tUs: timeUs,
+    quaternion,
+    euler: {
+      roll: euler.roll * RAD_TO_DEG,
+      pitch: euler.pitch * RAD_TO_DEG,
+      yaw: euler.yaw * RAD_TO_DEG,
+    },
+    tiltHeadingRoll: quaternionToTiltHeadingRoll(quaternion),
+    accWorld: rotateVectorByQuaternion(acc, quaternion),
+  });
+  runtimeState.lastOutputTimeUs = timeUs;
 }
 
-function matSub7(A, B) {
-  let out = new Array(49);
-  for (let i = 0; i < 49; i++) {
-    out[i] = A[i] - B[i];
+function handlePacket(packet) {
+  const timeUs = Number(packet?.time);
+  const acc = {
+    x: Number(packet?.acc?.x || 0) * ACC_SCALE,
+    y: Number(packet?.acc?.y || 0) * ACC_SCALE,
+    z: Number(packet?.acc?.z || 0) * ACC_SCALE,
+  };
+  const gyro = {
+    x: Number(packet?.gyro?.x || 0) * GYRO_SCALE,
+    y: Number(packet?.gyro?.y || 0) * GYRO_SCALE,
+    z: Number(packet?.gyro?.z || 0) * GYRO_SCALE,
+  };
+
+  if (!Number.isFinite(timeUs)) {
+    return;
   }
-  return out;
-}
 
-function matMul7(A, B) {
-  let out = new Array(49).fill(0);
-  for (let r = 0; r < 7; r++) {
-    for (let c = 0; c < 7; c++) {
-      let sum = 0;
-      for (let k = 0; k < 7; k++) {
-        sum += A[r*7 + k] * B[k*7 + c];
+  if (runtimeState.calibrating) {
+    runtimeState.calibrationSamples.push({
+      gx: gyro.x,
+      gy: gyro.y,
+      gz: gyro.z,
+      ax: acc.x,
+      ay: acc.y,
+      az: acc.z,
+    });
+
+    if (runtimeState.calibrationSamples.length >= CONFIG.calibrationSamples) {
+      finishCalibration();
+    }
+    return;
+  }
+
+  if (runtimeState.lastPacketTimeUs !== null) {
+    const dtSeconds = clampDt((timeUs - runtimeState.lastPacketTimeUs) * 1e-6);
+    if (dtSeconds) {
+      predictWithGyro(gyro, dtSeconds);
+      if (updateWithAccelerometer(acc)) {
+        maybeApplyStationaryYawHold(acc, gyro);
       }
-      out[r*7 + c] = sum;
     }
   }
-  return out;
-}
-function matTranspose3x7(H) {
-  let out = new Array(21);
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 7; c++) {
-      out[c*3 + r] = H[r*7 + c];
-    }
-  }
-  return out;
-}
-function matMul7x3_3x3(A, B) {
-  let out = new Array(21).fill(0);
-  for (let r = 0; r < 7; r++) {
-    for (let c = 0; c < 3; c++) {
-      let sum = 0;
-      for (let k = 0; k < 3; k++) {
-        sum += A[r*3 + k] * B[k*3 + c];
-      }
-      out[r*3 + c] = sum;
-    }
-  }
-  return out;
-}
-function matMul3x7_7x3(A, B) {
-  let out = new Array(9).fill(0);
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
-      let sum = 0;
-      for (let k = 0; k < 7; k++) {
-        sum += A[r*7 + k] * B[k*3 + c];
-      }
-      out[r*3 + c] = sum;
-    }
-  }
-  return out;
-}
-function mat3Inv(M) {
-  let a=M[0], b=M[1], c=M[2],
-      d=M[3], e=M[4], f=M[5],
-      g=M[6], h=M[7], i=M[8];
 
-  let det = a*(e*i-f*h) - b*(d*i-f*g) + c*(d*h-e*g);
-  if(Math.abs(det) < 1e-12) return null;
-
-  let invDet = 1/det;
-
-  return [
-    (e*i - f*h)*invDet,
-    (c*h - b*i)*invDet,
-    (b*f - c*e)*invDet,
-    (f*g - d*i)*invDet,
-    (a*i - c*g)*invDet,
-    (c*d - a*f)*invDet,
-    (d*h - e*g)*invDet,
-    (b*g - a*h)*invDet,
-    (a*e - b*d)*invDet
-  ];
+  runtimeState.lastPacketTimeUs = timeUs;
+  emitState(timeUs, acc);
 }
 
+onmessage = (event) => {
+  const data = event.data || {};
 
- */
-
-
-
-
-
-
-
-
-
-
-
-let om_acc, om_gyro,om_tUs, om_euler, om_rollDeg, om_pitchDeg, om_yaw_Deg;
-
-onmessage = function(e){
-  const data = e.data;
-
-  switch(data.type){
-    case "packet":{
-      om_tUs = data.time;
-     om_acc = {
-        x: data.acc.x * ACC_SCALE,
-        y: data.acc.y * ACC_SCALE,
-        z: data.acc.z * ACC_SCALE,
-      };
-      om_gyro = {
-        x: data.gyro.x * GYRO_SCALE,
-        y: data.gyro.y * GYRO_SCALE,
-        z: data.gyro.z * GYRO_SCALE,
-      };
-
-      if(calibrating){
-        calibSamples.push({
-          gx: gyro.x, gy: gyro.y, gz: gyro.z,
-          ax: acc.x, ay: acc.y, az: acc.z
-        });
-        if(calibSamples.length >= CONFIG.CALIBRATION_SAMPLES) finishCalibration();
-        return;
-      }
-
-      if(lastTimeUs !== null){
-        const dt = (om_tUs - lastTimeUs)*1e-6;
-        kalmanPredict(om_gyro, dt);
-        kalmanUpdate(om_acc);
-        maybeYawCorrection(om_acc, om_gyro);
-      }
-      lastTimeUs = om_tUs;
-if (lastOutputTimeUs === null || (tUs - lastOutputTimeUs) >= 50000) {
-      om_euler = quatToEuler(kalman.x.slice(0,4));
-      om_rollDeg = radToDeg(om_euler.roll);
-      om_pitchDeg = radToDeg(om_euler.pitch);
-      om_yawDeg = radToDeg(om_euler.yaw);
-
-      postMessage({
-        type:"state",
-        om_tUs,
-        quaternion: kalman.x.slice(0,4),
-        euler: {roll: om_rollDeg, pitch: om_pitchDeg, yaw: om_yawDeg},
-        tiltHeadingRoll: qToTiltHeadingRoll(kalman.x.slice(0,4)),
-        accWorld: rotateVectorByQuat(om_acc, kalman.x.slice(0,4))
-      });
-    }
+  switch (data.type) {
+    case 'packet':
+      handlePacket(data);
       break;
-    }
-
-    case "startCalib":
+    case 'startCalib':
       startCalibration();
       break;
-
-    case "stopCalib":
+    case 'stopCalib':
       finishCalibration();
+      break;
+    case 'setCalibrationState':
+      if (applyCalibrationState(data.payload)) {
+        resetTiming();
+      }
+      break;
+    default:
       break;
   }
 };
