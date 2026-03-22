@@ -171,6 +171,9 @@ const FILTER_ZERO_PHASE_PAD_MIN_SAMPLES = 96;
 const FILTER_ZERO_PHASE_PAD_MAX_SAMPLES = 1024;
 const lastAppliedFilterSettings = { acc: null, gyro: null };
 const accVectorViewport = new AccVectorViewport();
+accVectorViewport.options.onDisplaySettingsChange = () => {
+    persistCalibrationCookie();
+};
 const alignLoadQuatBtn = document.getElementById('alignLoadQuatBtn');
 const alignApplyQuatBtn = document.getElementById('alignApplyQuatBtn');
 
@@ -1871,6 +1874,58 @@ function sanitizeAccelCalibrationScale(scale) {
     return normalizedScale;
 }
 
+function sanitizeViewportDisplaySettings(settings) {
+    if (!settings || typeof settings !== 'object') {
+        return null;
+    }
+
+    const rawArrowOpacity = settings.arrowOpacity;
+    const rawAxisColors = settings.axisColors;
+
+    const arrowOpacity = {
+        raw: sanitizeArrowOpacity(rawArrowOpacity?.raw, 0.82),
+        result: sanitizeArrowOpacity(rawArrowOpacity?.result, 0.88),
+        world: sanitizeArrowOpacity(rawArrowOpacity?.world, 0.42),
+        frame: sanitizeArrowOpacity(rawArrowOpacity?.frame, 0.58),
+    };
+
+    const axisColors = {
+        x: sanitizeAxisColor(rawAxisColors?.x, '#ff0000'),
+        y: sanitizeAxisColor(rawAxisColors?.y, '#00ff00'),
+        z: sanitizeAxisColor(rawAxisColors?.z, '#0000ff'),
+    };
+
+    const rawVectorColors = settings.vectorColors;
+    const vectorColors = {
+        raw: sanitizeAxisColor(rawVectorColors?.raw, '#ffa000'),
+        result: sanitizeAxisColor(rawVectorColors?.result, '#00e5ff'),
+    };
+
+    return { arrowOpacity, axisColors, vectorColors };
+}
+
+function sanitizeArrowOpacity(value, fallback) {
+    const normalizedValue = Number(value);
+    if (!Number.isFinite(normalizedValue)) {
+        return fallback;
+    }
+
+    return Math.min(1, Math.max(0.15, normalizedValue));
+}
+
+function sanitizeAxisColor(value, fallback) {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+
+    const trimmedValue = value.trim().toLowerCase();
+    if (/^#[0-9a-f]{6}$/i.test(trimmedValue)) {
+        return trimmedValue;
+    }
+
+    return fallback;
+}
+
 function getOrientationLabelForMode(mode) {
     const normalizedMode = Number(mode);
     const existingItem = CSDD2.items?.find((item) => Number(item.value) === normalizedMode);
@@ -1924,6 +1979,11 @@ function getCurrentCalibrationCookieState() {
         state.gravityMagnitude = Number(tempgravity);
     }
 
+    const viewportDisplaySettings = sanitizeViewportDisplaySettings(accVectorViewport.getDisplaySettings?.());
+    if (viewportDisplaySettings) {
+        state.viewportDisplaySettings = viewportDisplaySettings;
+    }
+
     const orientationLabel = getOrientationLabelForMode(state.mode);
     if (orientationLabel) {
         state.orientationLabel = orientationLabel;
@@ -1940,6 +2000,7 @@ function persistCalibrationCookie() {
         || state.worldSimpleGyroState
         || (Number.isFinite(state.accelCalibrationScale) && Math.abs(state.accelCalibrationScale - 1) > 1e-6)
         || state.gravityMagnitude
+        || state.viewportDisplaySettings
     );
 
     if (!hasCalibrationPayload && state.mode === 0) {
@@ -1967,6 +2028,7 @@ function readCalibrationCookieState() {
             worldSimpleGyroState: sanitizeGyroZeroState(parsed?.worldSimpleGyroState),
             accelCalibrationScale: sanitizeAccelCalibrationScale(parsed?.accelCalibrationScale),
             gravityMagnitude: Number(parsed?.gravityMagnitude),
+            viewportDisplaySettings: sanitizeViewportDisplaySettings(parsed?.viewportDisplaySettings),
         };
 
         if (state.version !== CALIBRATION_COOKIE_VERSION) {
@@ -2031,6 +2093,10 @@ function restoreCalibrationFromCookie() {
         optionLabel: state.orientationLabel,
         persistState: false,
     });
+
+    if (state.viewportDisplaySettings) {
+        accVectorViewport.applyDisplaySettings(state.viewportDisplaySettings, { silent: true });
+    }
 
     console.log('Kalibrierung aus Cookie wiederhergestellt:', state);
 }
@@ -2205,7 +2271,7 @@ function applyGravityCutToSample(sample, gravityMagnitude) {
     const normalizedGravity = Number.isFinite(gravityMagnitude) && gravityMagnitude > 0 ? gravityMagnitude : 1000;
     const x = Number(sample.x || 0);
     const y = Number(sample.y || 0);
-    const z = Number(sample.z || 0) - normalizedGravity;
+    const z = Number(sample.z || 0) + normalizedGravity;
 
     return {
         time: Number(sample.time || 0),

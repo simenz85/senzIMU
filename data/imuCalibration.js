@@ -1,5 +1,8 @@
 const { vec3, quat, mat3 } = glMatrix;
 
+const ENU_UP = [0, 0, 1];
+const ENU_GRAVITY_DOWN = [0, 0, -1];
+
 export function meanVector(data) {
   let mean = [0, 0, 0];
   data.forEach(v => {
@@ -107,7 +110,7 @@ export function computeZAlignment(accelData) {
   const gravity = meanVector(normData);
   const gravityNorm = normalizeVector(gravity);
   console.log('Normalized gravity:', gravityNorm);
-  const target = [0, 0, 1];
+  const target = ENU_GRAVITY_DOWN;
   const q = safeRotationTo(gravityNorm, target);
   console.log('Z Alignment quaternion:', q);
   return q;
@@ -130,7 +133,7 @@ export function calibrateWithZPlusXY(accelIdleData, motionData, axis = 'x') {
   console.log('Normalized gravity (Z-Achse):', gravityNorm);
   
   // Rotation von Gravity zu [0,0,1] (Sensor -> World)
-  const targetZ = [0, 0, 1];
+  const targetZ = ENU_GRAVITY_DOWN;
   const zQuat = safeRotationTo(gravityNorm, targetZ);
   console.log('Z Alignment quaternion:', zQuat);
   
@@ -389,7 +392,7 @@ function determineZAxisFromIdleData(accelIdleData) {
 }
 
 function alignZAxis(zAxis) {
-  const targetZ = [0, 0, 1];
+  const targetZ = ENU_GRAVITY_DOWN;
   return safeRotationTo(zAxis, targetZ);
 }
 
@@ -428,7 +431,7 @@ export function calibrateWithZPlusXY2(accelIdleData, motionData, axis = 'x') {
   const gravity = meanVector(normIdleData);
   const gravityNorm = normalizeVector(gravity);
   
-  const targetZ = [0, 0, 1];
+  const targetZ = ENU_GRAVITY_DOWN;
   const zQuat = safeRotationTo(gravityNorm, targetZ);
   
   // 2. XY-Ausrichtung bestimmen
@@ -486,7 +489,7 @@ export function calibrateWithIdleDataOnly(accelIdleData) {
   console.log('Normalized gravity:', gravityNorm);
   
   // 4. Zielrichtung ist [0, 0, 1] (Z-Achse nach oben)
-  const target = [0, 0, 1];
+  const target = ENU_GRAVITY_DOWN;
   
   // 5. Rotation berechnen, die gravityNorm auf target ausrichtet
   const calibrationQuat = safeRotationTo(gravityNorm, target);
@@ -541,16 +544,16 @@ export function simpleZCalibration(accelIdleData) {
   const meanNorm = normalizeVector(mean);
   console.log('Normalized mean:', meanNorm);
   
-  // Quaternion, das von meanNorm zu [0,0,1] rotiert
+  // Quaternion, das den Ruhebeschleunigungsvektor auf ENU-Down [0,0,-1] rotiert
   const q = quat.create();
   const axis = vec3.create();
   
   // Kreuzprodukt für Rotationsachse
-  vec3.cross(axis, meanNorm, [0, 0, 1]);
+  vec3.cross(axis, meanNorm, ENU_GRAVITY_DOWN);
   vec3.normalize(axis, axis);
   
   // Winkel berechnen
-  const dot = vec3.dot(meanNorm, [0, 0, 1]);
+  const dot = vec3.dot(meanNorm, ENU_GRAVITY_DOWN);
   const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
   
   console.log('Rotation axis:', axis);
@@ -564,7 +567,7 @@ export function simpleZCalibration(accelIdleData) {
   vec3.transformQuat(result, testVec, q);
   
   console.log('After calibration:', [result[0], result[1], result[2]]);
-  console.log('Should be close to:', [0, 0, vec3.length(testVec)]);
+  console.log('Should be close to:', [0, 0, -vec3.length(testVec)]);
   
   return q;
 }
@@ -598,7 +601,7 @@ export function calibrateWithZPlusXYSimple(accelIdleData, motionData, axis = 'x'
   console.log('Motion direction (XY):', motionDir);
   
   // 3. Zuerst Z-Ausrichtung
-  const zQuat = safeRotationTo(gravityNorm, [0, 0, 1]);
+  const zQuat = safeRotationTo(gravityNorm, ENU_GRAVITY_DOWN);
   
   // Bewegungsrichtung nach Z-Rotation
   const motionDirZ = vec3.create();
@@ -638,7 +641,7 @@ export function calibrateWithZPlusXYFixed(accelIdleData, motionData) {
     const normMean = normalizeVector(mean);
     console.log("Normalized mean:", normMean);
 
-    const targetZ = [0, 0, 1];
+    const targetZ = ENU_GRAVITY_DOWN;
     const zQuat = quaternionFromVectors(normMean, targetZ);
     console.log("Z-Quaternion:", zQuat);
 

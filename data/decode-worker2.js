@@ -192,7 +192,7 @@ onmessage = function (event) {
               
               total = Math.sqrt(fusionacc.x * fusionacc.x + fusionacc.y * fusionacc.y + fusionacc.z * fusionacc.z);
               if (cutgravity === true) {
-                fusionacc.z = fusionacc.z - gravity;
+                fusionacc.z = fusionacc.z + gravity;
                 //console.log("CUTGRAVITY");
               }
               
@@ -209,7 +209,7 @@ onmessage = function (event) {
               
               if (cutgravity === true) {
                 //console.log("CUTGRAVITY");
-                z = z - gravity;
+                z = z + gravity;
               }
               total = Math.sqrt(x * x + y * y + z * z);
               acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });

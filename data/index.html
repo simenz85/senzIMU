@@ -640,6 +640,94 @@
                     <button type="button" class="vector-align-viewcube-face vector-align-viewcube-back" data-view="back" title="Hinten">H</button>
                     <button type="button" class="vector-align-viewcube-face vector-align-viewcube-bottom" data-view="bottom" title="Unten">U</button>
                   </div>
+                  <div class="vector-align-overlay" aria-label="Viewport Steuerung und Legende">
+                    <details class="vector-align-overlay-details">
+                      <summary class="vector-align-overlay-summary">
+                        <span class="vector-align-overlay-title" aria-label="Viewport-Regler">&lt;</span>
+                        <span class="vector-align-overlay-summary-hint"></span>
+                      </summary>
+                      <div class="vector-align-overlay-controls">
+                        <div class="vector-align-overlay-row vector-align-overlay-row--alpha">
+                          <span class="vector-align-legend-swatch vector-align-legend-swatch--raw"></span>
+                          <label for="alignArrowOpacityRaw">Roh</label>
+                          <input id="alignArrowOpacityRaw" type="range" min="15" max="100" value="82" step="1" data-opacity-group="raw" />
+                          <input id="alignArrowOpacityRawInput" class="vector-align-slider-input vector-align-overlay-input" type="number" min="15" max="100" value="82" step="1" inputmode="numeric" aria-label="Alpha Rohvektor in Prozent" data-opacity-group="raw" />
+                          <span id="alignArrowOpacityRawValue">82%</span>
+                          <input id="alignVectorColorRaw" class="vector-align-color-input" type="color" value="#ffa000" aria-label="Farbe Rohvektor" data-vector-color="raw" />
+                        </div>
+                        <div class="vector-align-overlay-row vector-align-overlay-row--alpha">
+                          <span class="vector-align-legend-swatch vector-align-legend-swatch--result"></span>
+                          <label for="alignArrowOpacityResult">Result</label>
+                          <input id="alignArrowOpacityResult" type="range" min="15" max="100" value="88" step="1" data-opacity-group="result" />
+                          <input id="alignArrowOpacityResultInput" class="vector-align-slider-input vector-align-overlay-input" type="number" min="15" max="100" value="88" step="1" inputmode="numeric" aria-label="Alpha Result-Vektor in Prozent" data-opacity-group="result" />
+                          <span id="alignArrowOpacityResultValue">88%</span>
+                          <input id="alignVectorColorResult" class="vector-align-color-input" type="color" value="#00e5ff" aria-label="Farbe Result-Vektor" data-vector-color="result" />
+                        </div>
+                        <div class="vector-align-overlay-row vector-align-overlay-row--alpha">
+                          <span class="vector-align-legend-swatch vector-align-legend-swatch--world"></span>
+                          <label for="alignArrowOpacityWorld">Welt</label>
+                          <input id="alignArrowOpacityWorld" type="range" min="15" max="100" value="42" step="1" data-opacity-group="world" />
+                          <input id="alignArrowOpacityWorldInput" class="vector-align-slider-input vector-align-overlay-input" type="number" min="15" max="100" value="42" step="1" inputmode="numeric" aria-label="Alpha Weltachsen in Prozent" data-opacity-group="world" />
+                          <span id="alignArrowOpacityWorldValue">42%</span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="vector-align-overlay-row vector-align-overlay-row--alpha">
+                          <span class="vector-align-legend-swatch vector-align-legend-swatch--frame"></span>
+                          <label for="alignArrowOpacityFrame">Frame</label>
+                          <input id="alignArrowOpacityFrame" type="range" min="15" max="100" value="58" step="1" data-opacity-group="frame" />
+                          <input id="alignArrowOpacityFrameInput" class="vector-align-slider-input vector-align-overlay-input" type="number" min="15" max="100" value="58" step="1" inputmode="numeric" aria-label="Alpha Kalibrierter Frame in Prozent" data-opacity-group="frame" />
+                          <span id="alignArrowOpacityFrameValue">58%</span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="vector-align-overlay-row vector-align-overlay-row--axis-color">
+                          <span class="vector-align-legend-swatch" data-axis-color-swatch="x"></span>
+                          <label for="alignAxisColorX">X</label>
+                          <input id="alignAxisColorX" class="vector-align-color-input vector-align-color-input--wide" type="color" value="#ff0000" aria-label="Farbe X-Achse" data-axis-color="x" />
+                          <span class="vector-align-overlay-axis-note">ISO</span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="vector-align-overlay-row vector-align-overlay-row--axis-color">
+                          <span class="vector-align-legend-swatch" data-axis-color-swatch="y"></span>
+                          <label for="alignAxisColorY">Y</label>
+                          <input id="alignAxisColorY" class="vector-align-color-input vector-align-color-input--wide" type="color" value="#00ff00" aria-label="Farbe Y-Achse" data-axis-color="y" />
+                          <span class="vector-align-overlay-axis-note">ISO</span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="vector-align-overlay-row vector-align-overlay-row--axis-color">
+                          <span class="vector-align-legend-swatch" data-axis-color-swatch="z"></span>
+                          <label for="alignAxisColorZ">Z</label>
+                          <input id="alignAxisColorZ" class="vector-align-color-input vector-align-color-input--wide" type="color" value="#0000ff" aria-label="Farbe Z-Achse" data-axis-color="z" />
+                          <span class="vector-align-overlay-axis-note">ISO</span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                          <span class="vector-align-overlay-spacer" aria-hidden="true"></span>
+                        </div>
+                      </div>
+                    </details>
+                    <div class="vector-align-overlay-legend vector-align-overlay-legend--compact">
+                      <div class="vector-align-legend-item">
+                        <span class="vector-align-legend-swatch vector-align-legend-swatch--raw" data-vector-color-swatch="raw"></span>
+                        <span class="vector-align-legend-text">Roh</span>
+                      </div>
+                      <div class="vector-align-legend-item">
+                        <span class="vector-align-legend-swatch vector-align-legend-swatch--result" data-vector-color-swatch="result"></span>
+                        <span class="vector-align-legend-text">ENU</span>
+                      </div>
+                      <div class="vector-align-legend-item">
+                        <span class="vector-align-legend-swatch vector-align-legend-swatch--world" data-axis-color-swatch="x"></span>
+                        <span class="vector-align-legend-text">Welt</span>
+                      </div>
+                      <div class="vector-align-legend-item">
+                        <span class="vector-align-legend-swatch vector-align-legend-swatch--frame" data-axis-color-swatch="y"></span>
+                        <span class="vector-align-legend-text">Frame</span>
+                      </div>
+                      <div class="vector-align-legend-item">
+                        <span class="vector-align-legend-swatch vector-align-legend-swatch--gyro"></span>
+                        <span class="vector-align-legend-text">Gyro</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -685,7 +773,7 @@
 
                 <div class="vector-align-metrics-grid">
                   <section class="vector-align-card vector-align-card--metrics">
-                    <div class="vector-align-card-title">Eingangsvektor</div>
+                    <div class="vector-align-card-title">Eingangsvektor (Sensorraum)</div>
                     <div class="vector-align-readout-grid">
                       <div class="vector-align-readout-label">X</div>
                       <div id="alignRawX" class="vector-align-readout-value">0.0</div>
@@ -699,13 +787,13 @@
                   </section>
 
                   <section class="vector-align-card vector-align-card--metrics">
-                    <div class="vector-align-card-title">Result-Vektor</div>
+                    <div class="vector-align-card-title">Result-Vektor (ENU)</div>
                     <div class="vector-align-readout-grid">
-                      <div class="vector-align-readout-label">X</div>
+                      <div class="vector-align-readout-label">X / East</div>
                       <div id="alignRotatedX" class="vector-align-readout-value">0.0</div>
-                      <div class="vector-align-readout-label">Y</div>
+                      <div class="vector-align-readout-label">Y / North</div>
                       <div id="alignRotatedY" class="vector-align-readout-value">0.0</div>
-                      <div class="vector-align-readout-label">Z</div>
+                      <div class="vector-align-readout-label">Z / Up</div>
                       <div id="alignRotatedZ" class="vector-align-readout-value">0.0</div>
                       <div class="vector-align-readout-label">|a|</div>
                       <div id="alignRotatedMagnitude" class="vector-align-readout-value">0.0</div>
@@ -713,13 +801,13 @@
                   </section>
 
                   <section id="alignGyroCard" class="vector-align-card vector-align-card--metrics">
-                    <div class="vector-align-card-title">Gyro [m°/s]</div>
+                    <div class="vector-align-card-title">Gyro [m°/s] (ENU)</div>
                     <div class="vector-align-readout-grid vector-align-gyro-grid">
-                      <div class="vector-align-readout-label">GX</div>
+                      <div class="vector-align-readout-label">GX / East</div>
                       <div id="alignGyroRotatedX" class="vector-align-readout-value">0.0</div>
-                      <div class="vector-align-readout-label">GY</div>
+                      <div class="vector-align-readout-label">GY / North</div>
                       <div id="alignGyroRotatedY" class="vector-align-readout-value">0.0</div>
-                      <div class="vector-align-readout-label">GZ</div>
+                      <div class="vector-align-readout-label">GZ / Up</div>
                       <div id="alignGyroRotatedZ" class="vector-align-readout-value">0.0</div>
                       <div class="vector-align-readout-label">|ω|</div>
                       <div id="alignGyroRotatedMagnitude" class="vector-align-readout-value">0.0</div>

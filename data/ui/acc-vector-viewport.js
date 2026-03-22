@@ -31,6 +31,10 @@ export class AccVectorViewport {
             z: document.getElementById(options.sliderZValueId || 'alignRotZValue'),
         };
 
+        this.arrowOpacityElements = this.getArrowOpacityElements(options);
+        this.axisColorElements = this.getAxisColorElements(options);
+        this.vectorColorElements = this.getVectorColorElements(options);
+
         this.rawValueElements = {
             x: document.getElementById(options.rawXId || 'alignRawX'),
             y: document.getElementById(options.rawYId || 'alignRawY'),
@@ -88,12 +92,20 @@ export class AccVectorViewport {
         this.hasLoggedFirstFrame = false;
         this.sourceMode = 'raw';
         this.gyroVisible = true;
+        this.arrowOpacity = { raw: 0.82, result: 0.88, world: 0.42, frame: 0.58 };
+        this.arrowOpacityBindings = { raw: [], result: [], world: [], frame: [] };
+        this.axisColors = { x: '#ff0000', y: '#00ff00', z: '#0000ff' };
+        this.vectorColors = { raw: '#ffa000', result: '#00e5ff' };
 
         this.boundHandleResize = this.handleResize.bind(this);
         this.boundHandleSliderInput = this.handleSliderInput.bind(this);
         this.boundHandleSliderTextInput = this.handleSliderTextInput.bind(this);
         this.boundHandleSliderTextCommit = this.handleSliderTextCommit.bind(this);
         this.boundHandleStepperClick = this.handleStepperClick.bind(this);
+        this.boundHandleArrowOpacityInput = this.handleArrowOpacityInput.bind(this);
+        this.boundHandleArrowOpacityCommit = this.handleArrowOpacityCommit.bind(this);
+        this.boundHandleAxisColorInput = this.handleAxisColorInput.bind(this);
+        this.boundHandleVectorColorInput = this.handleVectorColorInput.bind(this);
         this.boundResetRotation = this.resetRotation.bind(this);
         this.boundHandleViewcubeClick = this.handleViewcubeClick.bind(this);
 
@@ -122,6 +134,54 @@ export class AccVectorViewport {
         console.warn(`${this.debugPrefix} ${message}`);
     }
 
+    getArrowOpacityElements(options = {}) {
+        return {
+            raw: {
+                slider: document.getElementById(options.arrowOpacityRawSliderId || 'alignArrowOpacityRaw'),
+                input: document.getElementById(options.arrowOpacityRawInputId || 'alignArrowOpacityRawInput'),
+                value: document.getElementById(options.arrowOpacityRawValueId || 'alignArrowOpacityRawValue'),
+            },
+            result: {
+                slider: document.getElementById(options.arrowOpacityResultSliderId || 'alignArrowOpacityResult'),
+                input: document.getElementById(options.arrowOpacityResultInputId || 'alignArrowOpacityResultInput'),
+                value: document.getElementById(options.arrowOpacityResultValueId || 'alignArrowOpacityResultValue'),
+            },
+            world: {
+                slider: document.getElementById(options.arrowOpacityWorldSliderId || 'alignArrowOpacityWorld'),
+                input: document.getElementById(options.arrowOpacityWorldInputId || 'alignArrowOpacityWorldInput'),
+                value: document.getElementById(options.arrowOpacityWorldValueId || 'alignArrowOpacityWorldValue'),
+            },
+            frame: {
+                slider: document.getElementById(options.arrowOpacityFrameSliderId || 'alignArrowOpacityFrame'),
+                input: document.getElementById(options.arrowOpacityFrameInputId || 'alignArrowOpacityFrameInput'),
+                value: document.getElementById(options.arrowOpacityFrameValueId || 'alignArrowOpacityFrameValue'),
+            },
+        };
+    }
+
+    getAxisColorElements(options = {}) {
+        return {
+            x: document.getElementById(options.axisColorXInputId || 'alignAxisColorX'),
+            y: document.getElementById(options.axisColorYInputId || 'alignAxisColorY'),
+            z: document.getElementById(options.axisColorZInputId || 'alignAxisColorZ'),
+        };
+    }
+
+    getVectorColorElements(options = {}) {
+        return {
+            raw: document.getElementById(options.vectorColorRawInputId || 'alignVectorColorRaw'),
+            result: document.getElementById(options.vectorColorResultInputId || 'alignVectorColorResult'),
+        };
+    }
+
+    getAxisColorSwatches(axisName) {
+        return Array.from(this.root?.querySelectorAll(`[data-axis-color-swatch="${axisName}"]`) || []);
+    }
+
+    getVectorColorSwatches(groupName) {
+        return Array.from(this.root?.querySelectorAll(`[data-vector-color-swatch="${groupName}"]`) || []);
+    }
+
     ensureElements() {
         this.root = document.getElementById(this.options.rootId || 'accVectorTab');
         this.viewport = document.getElementById(this.options.viewportId || 'accVectorViewport');
@@ -139,6 +199,10 @@ export class AccVectorViewport {
             y: document.getElementById(this.options.sliderYInputId || 'alignRotYInput'),
             z: document.getElementById(this.options.sliderZInputId || 'alignRotZInput'),
         };
+
+        this.arrowOpacityElements = this.getArrowOpacityElements(this.options);
+        this.axisColorElements = this.getAxisColorElements(this.options);
+        this.vectorColorElements = this.getVectorColorElements(this.options);
 
         this.gyroCard = document.getElementById(this.options.gyroCardId || 'alignGyroCard');
         this.gyroRotatedValueElements = {
@@ -166,6 +230,15 @@ export class AccVectorViewport {
             calibratedSourceButtonPresent: Boolean(this.sourceButtons.calibrated),
             calibratedCutSourceButtonPresent: Boolean(this.sourceButtons.calibratedCut),
             gyroToggleButtonPresent: Boolean(this.sourceButtons.gyroToggle),
+            arrowOpacityRawPresent: Boolean(this.arrowOpacityElements.raw?.slider),
+            arrowOpacityResultPresent: Boolean(this.arrowOpacityElements.result?.slider),
+            arrowOpacityWorldPresent: Boolean(this.arrowOpacityElements.world?.slider),
+            arrowOpacityFramePresent: Boolean(this.arrowOpacityElements.frame?.slider),
+            axisColorXPresent: Boolean(this.axisColorElements.x),
+            axisColorYPresent: Boolean(this.axisColorElements.y),
+            axisColorZPresent: Boolean(this.axisColorElements.z),
+            vectorColorRawPresent: Boolean(this.vectorColorElements.raw),
+            vectorColorResultPresent: Boolean(this.vectorColorElements.result),
         });
 
         return Boolean(this.root && this.viewport);
@@ -200,13 +273,22 @@ export class AccVectorViewport {
             this.setSourceMode(this.sourceMode, { silent: true });
             this.resetRotation();
             this.setAccelerationSamples({
-                raw: { x: 0, y: 0, z: 1000 },
-                calibrated: { x: 0, y: 0, z: 1000 },
+                raw: { x: 0, y: 0, z: -1000 },
+                calibrated: { x: 0, y: 0, z: -1000 },
                 calibratedCut: { x: 0, y: 0, z: 0 },
             });
             this.setGyroSamples({
                 calibrated: { x: 0, y: 0, z: 0 },
                 calibratedCut: { x: 0, y: 0, z: 0 },
+            });
+            Object.keys(this.arrowOpacity).forEach((groupName) => {
+                this.setArrowOpacity(groupName, this.arrowOpacity[groupName], { silent: true });
+            });
+            Object.keys(this.axisColors).forEach((axisName) => {
+                this.setAxisColor(axisName, this.axisColors[axisName], { silent: true });
+            });
+            Object.keys(this.vectorColors).forEach((groupName) => {
+                this.setVectorColor(groupName, this.vectorColors[groupName], { silent: true });
             });
             this.setGyroVisible(this.gyroVisible, { silent: true });
             this.initialized = true;
@@ -236,7 +318,8 @@ export class AccVectorViewport {
         this.scene.background = new THREE.Color(0x040b10);
 
         this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-        this.camera.position.set(4.8, 3.2, 5.2);
+        this.camera.up.set(0, 0, 1);
+        this.camera.position.set(4.8, -3.2, 5.2);
 
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
         this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
@@ -259,7 +342,7 @@ export class AccVectorViewport {
         this.controls.dampingFactor = 0.08;
         this.controls.minDistance = 2.5;
         this.controls.maxDistance = 12;
-        this.controls.target.set(0, 0.5, 0);
+        this.controls.target.set(0, 0, 0.35);
 
         const ambientLight = new THREE.HemisphereLight(0xeaffff, 0x081218, 0.92);
         this.scene.add(ambientLight);
@@ -281,35 +364,40 @@ export class AccVectorViewport {
             majorOpacity: 0.34,
             minorOpacity: 0.14,
         });
-        this.circularGrid.rotation.x = Math.PI / 2;
-
         this.worldAxesGroup = new THREE.Group();
         this.scene.add(this.worldAxesGroup);
 
-        const worldAxisX = this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xc62828, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18 });
-        const worldAxisY = this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x2e7d32, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18 });
-        const worldAxisZ = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1565c0, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18 });
+        const worldAxisX = this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xc62828, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
+        const worldAxisY = this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x2e7d32, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
+        const worldAxisZ = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1565c0, { length: 2.8, shaftRadius: 0.014, headRadius: 0.055, headLength: 0.18, opacityGroup: 'world' });
+        this.worldAxes = { x: worldAxisX, y: worldAxisY, z: worldAxisZ };
         this.worldAxesGroup.add(worldAxisX, worldAxisY, worldAxisZ);
-        this.worldAxesGroup.add(this.createAxisLabel('X', 0xd84343, new THREE.Vector3(3.05, 0.08, 0)));
-        this.worldAxesGroup.add(this.createAxisLabel('Y', 0x43a047, new THREE.Vector3(0.08, 3.05, 0)));
-        this.worldAxesGroup.add(this.createAxisLabel('Z', 0x1e88e5, new THREE.Vector3(0, 0.08, 3.05)));
+        this.worldAxisLabels = {
+            x: this.createAxisLabel('X / E', 0xff0000, new THREE.Vector3(3.1, 0.1, 0)),
+            y: this.createAxisLabel('Y / N', 0x00ff00, new THREE.Vector3(0.12, 3.1, 0)),
+            z: this.createAxisLabel('Z / U', 0x0000ff, new THREE.Vector3(0, 0.12, 3.1)),
+        };
+        this.worldAxesGroup.add(this.worldAxisLabels.x, this.worldAxisLabels.y, this.worldAxisLabels.z);
 
         this.rotatedFrameGroup = new THREE.Group();
         this.scene.add(this.rotatedFrameGroup);
         this.rotatedFrameGroup.add(this.circularGrid);
 
         this.rotatedAxes = {
-            x: this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xe53935, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18 }),
-            y: this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x43a047, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18 }),
-            z: this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1e88e5, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18 }),
+            x: this.createArrowMesh(new THREE.Vector3(1, 0, 0), 0xe53935, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
+            y: this.createArrowMesh(new THREE.Vector3(0, 1, 0), 0x43a047, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
+            z: this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x1e88e5, { length: 2.1, shaftRadius: 0.018, headRadius: 0.07, headLength: 0.18, opacityGroup: 'frame' }),
         };
         this.rotatedFrameGroup.add(this.rotatedAxes.x, this.rotatedAxes.y, this.rotatedAxes.z);
-        this.rotatedFrameGroup.add(this.createAxisLabel("X'", 0xef5350, new THREE.Vector3(2.28, 0.12, 0)));
-        this.rotatedFrameGroup.add(this.createAxisLabel("Y'", 0x66bb6a, new THREE.Vector3(0.1, 2.28, 0)));
-        this.rotatedFrameGroup.add(this.createAxisLabel("Z'", 0x42a5f5, new THREE.Vector3(0, 0.12, 2.28)));
+        this.rotatedAxisLabels = {
+            x: this.createAxisLabel("X' / E'", 0xff0000, new THREE.Vector3(2.32, 0.12, 0), 0.28),
+            y: this.createAxisLabel("Y' / N'", 0x00ff00, new THREE.Vector3(0.12, 2.32, 0), 0.28),
+            z: this.createAxisLabel("Z' / U'", 0x0000ff, new THREE.Vector3(0, 0.12, 2.32), 0.28),
+        };
+        this.rotatedFrameGroup.add(this.rotatedAxisLabels.x, this.rotatedAxisLabels.y, this.rotatedAxisLabels.z);
 
         this.boardMesh = new THREE.Mesh(
-            new THREE.BoxGeometry(1.8, 0.08, 1.1),
+            new THREE.BoxGeometry(1.8, 1.1, 0.08),
             new THREE.MeshStandardMaterial({ color: 0x314955, metalness: 0.18, roughness: 0.58 })
         );
         this.rotatedFrameGroup.add(this.boardMesh);
@@ -318,13 +406,13 @@ export class AccVectorViewport {
             new THREE.BoxGeometry(0.32, 0.22, 0.32),
             new THREE.MeshStandardMaterial({ color: 0xffa11a, metalness: 0.16, roughness: 0.44 })
         );
-        sensorCap.position.set(0.55, 0.14, 0);
+        sensorCap.position.set(0.55, 0, 0.14);
         this.rotatedFrameGroup.add(sensorCap);
 
-        this.rawVectorArrow = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0xffa000, { length: 1, shaftRadius: 0.08, headRadius: 0.2, headLength: 0.38 });
-        this.rotatedVectorArrow = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x00e5ff, { length: 1, shaftRadius: 0.08, headRadius: 0.2, headLength: 0.38 });
+        this.rawVectorArrow = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0xffa000, { length: 1, shaftRadius: 0.08, headRadius: 0.2, headLength: 0.38, opacityGroup: 'raw' });
+        this.rotatedVectorArrow = this.createArrowMesh(new THREE.Vector3(0, 0, 1), 0x00e5ff, { length: 1, shaftRadius: 0.08, headRadius: 0.2, headLength: 0.38, opacityGroup: 'result' });
         this.scene.add(this.rawVectorArrow);
-        this.rotatedVectorArrow.position.set(0, 0.03, 0);
+        this.rotatedVectorArrow.position.set(0, 0, 0.03);
         this.scene.add(this.rotatedVectorArrow);
 
         this.gyroGroup = new THREE.Group();
@@ -370,6 +458,36 @@ export class AccVectorViewport {
             this.viewcube.addEventListener('click', this.boundHandleViewcubeClick);
         }
 
+        Object.values(this.arrowOpacityElements).forEach((groupElements) => {
+            if (groupElements?.slider) {
+                groupElements.slider.addEventListener('input', this.boundHandleArrowOpacityInput);
+            }
+
+            if (groupElements?.input) {
+                groupElements.input.addEventListener('input', this.boundHandleArrowOpacityInput);
+                groupElements.input.addEventListener('change', this.boundHandleArrowOpacityCommit);
+                groupElements.input.addEventListener('blur', this.boundHandleArrowOpacityCommit);
+            }
+        });
+
+        Object.values(this.axisColorElements).forEach((input) => {
+            if (!input) {
+                return;
+            }
+
+            input.addEventListener('input', this.boundHandleAxisColorInput);
+            input.addEventListener('change', this.boundHandleAxisColorInput);
+        });
+
+        Object.values(this.vectorColorElements).forEach((input) => {
+            if (!input) {
+                return;
+            }
+
+            input.addEventListener('input', this.boundHandleVectorColorInput);
+            input.addEventListener('change', this.boundHandleVectorColorInput);
+        });
+
         if (this.sourceButtons.raw) {
             this.sourceButtons.raw.addEventListener('click', () => this.setSourceMode('raw'));
         }
@@ -406,6 +524,7 @@ export class AccVectorViewport {
         const headRadius = options.headRadius ?? 0.11;
         const shaftRadius = options.shaftRadius ?? 0.045;
         const shaftLength = Math.max(0.001, length - headLength);
+        const opacityGroup = options.opacityGroup || 'result';
 
         const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0 });
         const group = new THREE.Group();
@@ -422,10 +541,19 @@ export class AccVectorViewport {
         group.userData = {
             shaft,
             head,
+            material,
             headLength,
             shaftLength,
             direction: direction.clone().normalize(),
+            opacityGroup,
         };
+
+        if (!Array.isArray(this.arrowOpacityBindings[opacityGroup])) {
+            this.arrowOpacityBindings[opacityGroup] = [];
+        }
+
+        this.arrowOpacityBindings[opacityGroup].push(material);
+        this.applyArrowOpacity(opacityGroup);
 
         this.setArrowVector(group, direction, length);
         return group;
@@ -448,8 +576,8 @@ export class AccVectorViewport {
                 const angleA = (index / segments) * Math.PI * 2;
                 const angleB = ((index + 1) / segments) * Math.PI * 2;
                 target.push(
-                    Math.cos(angleA) * currentRadius, 0, Math.sin(angleA) * currentRadius,
-                    Math.cos(angleB) * currentRadius, 0, Math.sin(angleB) * currentRadius,
+                    Math.cos(angleA) * currentRadius, Math.sin(angleA) * currentRadius, 0,
+                    Math.cos(angleB) * currentRadius, Math.sin(angleB) * currentRadius, 0,
                 );
             }
         };
@@ -457,7 +585,7 @@ export class AccVectorViewport {
         const pushRadial = (target, angle) => {
             target.push(
                 0, 0, 0,
-                Math.cos(angle) * radius, 0, Math.sin(angle) * radius,
+                Math.cos(angle) * radius, Math.sin(angle) * radius, 0,
             );
         };
 
@@ -568,6 +696,8 @@ export class AccVectorViewport {
         const sprite = new THREE.Sprite(material);
         sprite.position.copy(position);
         sprite.scale.set(scale * 2, scale, 1);
+        sprite.userData.text = text;
+        sprite.userData.baseScale = scale;
         return sprite;
     }
 
@@ -657,11 +787,279 @@ export class AccVectorViewport {
         this.updateRotation();
     }
 
+    handleArrowOpacityInput(event) {
+        const opacityGroup = event?.target?.dataset?.opacityGroup;
+        const numericValue = Number(event?.target?.value);
+        if (!opacityGroup || !Number.isFinite(numericValue)) {
+            return;
+        }
+
+        this.setArrowOpacity(opacityGroup, numericValue / 100, { silent: true });
+    }
+
+    handleArrowOpacityCommit(event) {
+        const opacityGroup = event?.target?.dataset?.opacityGroup;
+        if (!opacityGroup) {
+            return;
+        }
+
+        const fallbackPercent = Math.round((this.arrowOpacity[opacityGroup] ?? 0.5) * 100);
+        const numericValue = Number(event?.target?.value);
+        const nextPercent = Number.isFinite(numericValue) ? numericValue : fallbackPercent;
+        this.setArrowOpacity(opacityGroup, nextPercent / 100, { silent: true });
+    }
+
+    handleAxisColorInput(event) {
+        const colorGroup = event?.target?.dataset?.axisColor;
+        const colorValue = event?.target?.value;
+        if (!colorGroup) {
+            return;
+        }
+
+        this.setAxisColor(colorGroup, colorValue, { silent: true });
+    }
+
+    handleVectorColorInput(event) {
+        const colorGroup = event?.target?.dataset?.vectorColor;
+        const colorValue = event?.target?.value;
+        if (!colorGroup) {
+            return;
+        }
+
+        this.setVectorColor(colorGroup, colorValue, { silent: true });
+    }
+
     resetRotation() {
         this.setSliderValue('x', 0);
         this.setSliderValue('y', 0);
         this.setSliderValue('z', 0);
         this.updateRotation();
+    }
+
+    setArrowOpacity(groupName, value, options = {}) {
+        if (!groupName || !(groupName in this.arrowOpacity)) {
+            return;
+        }
+
+        const normalizedOpacity = this.normalizeArrowOpacity(groupName, value);
+        this.arrowOpacity[groupName] = normalizedOpacity;
+        const groupElements = this.arrowOpacityElements[groupName] || {};
+
+        const percentValue = String(Math.round(normalizedOpacity * 100));
+        if (groupElements.slider) {
+            groupElements.slider.value = percentValue;
+        }
+
+        if (groupElements.input) {
+            groupElements.input.value = percentValue;
+        }
+
+        if (groupElements.value) {
+            groupElements.value.textContent = `${percentValue}%`;
+        }
+
+        this.applyArrowOpacity(groupName);
+
+        if (!options.silent) {
+            this.log('arrow opacity changed', { groupName, opacity: normalizedOpacity });
+            this.emitDisplaySettingsChange();
+        }
+    }
+
+    normalizeArrowOpacity(groupName, value) {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue)) {
+            return this.arrowOpacity[groupName] ?? 0.5;
+        }
+
+        return Math.min(1, Math.max(0.15, numericValue));
+    }
+
+    applyArrowOpacity(groupName) {
+        const materials = this.arrowOpacityBindings[groupName];
+        if (!Array.isArray(materials) || materials.length === 0) {
+            return;
+        }
+
+        const opacity = this.arrowOpacity[groupName] ?? 0.5;
+        materials.forEach((material) => {
+            if (!material) {
+                return;
+            }
+
+            material.opacity = Math.min(1, Math.max(0.08, opacity));
+        });
+    }
+
+    setAxisColor(axisName, colorValue, options = {}) {
+        if (!axisName || !(axisName in this.axisColors)) {
+            return;
+        }
+
+        const normalizedColor = this.normalizeAxisColor(axisName, colorValue);
+        this.axisColors[axisName] = normalizedColor;
+        this.applyAxisColor(axisName);
+        this.syncAxisColorControls(axisName);
+
+        if (!options.silent) {
+            this.log('axis color changed', { axisName, color: normalizedColor });
+            this.emitDisplaySettingsChange();
+        }
+    }
+
+    normalizeAxisColor(axisName, colorValue) {
+        if (typeof colorValue !== 'string') {
+            return this.axisColors[axisName] ?? '#ffffff';
+        }
+
+        const trimmedColor = colorValue.trim();
+        if (/^#[0-9a-f]{6}$/i.test(trimmedColor)) {
+            return trimmedColor.toLowerCase();
+        }
+
+        return this.axisColors[axisName] ?? '#ffffff';
+    }
+
+    applyAxisColor(axisName) {
+        const colorValue = this.axisColors[axisName] ?? '#ffffff';
+        const worldArrow = this.worldAxes?.[axisName]?.userData?.material;
+        const frameArrow = this.rotatedAxes?.[axisName]?.userData?.material;
+
+        if (worldArrow?.color) {
+            worldArrow.color.set(colorValue);
+        }
+
+        if (frameArrow?.color) {
+            frameArrow.color.set(colorValue);
+        }
+
+        this.updateAxisLabelColor(this.worldAxisLabels?.[axisName], colorValue);
+        this.updateAxisLabelColor(this.rotatedAxisLabels?.[axisName], colorValue);
+    }
+
+    updateAxisLabelColor(labelSprite, colorValue) {
+        if (!labelSprite?.userData?.text || !labelSprite?.position) {
+            return;
+        }
+
+        const nextLabel = this.createAxisLabel(
+            labelSprite.userData.text,
+            Number.parseInt(colorValue.slice(1), 16),
+            labelSprite.position.clone(),
+            labelSprite.userData.baseScale || 0.34,
+        );
+        labelSprite.material.map.dispose();
+        labelSprite.material.dispose();
+        labelSprite.material = nextLabel.material;
+    }
+
+    syncAxisColorControls(axisName) {
+        const colorValue = this.axisColors[axisName] ?? '#ffffff';
+        const input = this.axisColorElements[axisName];
+        if (input) {
+            input.value = colorValue;
+        }
+
+        this.getAxisColorSwatches(axisName).forEach((swatch) => {
+            swatch.style.background = colorValue;
+        });
+    }
+
+    setVectorColor(groupName, colorValue, options = {}) {
+        if (!groupName || !(groupName in this.vectorColors)) {
+            return;
+        }
+
+        const normalizedColor = this.normalizeVectorColor(groupName, colorValue);
+        this.vectorColors[groupName] = normalizedColor;
+        this.applyVectorColor(groupName);
+        this.syncVectorColorControls(groupName);
+
+        if (!options.silent) {
+            this.log('vector color changed', { groupName, color: normalizedColor });
+            this.emitDisplaySettingsChange();
+        }
+    }
+
+    normalizeVectorColor(groupName, colorValue) {
+        if (typeof colorValue !== 'string') {
+            return this.vectorColors[groupName] ?? '#ffffff';
+        }
+
+        const trimmedColor = colorValue.trim().toLowerCase();
+        if (/^#[0-9a-f]{6}$/i.test(trimmedColor)) {
+            return trimmedColor;
+        }
+
+        return this.vectorColors[groupName] ?? '#ffffff';
+    }
+
+    applyVectorColor(groupName) {
+        const arrow = groupName === 'raw' ? this.rawVectorArrow : this.rotatedVectorArrow;
+        const material = arrow?.userData?.material;
+        const colorValue = this.vectorColors[groupName] ?? '#ffffff';
+        if (material?.color) {
+            material.color.set(colorValue);
+        }
+    }
+
+    syncVectorColorControls(groupName) {
+        const colorValue = this.vectorColors[groupName] ?? '#ffffff';
+        const input = this.vectorColorElements[groupName];
+        if (input) {
+            input.value = colorValue;
+        }
+
+        this.getVectorColorSwatches(groupName).forEach((swatch) => {
+            swatch.style.background = colorValue;
+        });
+    }
+
+    getDisplaySettings() {
+        return {
+            arrowOpacity: { ...this.arrowOpacity },
+            axisColors: { ...this.axisColors },
+            vectorColors: { ...this.vectorColors },
+        };
+    }
+
+    applyDisplaySettings(settings = {}, options = {}) {
+        const nextOpacity = settings?.arrowOpacity;
+        if (nextOpacity && typeof nextOpacity === 'object') {
+            Object.entries(nextOpacity).forEach(([groupName, value]) => {
+                if (groupName in this.arrowOpacity) {
+                    this.setArrowOpacity(groupName, value, { silent: true });
+                }
+            });
+        }
+
+        const nextAxisColors = settings?.axisColors;
+        if (nextAxisColors && typeof nextAxisColors === 'object') {
+            Object.entries(nextAxisColors).forEach(([axisName, value]) => {
+                if (axisName in this.axisColors) {
+                    this.setAxisColor(axisName, value, { silent: true });
+                }
+            });
+        }
+
+        const nextVectorColors = settings?.vectorColors;
+        if (nextVectorColors && typeof nextVectorColors === 'object') {
+            Object.entries(nextVectorColors).forEach(([groupName, value]) => {
+                if (groupName in this.vectorColors) {
+                    this.setVectorColor(groupName, value, { silent: true });
+                }
+            });
+        }
+
+        if (!options.silent) {
+            this.emitDisplaySettingsChange();
+        }
+    }
+
+    emitDisplaySettingsChange() {
+        if (typeof this.options.onDisplaySettingsChange === 'function') {
+            this.options.onDisplaySettingsChange(this.getDisplaySettings());
+        }
     }
 
     snapToView(direction) {
@@ -672,12 +1070,12 @@ export class AccVectorViewport {
         const target = this.controls.target.clone();
         const distance = Math.max(this.camera.position.distanceTo(target), 4.8);
         const viewVectors = {
-            front: new this.THREE.Vector3(0, 0, 1),
-            back: new this.THREE.Vector3(0, 0, -1),
+            front: new this.THREE.Vector3(0, -1, 0),
+            back: new this.THREE.Vector3(0, 1, 0),
             right: new this.THREE.Vector3(1, 0, 0),
             left: new this.THREE.Vector3(-1, 0, 0),
-            top: new this.THREE.Vector3(0, 1, 0),
-            bottom: new this.THREE.Vector3(0, -1, 0),
+            top: new this.THREE.Vector3(0, 0, 1),
+            bottom: new this.THREE.Vector3(0, 0, -1),
         };
 
         const nextDirection = viewVectors[direction];
@@ -687,11 +1085,11 @@ export class AccVectorViewport {
 
         this.camera.position.copy(target).add(nextDirection.clone().multiplyScalar(distance));
         if (direction === 'top') {
-            this.camera.up.set(0, 0, -1);
-        } else if (direction === 'bottom') {
-            this.camera.up.set(0, 0, 1);
-        } else {
             this.camera.up.set(0, 1, 0);
+        } else if (direction === 'bottom') {
+            this.camera.up.set(0, -1, 0);
+        } else {
+            this.camera.up.set(0, 0, 1);
         }
 
         this.camera.lookAt(target);
@@ -814,7 +1212,7 @@ export class AccVectorViewport {
 
         this.rotationQuaternion.setFromEuler(euler);
         const displayQuaternion = this.rotationQuaternion.clone().normalize();
-        this.rotatedFrameGroup.quaternion.copy(displayQuaternion);
+        this.rotatedFrameGroup.quaternion.copy(this.getFrameQuaternionObject() || new THREE.Quaternion());
         this.updateQuaternionReadout(displayQuaternion);
         this.updateVectors();
 
@@ -1087,6 +1485,15 @@ export class AccVectorViewport {
         return this.rotationQuaternion.clone().normalize();
     }
 
+    getFrameQuaternionObject() {
+        const appliedQuaternion = this.getAppliedQuaternionObject();
+        if (!appliedQuaternion) {
+            return null;
+        }
+
+        return appliedQuaternion.clone().invert().normalize();
+    }
+
     getAppliedQuaternion() {
         const quaternion = this.getAppliedQuaternionObject();
         if (!quaternion) {
@@ -1117,7 +1524,7 @@ export class AccVectorViewport {
         this.updateSliderLabel('y', Number(this.sliderElements.y?.value || 0));
         this.updateSliderLabel('z', Number(this.sliderElements.z?.value || 0));
 
-        this.rotatedFrameGroup.quaternion.copy(normalizedQuaternion);
+        this.rotatedFrameGroup.quaternion.copy(this.getFrameQuaternionObject() || new this.THREE.Quaternion());
         this.updateQuaternionReadout(normalizedQuaternion);
         this.updateVectors();
 
