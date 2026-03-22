@@ -553,7 +553,7 @@ esp_netif_dhcps_option(
 ////////////////////////////////////////////////////////////////////////////////
 // HTTP SERVER STATIC FILE HANDLER
 
-#define FILE_CHUNK_SIZE 1024*10  // 1 KB pro Chunk
+#define FILE_CHUNK_SIZE (1024 * 10)
 esp_err_t http_serve_static_file(httpd_req_t *req) {
     char filepath[1024];
     const char* base_path = "/littlefs";
@@ -572,18 +572,37 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+    bool is_html = false;
+    bool is_static_asset = false;
+
     // MIME-Type setzen
     const char *ext = strrchr(filepath, '.');
     if (ext) {
         if (strcasecmp(ext, ".css") == 0) {
             httpd_resp_set_type(req, "text/css");
+            is_static_asset = true;
         } else if (strcasecmp(ext, ".js") == 0) {
             httpd_resp_set_type(req, "application/javascript");
+            is_static_asset = true;
         } else if (strcasecmp(ext, ".svg") == 0) {
             httpd_resp_set_type(req, "image/svg+xml");
+            is_static_asset = true;
+        } else if (strcasecmp(ext, ".png") == 0) {
+            httpd_resp_set_type(req, "image/png");
+            is_static_asset = true;
+        } else if (strcasecmp(ext, ".glb") == 0) {
+            httpd_resp_set_type(req, "model/gltf-binary");
+            is_static_asset = true;
         } else if (strcasecmp(ext, ".html") == 0) {
             httpd_resp_set_type(req, "text/html");
+            is_html = true;
         }
+    }
+
+    if (is_html) {
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    } else if (is_static_asset) {
+        httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=300");
     }
 
     // Chunk-Puffer im PSRAM allokieren, wenn vorhanden
@@ -626,7 +645,7 @@ void start_http_server() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
     // Priorität erhöhen
-    config.task_priority = 5;  // z.B. Priorität 5 (Standard oft 3)
+    config.task_priority = 8;
 
 
 // Optional: Task-Stack-Größe ggf. anpassen
@@ -636,6 +655,7 @@ void start_http_server() {
     config.backlog_conn = 2;         // Standard: 1
     config.lru_purge_enable = true;  // Alte Verbindungen bereinigen
     config.max_uri_handlers = 25;
+    config.max_req_hdr_len = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -1359,8 +1379,8 @@ extern "C" void app_main() {
 
 
 //xTaskCreatePinnedToCore(systemMonitorTask, "sys_monitor", 6144, NULL, 5, NULL, tskNO_AFFINITY);
-xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 5, NULL, tskNO_AFFINITY);
-xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 5, NULL, tskNO_AFFINITY);
+xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 4, NULL, tskNO_AFFINITY);
+xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 4, NULL, tskNO_AFFINITY);
                             
     // Hauptloop zum Beispiel für weiter Optionen
     while (1) {

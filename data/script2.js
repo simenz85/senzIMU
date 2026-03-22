@@ -352,6 +352,14 @@ motionWorker.onmessage = (event) => {
     );
 };
 
+function setBootOverlayState(state, message, hint) {
+    try {
+        globalThis.__espBootOverlay?.setState?.(state, message, hint);
+    } catch (error) {
+        console.warn('Boot-Overlay konnte nicht aktualisiert werden:', error);
+    }
+}
+
 window.addEventListener('dashboardTabChanged', (event) => {
     console.log('[ACC-3D] dashboardTabChanged', event.detail);
     accVectorViewport.setVisible(event.detail?.sectionId === 'vectorAlignArea');
@@ -2058,6 +2066,11 @@ function setCookieValue(name, value, maxAgeSeconds) {
     document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; samesite=lax`;
 }
 
+function clearLegacyPersistenceCookies() {
+    clearCookieValue(CALIBRATION_COOKIE_NAME);
+    clearCookieValue(APP_SETTINGS_COOKIE_NAME);
+}
+
 function setLocalStorageValue(name, value) {
     try {
         globalThis.localStorage?.setItem(name, value);
@@ -2351,8 +2364,8 @@ function getCurrentAppSettingsState() {
 function persistAppSettingsCookie() {
     try {
         const serializedState = JSON.stringify(getCurrentAppSettingsState());
-        setCookieValue(APP_SETTINGS_COOKIE_NAME, serializedState, APP_SETTINGS_COOKIE_MAX_AGE_SECONDS);
         setLocalStorageValue(APP_SETTINGS_STORAGE_KEY, serializedState);
+        clearCookieValue(APP_SETTINGS_COOKIE_NAME);
         return true;
     } catch (error) {
         console.warn('App-Settings konnten nicht gespeichert werden:', error);
@@ -2422,10 +2435,11 @@ function initializeAppSettingsPersistenceBindings() {
 function restoreAppSettingsFromCookie() {
     const persisted = readAppSettingsCookieState();
     if (!persisted?.state) {
+        clearCookieValue(APP_SETTINGS_COOKIE_NAME);
         return false;
     }
 
-    const { state, source } = persisted;
+    const { state } = persisted;
 
     try {
         if (state.fft) {
@@ -2604,9 +2618,7 @@ function restoreAppSettingsFromCookie() {
             }
         }
 
-        if (source === 'localStorage') {
-            persistAppSettingsCookie();
-        }
+        persistAppSettingsCookie();
 
         return true;
     } catch (error) {
@@ -2885,8 +2897,8 @@ function persistCalibrationCookie() {
     }
 
     const serializedState = JSON.stringify(state);
-    setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
     setLocalStorageValue(CALIBRATION_STORAGE_KEY, serializedState);
+    clearCookieValue(CALIBRATION_COOKIE_NAME);
 }
 
 function parseCalibrationPersistedState(rawState) {
@@ -2957,10 +2969,11 @@ function readCalibrationCookieState() {
 function restoreCalibrationFromCookie() {
     const persisted = readCalibrationCookieState();
     if (!persisted?.state) {
+        clearCookieValue(CALIBRATION_COOKIE_NAME);
         return;
     }
 
-    const { state, source } = persisted;
+    const { state } = persisted;
 
     if (state.worldSimpleQuaternion) {
         setOrientationCalibrationQuaternion(state.worldSimpleQuaternion, { persistState: false });
@@ -3016,11 +3029,6 @@ function restoreCalibrationFromCookie() {
 
     if (state.motionViewportDisplaySettings) {
         motionViewport.applyDisplaySettings(state.motionViewportDisplaySettings, { silent: true });
-    }
-
-    if (source === 'localStorage') {
-        const serializedState = JSON.stringify(getCurrentCalibrationCookieState());
-        setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
     }
 
     persistCalibrationCookie();
@@ -3421,6 +3429,24 @@ function buildLiveAccelerationSample(rawSample, processedSample) {
     }
 
     return calibratedSample;
+}
+
+function buildMotionAccelerationSample(rawSample, processedSample) {
+    const raw = rawSample || processedSample || null;
+    if (!raw) {
+        return null;
+    }
+
+    const gravityMagnitude = getViewportGravityMagnitude();
+    const gravityVector = getGravityCutVectorSample(gravityMagnitude);
+
+    if (currentOrientationMode === 0) {
+        const baseSample = processedSample || raw;
+        return applyGravityCutToSample(baseSample, gravityMagnitude, gravityVector) || baseSample;
+    }
+
+    const calibratedSample = buildViewportBaseAccelerationSample(raw) || processedSample || raw;
+    return applyGravityCutToSample(calibratedSample, gravityMagnitude, gravityVector) || calibratedSample;
 }
 
 function buildLiveGyroSample(rawSample, processedSample) {
@@ -4044,6 +4070,8 @@ const fusionWorker = new Worker('fusion-worker5.js');
 // === Init ===
 document.addEventListener("DOMContentLoaded", () => {
 
+    clearLegacyPersistenceCookies();
+
     setupFilterWorker();
     //initChart();
     //enableChartZoomAndPan();
@@ -4195,10 +4223,17 @@ function setupWSWorker() {
             }
         } else if (type === "connected") {
             console.log("WebSocket verbunden.");
+            setBootOverlayState('ready');
         } else if (type === "closed") {
             console.warn("WebSocket getrennt.");
+            if (!globalThis.__espBootOverlay?.isReady?.()) {
+                setBootOverlayState('loading', 'WebSocket getrennt, neuer Verbindungsversuch...', 'Bitte kurz warten.');
+            }
         } else if (type === "error") {
             console.error("WebSocket-Fehler:", payload);
+            if (!globalThis.__espBootOverlay?.isReady?.()) {
+                setBootOverlayState('loading', 'WebSocket-Verbindung wird aufgebaut...', 'Falls es haengt, Seite kurz neu laden.');
+            }
         }
     };
 }
@@ -4329,10 +4364,14 @@ function setupDecodeWorker() {
         const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = event.data;
 
         if ((acc && acc.length > 0) || (gyro && gyro.length > 0)) {
+            const motionAccSamples = Array.isArray(acc)
+                ? acc.map((sample, index) => buildMotionAccelerationSample(accraw?.[index], sample) || sample)
+                : [];
+
             motionWorker.postMessage({
                 type: 'batch',
                 payload: {
-                    acc: Array.isArray(acc) ? acc : [],
+                    acc: motionAccSamples,
                     gyro: Array.isArray(gyro) ? gyro : [],
                 },
             });
@@ -4556,6 +4595,7 @@ function connectWebSocket() {
     }
 
     console.log("[WS] Verbinde zu WebSocket:", url);
+    setBootOverlayState('loading', 'Verbinde mit dem ESP-WebSocket...', url);
     wsWorker.postMessage({ type: "connect", wsServerUrl: url });
 }
 

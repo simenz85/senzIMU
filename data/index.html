@@ -7,18 +7,129 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <link rel="icon" type="image/png" href="icons/favicon.png">
+  <style>
+    #bootOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 3000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: radial-gradient(circle at top, rgba(56, 101, 150, 0.32), rgba(24, 28, 36, 0) 34%), linear-gradient(180deg, #18202a 0%, #10151c 100%);
+      color: #f1f4f8;
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      transition: opacity 220ms ease, visibility 220ms ease;
+    }
+
+    #bootOverlay.is-hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .boot-card {
+      min-width: min(420px, 100%);
+      max-width: 520px;
+      padding: 28px 26px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      background: rgba(21, 27, 35, 0.86);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(10px);
+    }
+
+    .boot-title {
+      margin: 0 0 10px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #ffd600;
+    }
+
+    .boot-status {
+      margin: 0;
+      font-size: 1.05rem;
+      line-height: 1.5;
+    }
+
+    .boot-hint {
+      margin-top: 12px;
+      color: rgba(241, 244, 248, 0.72);
+      font-size: 0.95rem;
+    }
+
+    .boot-progress {
+      position: relative;
+      overflow: hidden;
+      height: 8px;
+      margin-top: 18px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .boot-progress::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: 42%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #ffd600 0%, #ff9d00 100%);
+      box-shadow: 0 0 18px rgba(255, 214, 0, 0.35);
+      animation: boot-progress-slide 1.15s ease-in-out infinite;
+    }
+
+    @keyframes boot-progress-slide {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
+    }
+  </style>
+  <script>
+    (function () {
+      let ready = false;
+      window.__espBootOverlay = {
+        setState(state, message, hint) {
+          const overlay = document.getElementById('bootOverlay');
+          if (!overlay || ready) {
+            return;
+          }
+          const status = document.getElementById('bootOverlayStatus');
+          const hintElement = document.getElementById('bootOverlayHint');
+          if (state === 'ready') {
+            ready = true;
+            overlay.classList.add('is-hidden');
+            window.setTimeout(function () {
+              overlay.remove();
+            }, 260);
+            return;
+          }
+          overlay.dataset.state = state || 'loading';
+          if (status && message) {
+            status.textContent = message;
+          }
+          if (hintElement && hint) {
+            hintElement.textContent = hint;
+          }
+        },
+        isReady() {
+          return ready;
+        }
+      };
+    }());
+  </script>
   <!--link rel="stylesheet" href="all.min.css"> -->>
   <link rel="stylesheet" href="uPlot.min.css">
   <link rel="stylesheet" href="stylesheet.css">
-  <script src="uPlot.iife.min.js"></script>
-  <script src="fft.min.js"></script>
-  <script src="fili.min.js"></script>
-  <script src="three.min.js"></script>
-  <script src="OrbitControls.min.js"></script>
-  <script src="GLTFLoader.js"></script>
+  <script defer src="uPlot.iife.min.js"></script>
+  <script defer src="fft.min.js"></script>
+  <script defer src="fili.min.js"></script>
+  <script defer src="three.min.js"></script>
+  <script defer src="OrbitControls.min.js"></script>
+  <script defer src="GLTFLoader.js"></script>
 
 
-  <script src="CSS2DRenderer.js"></script>
+  <script defer src="CSS2DRenderer.js"></script>
 
 
 
@@ -28,6 +139,15 @@
 </head>
 
 <body>
+
+  <div id="bootOverlay" data-state="loading">
+    <div class="boot-card">
+      <p class="boot-title">senzIMU</p>
+      <p id="bootOverlayStatus" class="boot-status">Lade Dashboard-Dateien...</p>
+      <div class="boot-progress"></div>
+      <div id="bootOverlayHint" class="boot-hint">Der ESP bereitet Weboberfläche und Sensorverbindung vor.</div>
+    </div>
+  </div>
 
 
 
