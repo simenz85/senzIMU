@@ -52,13 +52,16 @@
 #define RINGBUF_SIZE     (PACKET_SIZE * RINGBUF_PACKETS)
 
 
-#define STREAMBUFFER_SIZE 4096*16      // z.B. Platz für >500 Samples (7 Byte/Sample)
+#define STREAMBUFFER_SIZE 4096*32      // Mehr Luft fuer Bursts, bevor Backpressure einsetzt
 #define STREAM_TRIGGER_LEVEL 7      // Minimum: 1 gesamter Sample-Frame
 
 
-#define MEMP_NUM_TCP_PCB 5       // Standard: 4
-#define MEMP_NUM_TCP_SEG 32      // Standard: 16
-#define PBUF_POOL_SIZE 16        // Standard: 8
+// =========================================================================
+// WICHTIG: lwIP-Konfigurationen (wie max TCP Connections)
+// koennen NICHT hier via #define geaendert werden!
+// Bitte ueber `idf.py menuconfig` -> `Component config` -> `LWIP` anpassen!
+// Insbesondere: CONFIG_LWIP_MAX_ACTIVE_TCP auf mindestens 16 erhoehen!
+// =========================================================================
 
 // CONFIG IDS
 
@@ -83,7 +86,147 @@ typedef struct __attribute__((packed)) {
     uint8_t data[6]; // 6 Byte: Wert(e) oder Padding
 } ConfigPacket7B;
 
+typedef struct {
+    uint32_t sensor_bytes_read;
+    uint32_t sensor_packets_read;
+    uint32_t stream_dropped_bytes;
+    uint32_t ws_bytes_sent;
+    uint32_t ws_frames_sent;
+    uint32_t ws_send_errors;
+    uint32_t stream_backlog_peak;
+} runtime_transport_stats_t;
+
 StreamBufferHandle_t sensorStream;
+static runtime_transport_stats_t g_runtime_transport_stats = {};
+static bool g_temp_sensor_ready = false;
+
+static runtime_transport_stats_t snapshot_runtime_transport_stats() {
+    runtime_transport_stats_t snapshot = {
+        .sensor_bytes_read = __atomic_exchange_n(&g_runtime_transport_stats.sensor_bytes_read, 0, __ATOMIC_RELAXED),
+        .sensor_packets_read = __atomic_exchange_n(&g_runtime_transport_stats.sensor_packets_read, 0, __ATOMIC_RELAXED),
+        .stream_dropped_bytes = __atomic_exchange_n(&g_runtime_transport_stats.stream_dropped_bytes, 0, __ATOMIC_RELAXED),
+        .ws_bytes_sent = __atomic_exchange_n(&g_runtime_transport_stats.ws_bytes_sent, 0, __ATOMIC_RELAXED),
+        .ws_frames_sent = __atomic_exchange_n(&g_runtime_transport_stats.ws_frames_sent, 0, __ATOMIC_RELAXED),
+        .ws_send_errors = __atomic_exchange_n(&g_runtime_transport_stats.ws_send_errors, 0, __ATOMIC_RELAXED),
+        .stream_backlog_peak = __atomic_exchange_n(&g_runtime_transport_stats.stream_backlog_peak, 0, __ATOMIC_RELAXED),
+    };
+    return snapshot;
+}
+
+static void init_system_telemetry() {
+    temp_sensor_config_t temp_sensor = {
+        .dac_offset = TSENS_DAC_L2,
+        .clk_div = 6,
+    };
+
+    esp_err_t ret = temp_sensor_set_config(temp_sensor);
+    if (ret == ESP_OK) {
+        ret = temp_sensor_start();
+    }
+
+    if (ret == ESP_OK) {
+        g_temp_sensor_ready = true;
+    } else {
+        ESP_LOGW(TAG, "Temperatursensor-Telemetrie nicht verfügbar: %s", esp_err_to_name(ret));
+    }
+}
+
+static float sample_cpu_temperature_c() {
+    if (!g_temp_sensor_ready) {
+        return NAN;
+    }
+
+    float cpu_temp = 0.0f;
+    if (temp_sensor_read_celsius(&cpu_temp) != ESP_OK) {
+        return NAN;
+    }
+
+    return cpu_temp;
+}
+
+static int sample_cpu_load_percent() {
+#ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    const UBaseType_t task_count = uxTaskGetNumberOfTasks();
+    if (task_count == 0) {
+        return -1;
+    }
+
+    TaskStatus_t *task_status_array = (TaskStatus_t *)malloc(sizeof(TaskStatus_t) * task_count);
+    if (task_status_array == NULL) {
+        return -1;
+    }
+
+    uint32_t total_runtime = 0;
+    const UBaseType_t populated = uxTaskGetSystemState(task_status_array, task_count, &total_runtime);
+    if (populated == 0 || total_runtime == 0) {
+        free(task_status_array);
+        return -1;
+    }
+
+    uint64_t idle_runtime = 0;
+    for (UBaseType_t i = 0; i < populated; i++) {
+        if (strncmp(task_status_array[i].pcTaskName, "IDLE", 4) == 0) {
+            idle_runtime += task_status_array[i].ulRunTimeCounter;
+        }
+    }
+
+    free(task_status_array);
+
+    const uint64_t total_runtime_64 = total_runtime;
+    if (idle_runtime >= total_runtime_64) {
+        return 0;
+    }
+
+    const uint64_t busy_runtime = total_runtime_64 - idle_runtime;
+    return (int)((busy_runtime * 100ULL) / total_runtime_64);
+#else
+    return -1;
+#endif
+}
+
+static void update_stream_backlog_peak(size_t backlog_bytes) {
+    uint32_t current_peak = __atomic_load_n(&g_runtime_transport_stats.stream_backlog_peak, __ATOMIC_RELAXED);
+    while (backlog_bytes > current_peak) {
+        if (__atomic_compare_exchange_n(
+                &g_runtime_transport_stats.stream_backlog_peak,
+                &current_peak,
+                (uint32_t)backlog_bytes,
+                false,
+                __ATOMIC_RELAXED,
+                __ATOMIC_RELAXED)) {
+            break;
+        }
+    }
+}
+
+static size_t shed_sensor_stream_bytes(size_t bytes_to_drop) {
+    uint8_t discard_buffer[PACKET_SIZE * 64];
+    size_t total_dropped = 0;
+    size_t remaining = bytes_to_drop - (bytes_to_drop % PACKET_SIZE);
+
+    while (remaining >= PACKET_SIZE) {
+        size_t chunk = remaining < sizeof(discard_buffer) ? remaining : sizeof(discard_buffer);
+        chunk -= (chunk % PACKET_SIZE);
+        if (chunk < PACKET_SIZE) {
+            break;
+        }
+
+        size_t dropped = xStreamBufferReceive(sensorStream, discard_buffer, chunk, 0);
+        dropped -= (dropped % PACKET_SIZE);
+        if (dropped < PACKET_SIZE) {
+            break;
+        }
+
+        total_dropped += dropped;
+        remaining -= dropped;
+    }
+
+    if (total_dropped > 0) {
+        __atomic_add_fetch(&g_runtime_transport_stats.stream_dropped_bytes, total_dropped, __ATOMIC_RELAXED);
+    }
+
+    return total_dropped;
+}
 
 
 void send_config_value(uint8_t subId, uint16_t value) {
@@ -340,6 +483,118 @@ httpd_handle_t ws_server = NULL;
 #define MAX_CLIENTS 8
 int ws_clients[MAX_CLIENTS];
 TickType_t ws_last_pong[MAX_CLIENTS];
+
+static int count_active_ws_clients() {
+    int count = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (ws_clients[i] >= 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+typedef struct {
+    httpd_handle_t server;
+    int fd;
+    httpd_ws_type_t type;
+    uint8_t *payload;
+    size_t len;
+} ws_send_work_item_t;
+
+static volatile uint32_t g_ws_inflight_work_items = 0;
+
+#define WS_MAX_INFLIGHT_WORK_ITEMS 3
+
+static uint8_t *alloc_ws_payload_buffer(size_t len) {
+    if (len == 0) {
+        return NULL;
+    }
+
+    uint8_t *buffer = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buffer == NULL) {
+        buffer = (uint8_t *)malloc(len);
+    }
+
+    return buffer;
+}
+
+static void ws_send_work(void *arg) {
+    ws_send_work_item_t *item = (ws_send_work_item_t *)arg;
+    if (item == NULL) {
+        return;
+    }
+
+    httpd_ws_frame_t frame = {
+        .final = true,
+        .fragmented = false,
+        .type = item->type,
+        .payload = item->payload,
+        .len = item->len,
+    };
+
+    const esp_err_t result = httpd_ws_send_frame_async(item->server, item->fd, &frame);
+    if (result != ESP_OK) {
+        __atomic_add_fetch(&g_runtime_transport_stats.ws_send_errors, 1, __ATOMIC_RELAXED);
+        ESP_LOGW("WS", "Send error async (FD %d): %s", item->fd, esp_err_to_name(result));
+    }
+
+    if (item->payload != NULL) {
+        free(item->payload);
+    }
+    __atomic_sub_fetch(&g_ws_inflight_work_items, 1, __ATOMIC_RELAXED);
+    free(item);
+}
+
+static esp_err_t queue_ws_frame_copy(httpd_handle_t server_handle, int fd, httpd_ws_type_t type, const uint8_t *payload, size_t len) {
+    if (server_handle == NULL) {
+        return ESP_FAIL;
+    }
+
+    if (__atomic_load_n(&g_ws_inflight_work_items, __ATOMIC_RELAXED) >= WS_MAX_INFLIGHT_WORK_ITEMS) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    __atomic_add_fetch(&g_ws_inflight_work_items, 1, __ATOMIC_RELAXED);
+
+    ws_send_work_item_t *item = (ws_send_work_item_t *)heap_caps_malloc(sizeof(ws_send_work_item_t), MALLOC_CAP_8BIT);
+    if (item == NULL) {
+        item = (ws_send_work_item_t *)malloc(sizeof(ws_send_work_item_t));
+    }
+    if (item == NULL) {
+        __atomic_sub_fetch(&g_ws_inflight_work_items, 1, __ATOMIC_RELAXED);
+        return ESP_ERR_NO_MEM;
+    }
+
+    uint8_t *payload_copy = NULL;
+    if (len > 0) {
+        payload_copy = alloc_ws_payload_buffer(len);
+        if (payload_copy == NULL) {
+            __atomic_sub_fetch(&g_ws_inflight_work_items, 1, __ATOMIC_RELAXED);
+            free(item);
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(payload_copy, payload, len);
+    }
+
+    item->server = server_handle;
+    item->fd = fd;
+    item->type = type;
+    item->payload = payload_copy;
+    item->len = len;
+
+    const esp_err_t queue_result = httpd_queue_work(server_handle, ws_send_work, item);
+    if (queue_result != ESP_OK) {
+        __atomic_sub_fetch(&g_ws_inflight_work_items, 1, __ATOMIC_RELAXED);
+        if (payload_copy != NULL) {
+            free(payload_copy);
+        }
+        free(item);
+        return queue_result;
+    }
+
+    return ESP_OK;
+}
 
 // IMU device
 spi_device_handle_t spiDevice;
@@ -605,6 +860,10 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
         httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=300");
     }
 
+    // Viele Browser laden zahlreiche Assets parallel. Fuer statische Antworten
+    // erzwingen wir Connection: close, damit HTTP-Sockets schnell wieder frei werden.
+    httpd_resp_set_hdr(req, "Connection", "close");
+
     // Chunk-Puffer im PSRAM allokieren, wenn vorhanden
     char *chunk = (char *) heap_caps_malloc(FILE_CHUNK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!chunk) {
@@ -643,22 +902,30 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
 
 void start_http_server() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    const int lwip_reserved_sockets = 3;
+    const int safe_open_sockets = (CONFIG_LWIP_MAX_SOCKETS > lwip_reserved_sockets)
+        ? (CONFIG_LWIP_MAX_SOCKETS - lwip_reserved_sockets)
+        : 1;
 
-    // Priorität erhöhen
+    // HTTPD nicht zu niedrig priorisieren, damit Verbindungsaufbau und Asset-Serving
+    // unter Sensorlast weiterhin zeitnah bedient werden.
     config.task_priority = 8;
 
 
 // Optional: Task-Stack-Größe ggf. anpassen
 
     config.stack_size = 8192*2;  // Beispielwert, an deinen Bedarf anpassen
-    config.max_open_sockets = 4;     // Standard: 3
-    config.backlog_conn = 2;         // Standard: 1
+    config.max_open_sockets = safe_open_sockets;
+    config.backlog_conn = safe_open_sockets;
     config.lru_purge_enable = true;  // Alte Verbindungen bereinigen
     config.max_uri_handlers = 25;
     config.max_req_hdr_len = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
-    if (httpd_start(&server, &config) == ESP_OK) {
+    ESP_LOGI("HTTP", "LWIP_MAX_SOCKETS=%d, HTTP max_open_sockets=%d", CONFIG_LWIP_MAX_SOCKETS, config.max_open_sockets);
+
+    esp_err_t start_err = httpd_start(&server, &config);
+    if (start_err == ESP_OK) {
         // Root-Handler
         httpd_uri_t root = {
             .uri = "/",
@@ -666,7 +933,10 @@ void start_http_server() {
             .handler = http_serve_static_file,
             .user_ctx = NULL
         };
-        httpd_register_uri_handler(server, &root);
+        esp_err_t root_err = httpd_register_uri_handler(server, &root);
+        if (root_err != ESP_OK) {
+            ESP_LOGE("HTTP", "Root-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(root_err));
+        }
 
         // WebSocket Handler
         httpd_uri_t ws_uri = {
@@ -679,7 +949,10 @@ void start_http_server() {
             
             
         };
-        httpd_register_uri_handler(server, &ws_uri);
+        esp_err_t ws_err = httpd_register_uri_handler(server, &ws_uri);
+        if (ws_err != ESP_OK) {
+            ESP_LOGE("HTTP", "WebSocket-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(ws_err));
+        }
 
         // Wildcard für andere Dateien
         httpd_uri_t wildcard = {
@@ -688,11 +961,16 @@ void start_http_server() {
             .handler = http_serve_static_file,
             .user_ctx = NULL
         };
-        httpd_register_uri_handler(server, &wildcard);
+        esp_err_t wildcard_err = httpd_register_uri_handler(server, &wildcard);
+        if (wildcard_err != ESP_OK) {
+            ESP_LOGE("HTTP", "Wildcard-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(wildcard_err));
+        }
 
         ws_server = server;  // global für ws senden
 
         ESP_LOGI("HTTP", "HTTP Server & WebSocket gestartet");
+    } else {
+        ESP_LOGE("HTTP", "httpd_start fehlgeschlagen: %s", esp_err_to_name(start_err));
     }
 }
 
@@ -924,8 +1202,7 @@ void ws_keepalive_task(void *arg) {
             };
 
             if (httpd_ws_send_frame_async(ws_server, fd, &ping_pkt) != ESP_OK) {
-                ESP_LOGW("WS_Keepalive", "PING an FD %d fehlgeschlagen, entferne Client", fd);
-                ws_clients[i] = -1;
+                ESP_LOGW("WS_Keepalive", "PING an FD %d fehlgeschlagen, lasse Client bis zum Timeout bestehen", fd);
                 continue;
             }
 
@@ -995,7 +1272,7 @@ void initIMU() {
     }
 
     imu.setIncrement();
-    imu.setFifoDepth(3000);
+    imu.setFifoDepth(4096);
     imu.setAccelBatchDataRate(pendingConfig.accelDataRate);
     imu.setGyroBatchDataRate(pendingConfig.gyroDataRate);
     imu.initialize(FIFO_SETTINGS);
@@ -1126,9 +1403,13 @@ void sensor_task(void* pvParameters) {
                 break;
             }
 
+            __atomic_add_fetch(&g_runtime_transport_stats.sensor_bytes_read, burst, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&g_runtime_transport_stats.sensor_packets_read, burst / PACKET_SIZE, __ATOMIC_RELAXED);
+
             size_t sent = xStreamBufferSend(sensorStream, fifoBuf, burst, pdMS_TO_TICKS(2));
             if (sent < burst) {
                 TickType_t now = xTaskGetTickCount();
+                __atomic_add_fetch(&g_runtime_transport_stats.stream_dropped_bytes, (burst - sent), __ATOMIC_RELAXED);
                 if ((now - last_overflow_log) >= pdMS_TO_TICKS(1000)) {
                     ESP_LOGW(TAG, "StreamBuffer overflow/backpressure: %d Bytes verloren.", (burst - sent));
                     last_overflow_log = now;
@@ -1155,50 +1436,196 @@ void sensor_task(void* pvParameters) {
 ////////////////////////////////////////////////////////////////////////////////
 // WS NET TASK: Pakete sammeln und an alle WebSocket Clients senden
 
-#define MAX_PACKETS_PER_FRAME 512
+#define MAX_PACKETS_PER_FRAME 256
+#define MIN_PACKETS_PER_FRAME 32
 #define MAX_FRAME_SIZE (PACKET_SIZE * MAX_PACKETS_PER_FRAME)
+#define WS_FRAME_WAIT_MS 8
+#define WS_FRAME_ACCUMULATION_MS 3
+#define WS_SEND_NOMEM_BACKOFF_MS 40
+#define WS_SEND_FAIL_BACKOFF_MS 120
+#define WS_STREAM_HIGH_WATERMARK_BYTES (STREAMBUFFER_SIZE * 3 / 4)
+#define WS_STREAM_SHED_BYTES (PACKET_SIZE * 256)
 
 void ws_net_task(void *arg) {
     uint8_t send_buffer[MAX_FRAME_SIZE];
+    int64_t last_stats_sent_us = esp_timer_get_time();
+    int64_t ws_send_backoff_until_us = 0;
+    int64_t last_nomem_log_us = 0;
+    int64_t last_shed_log_us = 0;
+    uint32_t consecutive_pressure_events = 0;
+    uint32_t calm_send_cycles = 0;
+    size_t current_frame_size_limit = MAX_FRAME_SIZE;
     esp_task_wdt_add(NULL);
     ESP_LOGI(TAG, "WEBSOCKET TASK - READY");
 
     while (1) {
-        size_t total_bytes = 0;
+        const int64_t loop_now_us = esp_timer_get_time();
+        const size_t backlog_before_receive = xStreamBufferBytesAvailable(sensorStream);
+        update_stream_backlog_peak(backlog_before_receive);
 
-        while (total_bytes + PACKET_SIZE <= MAX_FRAME_SIZE) {
-            size_t bytes_read = xStreamBufferReceive(sensorStream,
-                                                     send_buffer + total_bytes,
-                                                     PACKET_SIZE,
-                                                     pdMS_TO_TICKS(1));
-            if (bytes_read != PACKET_SIZE) {
-                // Nicht genug Daten für weiteres Paket
-                break;
+        if (backlog_before_receive >= WS_STREAM_HIGH_WATERMARK_BYTES) {
+            const size_t shed_bytes = shed_sensor_stream_bytes(WS_STREAM_SHED_BYTES);
+            if (shed_bytes > 0 && (loop_now_us - last_shed_log_us) >= 1000000) {
+                last_shed_log_us = loop_now_us;
+                ESP_LOGW(TAG, "WS Überlastschutz aktiv: %u Bytes verworfen, um aktuelle Daten bevorzugt zu halten.", (unsigned int)shed_bytes);
             }
-            total_bytes += PACKET_SIZE;
+        }
+
+        if (loop_now_us < ws_send_backoff_until_us) {
+            vTaskDelay(pdMS_TO_TICKS(WS_SEND_NOMEM_BACKOFF_MS));
+            continue;
+        }
+
+        size_t total_bytes = xStreamBufferReceive(sensorStream,
+                                                 send_buffer,
+                                                 PACKET_SIZE,
+                                                 pdMS_TO_TICKS(WS_FRAME_WAIT_MS));
+
+        if (total_bytes > 0) {
+            const int64_t accumulation_deadline_us = esp_timer_get_time() + ((int64_t)WS_FRAME_ACCUMULATION_MS * 1000);
+
+            while (total_bytes + PACKET_SIZE <= current_frame_size_limit) {
+                const size_t available_bytes = xStreamBufferBytesAvailable(sensorStream);
+                const size_t remaining_capacity = current_frame_size_limit - total_bytes;
+                const size_t chunk_bytes = available_bytes < remaining_capacity ? available_bytes : remaining_capacity;
+                const size_t aligned_chunk_bytes = chunk_bytes - (chunk_bytes % PACKET_SIZE);
+
+                if (aligned_chunk_bytes < PACKET_SIZE) {
+                    if (esp_timer_get_time() >= accumulation_deadline_us) {
+                        break;
+                    }
+
+                    vTaskDelay(pdMS_TO_TICKS(1));
+                    continue;
+                }
+
+                const size_t bytes_read = xStreamBufferReceive(sensorStream,
+                                                               send_buffer + total_bytes,
+                                                               aligned_chunk_bytes,
+                                                               0);
+                const size_t aligned_bytes_read = bytes_read - (bytes_read % PACKET_SIZE);
+                if (aligned_bytes_read < PACKET_SIZE) {
+                    break;
+                }
+
+                total_bytes += aligned_bytes_read;
+            }
+
+            total_bytes -= (total_bytes % PACKET_SIZE);
         }
 
         if (total_bytes > 0) {
-            httpd_ws_frame_t frame = {
-                .final = true,
-                .type = HTTPD_WS_TYPE_BINARY,
-                .payload = send_buffer,
-                .len = total_bytes
-            };
-
             for (int i = 0; i < MAX_CLIENTS; i++) {
                 if (ws_clients[i] >= 0) {
-                    esp_err_t res = httpd_ws_send_frame_async(ws_server, ws_clients[i], &frame);
+                    esp_err_t res = queue_ws_frame_copy(ws_server, ws_clients[i], HTTPD_WS_TYPE_BINARY, send_buffer, total_bytes);
                     if (res != ESP_OK) {
+                        __atomic_add_fetch(&g_runtime_transport_stats.ws_send_errors, 1, __ATOMIC_RELAXED);
+                        consecutive_pressure_events += 1;
+                        if (res == ESP_ERR_NO_MEM) {
+                            current_frame_size_limit = current_frame_size_limit > (MIN_PACKETS_PER_FRAME * PACKET_SIZE)
+                                ? current_frame_size_limit / 2
+                                : (MIN_PACKETS_PER_FRAME * PACKET_SIZE);
+                            current_frame_size_limit -= (current_frame_size_limit % PACKET_SIZE);
+                            calm_send_cycles = 0;
+                            ws_send_backoff_until_us = esp_timer_get_time() + ((int64_t)WS_SEND_NOMEM_BACKOFF_MS * 1000);
+                            if ((esp_timer_get_time() - last_nomem_log_us) >= 1000000) {
+                                last_nomem_log_us = esp_timer_get_time();
+                                ESP_LOGW(TAG, "WS send backpressure: Client %d meldet %s, Frame-Limit jetzt %u Bytes", i, esp_err_to_name(res), (unsigned int)current_frame_size_limit);
+                            }
+                            if (consecutive_pressure_events >= 3) {
+                                const size_t shed_bytes = shed_sensor_stream_bytes(WS_STREAM_SHED_BYTES);
+                                if (shed_bytes > 0 && (esp_timer_get_time() - last_shed_log_us) >= 1000000) {
+                                    last_shed_log_us = esp_timer_get_time();
+                                    ESP_LOGW(TAG, "WS Überlastschutz aktiv: %u Bytes verworfen nach wiederholtem NO_MEM.", (unsigned int)shed_bytes);
+                                }
+                            }
+                            break;
+                        }
+
+                        current_frame_size_limit = current_frame_size_limit > (MIN_PACKETS_PER_FRAME * PACKET_SIZE)
+                            ? current_frame_size_limit / 2
+                            : (MIN_PACKETS_PER_FRAME * PACKET_SIZE);
+                        current_frame_size_limit -= (current_frame_size_limit % PACKET_SIZE);
+                        calm_send_cycles = 0;
+                        ws_send_backoff_until_us = esp_timer_get_time() + ((int64_t)WS_SEND_FAIL_BACKOFF_MS * 1000);
                         ESP_LOGW(TAG, "Send an Client %d fehlgeschlagen: %s",
                                  i, esp_err_to_name(res));
-                        ws_clients[i] = -1; // Client austragen
+                    } else {
+                        consecutive_pressure_events = 0;
+                        calm_send_cycles += 1;
+                        if (calm_send_cycles >= 32 && current_frame_size_limit < MAX_FRAME_SIZE) {
+                            calm_send_cycles = 0;
+                            current_frame_size_limit = current_frame_size_limit * 2;
+                            if (current_frame_size_limit > MAX_FRAME_SIZE) {
+                                current_frame_size_limit = MAX_FRAME_SIZE;
+                            }
+                            current_frame_size_limit -= (current_frame_size_limit % PACKET_SIZE);
+                        }
+                        __atomic_add_fetch(&g_runtime_transport_stats.ws_bytes_sent, total_bytes, __ATOMIC_RELAXED);
+                        __atomic_add_fetch(&g_runtime_transport_stats.ws_frames_sent, 1, __ATOMIC_RELAXED);
                     }
                 }
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        const int64_t now_us = esp_timer_get_time();
+        if ((now_us - last_stats_sent_us) >= 1000000) {
+            last_stats_sent_us = now_us;
+
+            const runtime_transport_stats_t stats = snapshot_runtime_transport_stats();
+            const int active_clients = count_active_ws_clients();
+            const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            const size_t min_free_internal = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            const size_t largest_free_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            const bool psram_available = esp_psram_is_initialized();
+            const size_t total_psram = psram_available ? (size_t)esp_psram_get_size() : 0;
+            const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            const size_t min_free_psram = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+            const size_t largest_free_psram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+            const float cpu_temp_c = sample_cpu_temperature_c();
+            const int cpu_load_pct = sample_cpu_load_percent();
+            const uint32_t inflight_ws_items = __atomic_load_n(&g_ws_inflight_work_items, __ATOMIC_RELAXED);
+            const uint32_t frame_limit_packets = (uint32_t)(current_frame_size_limit / PACKET_SIZE);
+
+            char stats_payload[512];
+            const int stats_len = snprintf(
+                stats_payload,
+                sizeof(stats_payload),
+                "{\"type\":\"espStats\",\"activeClients\":%d,\"sensorBytes\":%u,\"sensorPackets\":%u,\"fifoPeakBytes\":0,\"streamDroppedBytes\":%u,\"streamPartialWrites\":0,\"streamBacklogPeak\":%u,\"wsBytes\":%u,\"wsFrames\":%u,\"wsSendErrors\":%u,\"freeHeap\":%u,\"minFreeHeap\":%u,\"largestHeapBlock\":%u,\"psramAvailable\":%u,\"psramTotal\":%u,\"freePsram\":%u,\"minFreePsram\":%u,\"largestPsramBlock\":%u,\"cpuLoadPct\":%d,\"cpuTempC\":%.2f,\"inflightWs\":%u,\"frameLimitPackets\":%u}",
+                active_clients,
+                (unsigned int)stats.sensor_bytes_read,
+                (unsigned int)stats.sensor_packets_read,
+                (unsigned int)stats.stream_dropped_bytes,
+                (unsigned int)stats.stream_backlog_peak,
+                (unsigned int)stats.ws_bytes_sent,
+                (unsigned int)stats.ws_frames_sent,
+                (unsigned int)stats.ws_send_errors,
+                (unsigned int)free_internal,
+                (unsigned int)min_free_internal,
+                (unsigned int)largest_free_internal,
+                psram_available ? 1U : 0U,
+                (unsigned int)total_psram,
+                (unsigned int)free_psram,
+                (unsigned int)min_free_psram,
+                (unsigned int)largest_free_psram,
+                cpu_load_pct,
+                (double)cpu_temp_c,
+                (unsigned int)inflight_ws_items,
+                (unsigned int)frame_limit_packets
+            );
+
+            if (stats_len > 0 && active_clients > 0) {
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (ws_clients[i] >= 0) {
+                        if (queue_ws_frame_copy(ws_server, ws_clients[i], HTTPD_WS_TYPE_TEXT, (const uint8_t *)stats_payload, (size_t)stats_len) != ESP_OK) {
+                            __atomic_add_fetch(&g_runtime_transport_stats.ws_send_errors, 1, __ATOMIC_RELAXED);
+                        }
+                    }
+                }
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1));
         esp_task_wdt_reset();
     }
 }
@@ -1224,8 +1651,8 @@ temp_sensor_start();                    // Sensor starten
     while (1)
     {
         // Heap-Größe
-        size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        size_t min_free_internal = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+        size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        size_t min_free_internal = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
         // PSRAM-Info (nur wenn vorhanden/init)
         size_t free_psram = 0;
@@ -1332,6 +1759,7 @@ extern "C" void app_main() {
     }
     ESP_ERROR_CHECK(ret);
     init_psram();
+    init_system_telemetry();
 
     pendingConfig = kDefaultImuConfig;
     ret = load_imu_config_from_nvs(&pendingConfig);
@@ -1379,8 +1807,8 @@ extern "C" void app_main() {
 
 
 //xTaskCreatePinnedToCore(systemMonitorTask, "sys_monitor", 6144, NULL, 5, NULL, tskNO_AFFINITY);
-xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 4, NULL, tskNO_AFFINITY);
-xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 4, NULL, tskNO_AFFINITY);
+xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 15, NULL, 1); // Sensorlast auf Core 1, damit WiFi/HTTP auf Core 0 Luft behalten
+xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 5, NULL, 0); // WS-Transport nahe am WiFi/HTTP-Stack auf Core 0
                             
     // Hauptloop zum Beispiel für weiter Optionen
     while (1) {

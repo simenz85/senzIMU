@@ -3,17 +3,61 @@
 let accBuffer = [];
 let gyroBuffer = [];
 let tempBuffer = [];
+let inputPort = null;
+let fusionEnabled = true;
 
 const TARGET_DT_US = 5000; // 200 Hz
 let lastEmitUs = 0;
 
 let fusionWorker = null;
 
-onmessage = (e) => {
-    const msg = e.data;
+function resetDownsamplingState() {
+    accBuffer = [];
+    gyroBuffer = [];
+    tempBuffer = [];
+    lastEmitUs = 0;
+}
+
+function handleDownsamplingMessage(msg) {
+    if (!msg) {
+        return;
+    }
+
+    if (msg.type === "attachInputPort") {
+        inputPort = msg.port ?? null;
+        if (!inputPort) {
+            return;
+        }
+
+        inputPort.onmessage = (portEvent) => {
+            handleDownsamplingMessage(portEvent.data);
+        };
+
+        if (typeof inputPort.start === 'function') {
+            inputPort.start();
+        }
+        return;
+    }
+
+    if (msg.type === "setFusionEnabled") {
+        fusionEnabled = Boolean(msg.enabled);
+        if (!fusionEnabled) {
+            resetDownsamplingState();
+        }
+        return;
+    }
+
+    if (msg.type === "reset") {
+        resetDownsamplingState();
+        return;
+    }
 
     if (msg?.type === "init") {
         fusionWorker = msg.fusionWorker ?? null;
+        return;
+    }
+
+    if (!fusionEnabled) {
         return;
     }
 
@@ -32,6 +76,10 @@ onmessage = (e) => {
     }
 
     processDownsample();
+}
+
+onmessage = (e) => {
+    handleDownsamplingMessage(e.data);
 };
 
 let intervalEnd, accSamples, gyroSamples, accMean, gyroMean;

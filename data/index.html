@@ -84,6 +84,105 @@
       0% { transform: translateX(-120%); }
       100% { transform: translateX(320%); }
     }
+
+    #telemetryPanel {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 1200;
+      min-width: 228px;
+      max-width: min(300px, calc(100vw - 36px));
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      background: rgba(16, 21, 28, 0.84);
+      color: #eef3f8;
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(10px);
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      font-size: 0.8rem;
+      line-height: 1.35;
+      pointer-events: auto;
+    }
+
+    .telemetry-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .telemetry-title {
+      margin: 0;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(255, 214, 0, 0.92);
+    }
+
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 4px 12px;
+    }
+
+    .telemetry-thresholds {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      color: rgba(238, 243, 248, 0.72);
+      font-size: 0.71rem;
+      line-height: 1.35;
+    }
+
+    .telemetry-thresholds-title {
+      margin: 0 0 4px;
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(255, 214, 0, 0.78);
+    }
+
+    .telemetry-thresholds-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 2px;
+    }
+
+    .telemetry-key {
+      color: rgba(238, 243, 248, 0.62);
+    }
+
+    .telemetry-key[title],
+    .telemetry-value[title] {
+      cursor: help;
+    }
+
+    .telemetry-value {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: #f5f8fb;
+    }
+
+    .telemetry-value.is-warn {
+      color: #ffd36b;
+    }
+
+    .telemetry-value.is-danger {
+      color: #ff8a8a;
+    }
+
+    #telemetryPanel.is-collapsed .telemetry-grid {
+      display: none;
+    }
+
+    #telemetryPanel.is-collapsed .telemetry-thresholds {
+      display: none;
+    }
   </style>
   <script>
     (function () {
@@ -116,6 +215,37 @@
           return ready;
         }
       };
+
+      window.addEventListener('error', function (event) {
+        if (ready) {
+          return;
+        }
+
+        const message = event?.message || 'Unbekannter JavaScript-Fehler';
+        const source = event?.filename ? String(event.filename).split('/').pop() : 'inline';
+        const line = Number.isFinite(event?.lineno) ? `:${event.lineno}` : '';
+        window.__espBootOverlay.setState(
+          'loading',
+          'Frontend-Fehler beim Laden',
+          `${source}${line} - ${message}`
+        );
+      });
+
+      window.addEventListener('unhandledrejection', function (event) {
+        if (ready) {
+          return;
+        }
+
+        const reason = event?.reason;
+        const message = typeof reason === 'string'
+          ? reason
+          : (reason?.message || 'Promise wurde ohne Fehlerbehandlung verworfen');
+        window.__espBootOverlay.setState(
+          'loading',
+          'Frontend-Promise-Fehler beim Laden',
+          String(message)
+        );
+      });
     }());
   </script>
   <!--link rel="stylesheet" href="all.min.css"> -->>
@@ -126,7 +256,6 @@
   <script defer src="fili.min.js"></script>
   <script defer src="three.min.js"></script>
   <script defer src="OrbitControls.min.js"></script>
-  <script defer src="GLTFLoader.js"></script>
 
 
   <script defer src="CSS2DRenderer.js"></script>
@@ -148,6 +277,46 @@
       <div id="bootOverlayHint" class="boot-hint">Der ESP bereitet Weboberfläche und Sensorverbindung vor.</div>
     </div>
   </div>
+
+  <aside id="telemetryPanel" aria-live="polite">
+    <div class="telemetry-header">
+      <div class="telemetry-title">ESP Telemetrie</div>
+    </div>
+    <div class="telemetry-grid">
+      <div class="telemetry-key">WS</div><div class="telemetry-value" id="telemetryWsState">offline</div>
+      <div class="telemetry-key">ESP Clients</div><div class="telemetry-value" id="telemetryActiveClients">0</div>
+      <div class="telemetry-key">Sensor Pakete/s</div><div class="telemetry-value" id="telemetrySensorPackets">0</div>
+      <div class="telemetry-key">Frames/s</div><div class="telemetry-value" id="telemetryFramesPerSecond">0</div>
+      <div class="telemetry-key">WS Fehler/s</div><div class="telemetry-value" id="telemetryWsErrors">0</div>
+      <div class="telemetry-key">Raw Bytes/s</div><div class="telemetry-value" id="telemetryRawBytes">0 B</div>
+      <div class="telemetry-key">Frame-Limit</div><div class="telemetry-value" id="telemetryFrameLimit">-</div>
+      <div class="telemetry-key">Inflight WS</div><div class="telemetry-value" id="telemetryInflightWs">-</div>
+      <div class="telemetry-key">CPU Last</div><div class="telemetry-value" id="telemetryCpuLoad">-</div>
+      <div class="telemetry-key">CPU Temp</div><div class="telemetry-value" id="telemetryCpuTemp">-</div>
+      <div class="telemetry-key">Heap frei</div><div class="telemetry-value" id="telemetryFreeHeap">-</div>
+      <div class="telemetry-key">Heap min</div><div class="telemetry-value" id="telemetryMinHeap">-</div>
+      <div class="telemetry-key">Heap größter Block</div><div class="telemetry-value" id="telemetryLargestHeap">-</div>
+      <div class="telemetry-key">PSRAM gesamt</div><div class="telemetry-value" id="telemetryPsramTotal">-</div>
+      <div class="telemetry-key">PSRAM frei</div><div class="telemetry-value" id="telemetryFreePsram">-</div>
+      <div class="telemetry-key">PSRAM min</div><div class="telemetry-value" id="telemetryMinPsram">-</div>
+      <div class="telemetry-key">PSRAM größter Block</div><div class="telemetry-value" id="telemetryLargestPsram">-</div>
+      <div class="telemetry-key">Drops/s</div><div class="telemetry-value" id="telemetryDrops">0</div>
+      <div class="telemetry-key">Backlog Peak</div><div class="telemetry-value" id="telemetryBacklogPeak">0</div>
+    </div>
+    <div class="telemetry-thresholds" aria-label="Telemetrie-Grenzwerte">
+      <div class="telemetry-thresholds-title">Grenzwerte</div>
+      <ul class="telemetry-thresholds-list">
+        <li>WS Fehler, Inflight WS, Drops: Ziel 0</li>
+        <li>CPU Last: Warnung ab 75 %, kritisch ab 90 %</li>
+        <li>CPU Temp: Warnung ab 70 C, kritisch ab 80 C</li>
+        <li>Heap frei: Warnung unter 16 KB, kritisch unter 8 KB</li>
+        <li>Heap min: Warnung unter 8 KB, kritisch unter 2 KB</li>
+        <li>Heap größter Block: Warnung unter 8 KB, kritisch unter 4 KB</li>
+        <li>PSRAM frei: Warnung unter 128 KB</li>
+        <li>Backlog Peak: Warnung über 8 KB</li>
+      </ul>
+    </div>
+  </aside>
 
 
 
@@ -274,6 +443,17 @@
           <img src="icons/settings.svg" alt="Einstellungen" />
         </span>
         <span class="sidebar-label">Einstellungen</span>
+      </li>
+
+      <li class="sidebar-item sidebar-item-bottom sidebar-item-action">
+        <button id="telemetryToggle" class="sidebar-action-button" type="button" aria-pressed="false" aria-label="Telemetrie ein- oder ausblenden" title="Telemetrie ein- oder ausblenden">
+          <span class="sidebar-icon" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
+              <path fill="currentColor" d="M4 19h16v2H2V3h2v16zm2-2V9h3v8H6zm5 0V5h3v12h-3zm5 0v-6h3v6h-3z"/>
+            </svg>
+          </span>
+          <span class="sidebar-label">Telemetrie</span>
+        </button>
       </li>
 
 

@@ -46,7 +46,6 @@ let gravityCutEnabled = false;
 let currentReferenceState = null;
 let currentWorldSimpleGyroState = null;
 let currentAccelCalibrationScale = 1;
-let currentFusionCalibrationState = null;
 let appSettingsBindingsInitialized = false;
 let chart = null;
 let gyroChart = null;
@@ -351,14 +350,6 @@ motionWorker.onmessage = (event) => {
             : 'Orientation erforderlich für Weltintegration'
     );
 };
-
-function setBootOverlayState(state, message, hint) {
-    try {
-        globalThis.__espBootOverlay?.setState?.(state, message, hint);
-    } catch (error) {
-        console.warn('Boot-Overlay konnte nicht aktualisiert werden:', error);
-    }
-}
 
 window.addEventListener('dashboardTabChanged', (event) => {
     console.log('[ACC-3D] dashboardTabChanged', event.detail);
@@ -2066,11 +2057,6 @@ function setCookieValue(name, value, maxAgeSeconds) {
     document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; samesite=lax`;
 }
 
-function clearLegacyPersistenceCookies() {
-    clearCookieValue(CALIBRATION_COOKIE_NAME);
-    clearCookieValue(APP_SETTINGS_COOKIE_NAME);
-}
-
 function setLocalStorageValue(name, value) {
     try {
         globalThis.localStorage?.setItem(name, value);
@@ -2110,520 +2096,6 @@ function clearLocalStorageValue(name) {
         globalThis.localStorage?.removeItem(name);
     } catch (error) {
         console.warn('Lokaler Persistenzspeicher konnte nicht gelöscht werden:', error);
-    }
-}
-
-function parseAppSettingsPersistedState(rawState) {
-    const parsed = JSON.parse(rawState);
-    if (!parsed || typeof parsed !== 'object') {
-        return null;
-    }
-
-    const version = Number(parsed.version);
-    if (version !== APP_SETTINGS_COOKIE_VERSION) {
-        return null;
-    }
-
-    return parsed;
-}
-
-function readAppSettingsCookieState() {
-    const rawCookie = getCookieValue(APP_SETTINGS_COOKIE_NAME);
-    if (rawCookie) {
-        try {
-            const state = parseAppSettingsPersistedState(rawCookie);
-            if (!state) {
-                clearCookieValue(APP_SETTINGS_COOKIE_NAME);
-                return null;
-            }
-
-            return { state, source: 'cookie' };
-        } catch (error) {
-            console.warn('App-Settings-Cookie konnte nicht gelesen werden:', error);
-            clearCookieValue(APP_SETTINGS_COOKIE_NAME);
-        }
-    }
-
-    const rawStorage = getLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
-    if (!rawStorage) {
-        return null;
-    }
-
-    try {
-        const state = parseAppSettingsPersistedState(rawStorage);
-        if (!state) {
-            clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
-            return null;
-        }
-
-        return { state, source: 'localStorage' };
-    } catch (error) {
-        console.warn('App-Settings-Backup konnte nicht gelesen werden:', error);
-        clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
-        return null;
-    }
-}
-
-function wrapDropdownWithSettingsPersistence(dropdown) {
-    if (!dropdown || dropdown.__appSettingsPersistWrapped) {
-        return;
-    }
-
-    if (dropdown.type === 'slider') {
-        const originalOnChange = dropdown.onChange;
-        if (typeof originalOnChange === 'function') {
-            dropdown.onChange = (...args) => {
-                originalOnChange(...args);
-                persistAppSettingsCookie();
-            };
-        }
-    } else {
-        const originalOnChange = dropdown.options?.onChange;
-        if (typeof originalOnChange === 'function') {
-            dropdown.options.onChange = (...args) => {
-                originalOnChange(...args);
-                persistAppSettingsCookie();
-            };
-        }
-    }
-
-    dropdown.__appSettingsPersistWrapped = true;
-}
-
-function addPersistentListener(element, eventName) {
-    if (!element) {
-        return;
-    }
-
-    const marker = `__appSettings_${eventName}`;
-    if (element[marker]) {
-        return;
-    }
-
-    element.addEventListener(eventName, () => {
-        persistAppSettingsCookie();
-    });
-    element[marker] = true;
-}
-
-function serializeFilterPanelState(panel) {
-    if (!panel) {
-        return null;
-    }
-
-    return {
-        type: panel.typeDropdown?.getValue?.()?.value ?? null,
-        design: panel.designDropdown?.getValue?.()?.value ?? null,
-        transform: panel.transformDropdown?.getValue?.()?.value ?? null,
-        order: Number(panel.orderDropdown?.getValue?.()),
-        cutoff: Number(panel.cutoffDropdown?.getValue?.()),
-        gain: Number(panel.gainDropdown?.getValue?.()),
-        ripple: Number(panel.rippleDropdown?.getValue?.()),
-        attenuation: Number(panel.attenuationDropdown?.getValue?.()),
-        bandwidth: Number(panel.bandwidthDropdown?.getValue?.()),
-        preGain: !!panel.preGainCheckbox?.checked,
-        oneDb: !!panel.oneDbCheckbox?.checked,
-    };
-}
-
-function applyFilterPanelState(panel, state) {
-    if (!panel || !state || typeof state !== 'object') {
-        return;
-    }
-
-    const type = typeof state.type === 'string' ? state.type : 'none';
-    panel.typeDropdown?.setValue?.(type, true);
-    panel.onTypeChange?.(type);
-
-    if (typeof state.design === 'string') {
-        panel.designDropdown?.setValue?.(state.design, true);
-        panel.onDesignChange?.(type, state.design);
-    }
-
-    if (typeof state.transform === 'string') {
-        panel.transformDropdown?.setValue?.(state.transform, true);
-    }
-
-    if (Number.isFinite(Number(state.order))) panel.orderDropdown?.setValue?.(Number(state.order), true);
-    if (Number.isFinite(Number(state.cutoff))) panel.cutoffDropdown?.setValue?.(Number(state.cutoff), true);
-    if (Number.isFinite(Number(state.gain))) panel.gainDropdown?.setValue?.(Number(state.gain), true);
-    if (Number.isFinite(Number(state.ripple))) panel.rippleDropdown?.setValue?.(Number(state.ripple), true);
-    if (Number.isFinite(Number(state.attenuation))) panel.attenuationDropdown?.setValue?.(Number(state.attenuation), true);
-    if (Number.isFinite(Number(state.bandwidth))) panel.bandwidthDropdown?.setValue?.(Number(state.bandwidth), true);
-
-    if (typeof state.preGain === 'boolean' && panel.preGainCheckbox) {
-        panel.preGainCheckbox.checked = state.preGain;
-    }
-    if (typeof state.oneDb === 'boolean' && panel.oneDbCheckbox) {
-        panel.oneDbCheckbox.checked = state.oneDb;
-    }
-
-    panel.sendSettings?.(false);
-}
-
-function getCurrentAppSettingsState() {
-    const syncFilterToggle = document.getElementById('syncFilterToggle');
-    const showAccChartToggle = document.getElementById('showAccChartToggle');
-    const showGyroChartToggle = document.getElementById('showGyroChartToggle');
-    const filterDrawer = document.getElementById('filterDrawer');
-    const livechartsGrid = document.getElementById('livechartsGrid');
-    const fftRmsGrid = document.getElementById('fftRmsGrid');
-    const gyroFftRmsGrid = document.getElementById('gyroFftRmsGrid');
-    const sidebar = document.getElementById('sidebar');
-    const fpsSlider = document.getElementById('fpsSlider');
-    const timeSlider = document.getElementById('timeSlider');
-
-    return {
-        version: APP_SETTINGS_COOKIE_VERSION,
-        savedAt: Date.now(),
-        fft: {
-            windowSize: FFT_WINDOW_SIZE,
-            updateInterval: FFT_UPDATE_INTERVAL,
-            averageCount: N_AVG,
-            windowType: FFT_WINDOW_TYPE,
-            dcCutoff: !!DC_CUTOFF,
-            axisMode: FFT_AXIS_MODE,
-            highPass: fftHighPass,
-            dbOutput: !!fftDBoutput,
-            dropdown1: dropdown1?.getValue?.()?.value ?? null,
-            dropdown2: dropdown2?.getValue?.()?.value ?? null,
-            dropdown3: dropdown3?.getValue?.()?.value ?? null,
-            dropdown4: dropdown4?.getValue?.()?.value ?? null,
-            dropdown5: dropdown5?.getValue?.()?.value ?? null,
-            dropdown6: dropdown6?.getValue?.()?.value ?? null,
-            highPassControl: logSliderDropdown?.getValue?.() ?? null,
-        },
-        gyroFft: {
-            windowSize: GYRO_FFT_WINDOW_SIZE,
-            updateInterval: GYRO_FFT_UPDATE_INTERVAL,
-            averageCount: gyroN_AVG,
-            windowType: GYRO_FFT_WINDOW_TYPE,
-            dcCutoff: !!GYRO_DC_CUTOFF,
-            axisMode: GYRO_FFT_AXIS_MODE,
-            highPass: gyroFftHighPass,
-            dropdown1: gyroDropdown1?.getValue?.()?.value ?? null,
-            dropdown2: gyroDropdown2?.getValue?.()?.value ?? null,
-            dropdown3: gyroDropdown3?.getValue?.()?.value ?? null,
-            dropdown4: gyroDropdown4?.getValue?.()?.value ?? null,
-            dropdown5: gyroDropdown5?.getValue?.()?.value ?? null,
-            dropdown6: gyroDropdown6?.getValue?.()?.value ?? null,
-            highPassControl: gyroLogSliderDropdown?.getValue?.() ?? null,
-        },
-        motion: {
-            mode: motionUiState.mode,
-            trailSeconds: motionUiState.trailSeconds,
-            displayScale: motionUiState.displayScale,
-            deadbandMg: motionUiState.deadbandMg,
-            stationaryAccelThresholdMs2: motionUiState.stationaryAccelThresholdMs2,
-            vibrationVelocityLeak: motionUiState.vibrationVelocityLeak,
-        },
-        charts: {
-            displayDurationSeconds,
-            updateIntervalMs,
-            livePaused: !!paused,
-            gyroPaused: !!paused2,
-            accVisible: !!showAccChartToggle?.checked,
-            gyroVisible: !!showGyroChartToggle?.checked,
-            fpsSlider: fpsSlider ? Number(fpsSlider.value) : null,
-            timeSlider: timeSlider ? Number(timeSlider.value) : null,
-        },
-        filters: {
-            syncEnabled: !!filterSyncEnabled,
-            syncToggle: !!syncFilterToggle?.checked,
-            accVisible: !!accChartVisible,
-            gyroVisible: !!gyroChartVisible,
-            accPanel: serializeFilterPanelState(accFilterUi),
-            gyroPanel: serializeFilterPanelState(gyroFilterUi),
-        },
-        layout: {
-            filterDrawerOpen: !!filterDrawer?.classList.contains('open'),
-            liveChartsSideBySide: !!livechartsGrid?.classList.contains('is-side-by-side'),
-            fftRmsSideBySide: !!fftRmsGrid?.classList.contains('is-side-by-side'),
-            gyroFftRmsSideBySide: !!gyroFftRmsGrid?.classList.contains('is-side-by-side'),
-            sidebarExpanded: !!sidebar?.classList.contains('expanded'),
-        },
-        imu: {
-            accelRange: accelRangeDD2?.getValue?.()?.value ?? null,
-            accelSampleRate: accelSampleRateDD2?.getValue?.()?.value ?? null,
-            accelFilter: accelFilterDD2?.getValue?.()?.value ?? null,
-            gyroRange: gyroRangeDD2?.getValue?.()?.value ?? null,
-            gyroSampleRate: gyroSampleRateDD2?.getValue?.()?.value ?? null,
-            gyroFilter: gyroFilterDD2?.getValue?.()?.value ?? null,
-            tempSampleRate: tempSampleRateDD2?.getValue?.()?.value ?? null,
-            axis: axisselector2?.getValue?.()?.value ?? null,
-        },
-        rms: {
-            accDuration: displayDurationSecondsRMS,
-            accPaused: !!rmsPaused,
-            gyroDuration: gyroDisplayDurationSecondsRMS,
-            gyroPaused: !!gyroRmsPaused,
-        },
-    };
-}
-
-function persistAppSettingsCookie() {
-    try {
-        const serializedState = JSON.stringify(getCurrentAppSettingsState());
-        setLocalStorageValue(APP_SETTINGS_STORAGE_KEY, serializedState);
-        clearCookieValue(APP_SETTINGS_COOKIE_NAME);
-        return true;
-    } catch (error) {
-        console.warn('App-Settings konnten nicht gespeichert werden:', error);
-        return false;
-    }
-}
-
-function initializeAppSettingsPersistenceBindings() {
-    if (appSettingsBindingsInitialized) {
-        return;
-    }
-
-    [
-        dropdown1, dropdown2, dropdown3, dropdown4, dropdown5, dropdown6,
-        gyroDropdown1, gyroDropdown2, gyroDropdown3, gyroDropdown4, gyroDropdown5, gyroDropdown6,
-        logSliderDropdown, gyroLogSliderDropdown,
-        accelRangeDD2, accelSampleRateDD2, accelFilterDD2,
-        gyroRangeDD2, gyroSampleRateDD2, gyroFilterDD2,
-        tempSampleRateDD2, axisselector2,
-        accFilterUi?.typeDropdown, accFilterUi?.designDropdown, accFilterUi?.transformDropdown,
-        accFilterUi?.orderDropdown, accFilterUi?.cutoffDropdown, accFilterUi?.gainDropdown,
-        accFilterUi?.rippleDropdown, accFilterUi?.attenuationDropdown, accFilterUi?.bandwidthDropdown,
-        gyroFilterUi?.typeDropdown, gyroFilterUi?.designDropdown, gyroFilterUi?.transformDropdown,
-        gyroFilterUi?.orderDropdown, gyroFilterUi?.cutoffDropdown, gyroFilterUi?.gainDropdown,
-        gyroFilterUi?.rippleDropdown, gyroFilterUi?.attenuationDropdown, gyroFilterUi?.bandwidthDropdown,
-    ].forEach(wrapDropdownWithSettingsPersistence);
-
-    [
-        ['fpsSlider', 'input'],
-        ['timeSlider', 'input'],
-        ['pauseBtn', 'click'],
-        ['pauseBtn2', 'click'],
-        ['chartLayoutToggle', 'click'],
-        ['fftRmsLayoutToggle', 'click'],
-        ['gyroFftRmsLayoutToggle', 'click'],
-        ['sidebarToggle', 'click'],
-        ['filterDrawerToggle', 'click'],
-        ['syncFilterToggle', 'change'],
-        ['showAccChartToggle', 'change'],
-        ['showGyroChartToggle', 'change'],
-        ['motionModeMotionBtn', 'click'],
-        ['motionModeVibrationBtn', 'click'],
-        ['motionTrailSeconds', 'input'],
-        ['motionTrailSecondsInput', 'input'],
-        ['motionDisplayScale', 'input'],
-        ['motionDisplayScaleInput', 'input'],
-        ['motionDeadband', 'input'],
-        ['motionDeadbandInput', 'input'],
-        ['motionStationary', 'input'],
-        ['motionStationaryInput', 'input'],
-        ['motionVibrationLeak', 'input'],
-        ['motionVibrationLeakInput', 'input'],
-        ['rmsTimeSlider', 'input'],
-        ['rmsPauseBtn', 'click'],
-        ['gyroRmsTimeSlider', 'input'],
-        ['gyroRmsPauseBtn', 'click'],
-    ].forEach(([id, eventName]) => addPersistentListener(document.getElementById(id), eventName));
-
-    addPersistentListener(accFilterUi?.preGainCheckbox, 'change');
-    addPersistentListener(accFilterUi?.oneDbCheckbox, 'change');
-    addPersistentListener(gyroFilterUi?.preGainCheckbox, 'change');
-    addPersistentListener(gyroFilterUi?.oneDbCheckbox, 'change');
-
-    appSettingsBindingsInitialized = true;
-}
-
-function restoreAppSettingsFromCookie() {
-    const persisted = readAppSettingsCookieState();
-    if (!persisted?.state) {
-        clearCookieValue(APP_SETTINGS_COOKIE_NAME);
-        return false;
-    }
-
-    const { state } = persisted;
-
-    try {
-        if (state.fft) {
-            if (state.fft.dropdown1 != null) dropdown1?.setValue?.(state.fft.dropdown1, true);
-            if (state.fft.dropdown2 != null) dropdown2?.setValue?.(state.fft.dropdown2, true);
-            if (state.fft.dropdown3 != null) dropdown3?.setValue?.(state.fft.dropdown3, true);
-            if (state.fft.dropdown4 != null) dropdown4?.setValue?.(state.fft.dropdown4, true);
-            if (state.fft.dropdown5 != null) dropdown5?.setValue?.(state.fft.dropdown5, true);
-            if (state.fft.dropdown6 != null) dropdown6?.setValue?.(state.fft.dropdown6, true);
-            if (state.fft.highPassControl != null) logSliderDropdown?.setValue?.(state.fft.highPassControl, true);
-
-            if (Number.isFinite(Number(state.fft.windowSize))) FFT_WINDOW_SIZE = Number(state.fft.windowSize);
-            if (Number.isFinite(Number(state.fft.updateInterval))) FFT_UPDATE_INTERVAL = Number(state.fft.updateInterval);
-            if (Number.isFinite(Number(state.fft.averageCount))) {
-                N_AVG = Number(state.fft.averageCount);
-                setAverageCount(N_AVG);
-            }
-            if (typeof state.fft.windowType === 'string') FFT_WINDOW_TYPE = state.fft.windowType;
-            if (typeof state.fft.axisMode === 'string') FFT_AXIS_MODE = state.fft.axisMode;
-            if (typeof state.fft.dcCutoff === 'boolean') DC_CUTOFF = state.fft.dcCutoff;
-            if (Number.isFinite(Number(state.fft.highPass))) fftHighPass = Number(state.fft.highPass);
-            if (typeof state.fft.dbOutput === 'boolean') fftDBoutput = state.fft.dbOutput;
-        }
-
-        if (state.gyroFft) {
-            if (state.gyroFft.dropdown1 != null) gyroDropdown1?.setValue?.(state.gyroFft.dropdown1, true);
-            if (state.gyroFft.dropdown2 != null) gyroDropdown2?.setValue?.(state.gyroFft.dropdown2, true);
-            if (state.gyroFft.dropdown3 != null) gyroDropdown3?.setValue?.(state.gyroFft.dropdown3, true);
-            if (state.gyroFft.dropdown4 != null) gyroDropdown4?.setValue?.(state.gyroFft.dropdown4, true);
-            if (state.gyroFft.dropdown5 != null) gyroDropdown5?.setValue?.(state.gyroFft.dropdown5, true);
-            if (state.gyroFft.dropdown6 != null) gyroDropdown6?.setValue?.(state.gyroFft.dropdown6, true);
-            if (state.gyroFft.highPassControl != null) gyroLogSliderDropdown?.setValue?.(state.gyroFft.highPassControl, true);
-
-            if (Number.isFinite(Number(state.gyroFft.windowSize))) GYRO_FFT_WINDOW_SIZE = Number(state.gyroFft.windowSize);
-            if (Number.isFinite(Number(state.gyroFft.updateInterval))) GYRO_FFT_UPDATE_INTERVAL = Number(state.gyroFft.updateInterval);
-            if (Number.isFinite(Number(state.gyroFft.averageCount))) {
-                gyroN_AVG = Number(state.gyroFft.averageCount);
-                setAverageCount(gyroN_AVG, gyroAvgFFTBuffer);
-            }
-            if (typeof state.gyroFft.windowType === 'string') GYRO_FFT_WINDOW_TYPE = state.gyroFft.windowType;
-            if (typeof state.gyroFft.axisMode === 'string') GYRO_FFT_AXIS_MODE = state.gyroFft.axisMode;
-            if (typeof state.gyroFft.dcCutoff === 'boolean') GYRO_DC_CUTOFF = state.gyroFft.dcCutoff;
-            if (Number.isFinite(Number(state.gyroFft.highPass))) gyroFftHighPass = Number(state.gyroFft.highPass);
-        }
-
-        if (state.motion) {
-            if (typeof state.motion.mode === 'string') motionUiState.mode = state.motion.mode;
-            if (Number.isFinite(Number(state.motion.trailSeconds))) motionUiState.trailSeconds = Number(state.motion.trailSeconds);
-            if (Number.isFinite(Number(state.motion.displayScale))) motionUiState.displayScale = Number(state.motion.displayScale);
-            if (Number.isFinite(Number(state.motion.deadbandMg))) motionUiState.deadbandMg = Number(state.motion.deadbandMg);
-            if (Number.isFinite(Number(state.motion.stationaryAccelThresholdMs2))) motionUiState.stationaryAccelThresholdMs2 = Number(state.motion.stationaryAccelThresholdMs2);
-            if (Number.isFinite(Number(state.motion.vibrationVelocityLeak))) motionUiState.vibrationVelocityLeak = Number(state.motion.vibrationVelocityLeak);
-            updateMotionControlLabels();
-            updateMotionModeButtons();
-            syncMotionWorkerConfig({ reset: true });
-        }
-
-        if (state.charts) {
-            if (Number.isFinite(Number(state.charts.displayDurationSeconds))) {
-                displayDurationSeconds = Number(state.charts.displayDurationSeconds);
-            }
-            if (Number.isFinite(Number(state.charts.updateIntervalMs))) {
-                updateIntervalMs = Number(state.charts.updateIntervalMs);
-            }
-            if (typeof state.charts.livePaused === 'boolean') {
-                paused = state.charts.livePaused;
-                const pauseBtn = document.getElementById('pauseBtn');
-                if (pauseBtn) {
-                    pauseBtn.classList.toggle('active', paused);
-                    pauseBtn.innerHTML = paused
-                        ? '<i class="fas fa-play"></i> Play'
-                        : '<i class="fas fa-pause"></i> Pause';
-                }
-            }
-            if (typeof state.charts.gyroPaused === 'boolean') {
-                paused2 = state.charts.gyroPaused;
-                const pauseBtn2 = document.getElementById('pauseBtn2');
-                if (pauseBtn2) {
-                    pauseBtn2.innerHTML = paused2 ? '<i class="fa-solid fa-play"></i>' : '<i class="fa-solid fa-pause"></i>';
-                }
-            }
-            if (Number.isFinite(Number(state.charts.fpsSlider))) {
-                const fpsSlider = document.getElementById('fpsSlider');
-                if (fpsSlider) {
-                    fpsSlider.value = String(state.charts.fpsSlider);
-                    fpsSlider.dispatchEvent(new Event('input'));
-                }
-            }
-            if (Number.isFinite(Number(state.charts.timeSlider))) {
-                const timeSlider = document.getElementById('timeSlider');
-                if (timeSlider) {
-                    timeSlider.value = String(state.charts.timeSlider);
-                    timeSlider.dispatchEvent(new Event('input'));
-                }
-            }
-        }
-
-        if (state.filters) {
-            const syncFilterToggle = document.getElementById('syncFilterToggle');
-            if (syncFilterToggle && typeof state.filters.syncToggle === 'boolean') {
-                syncFilterToggle.checked = state.filters.syncToggle;
-                syncFilterToggle.dispatchEvent(new Event('change'));
-            }
-
-            const showAccChartToggle = document.getElementById('showAccChartToggle');
-            if (showAccChartToggle && typeof state.filters.accVisible === 'boolean') {
-                showAccChartToggle.checked = state.filters.accVisible;
-                showAccChartToggle.dispatchEvent(new Event('change'));
-            }
-
-            const showGyroChartToggle = document.getElementById('showGyroChartToggle');
-            if (showGyroChartToggle && typeof state.filters.gyroVisible === 'boolean') {
-                showGyroChartToggle.checked = state.filters.gyroVisible;
-                showGyroChartToggle.dispatchEvent(new Event('change'));
-            }
-
-            applyFilterPanelState(accFilterUi, state.filters.accPanel);
-            applyFilterPanelState(gyroFilterUi, state.filters.gyroPanel);
-        }
-
-        if (state.layout) {
-            const filterDrawer = document.getElementById('filterDrawer');
-            const filterDrawerToggle = document.getElementById('filterDrawerToggle');
-            if (filterDrawer && typeof state.layout.filterDrawerOpen === 'boolean') {
-                filterDrawer.classList.toggle('open', state.layout.filterDrawerOpen);
-                filterDrawer.setAttribute('aria-hidden', state.layout.filterDrawerOpen ? 'false' : 'true');
-            }
-            if (filterDrawerToggle && typeof state.layout.filterDrawerOpen === 'boolean') {
-                filterDrawerToggle.setAttribute('aria-pressed', state.layout.filterDrawerOpen ? 'true' : 'false');
-            }
-
-            const livechartsGrid = document.getElementById('livechartsGrid');
-            if (livechartsGrid && typeof state.layout.liveChartsSideBySide === 'boolean') {
-                livechartsGrid.classList.toggle('is-side-by-side', state.layout.liveChartsSideBySide);
-            }
-
-            const fftRmsGrid = document.getElementById('fftRmsGrid');
-            if (fftRmsGrid && typeof state.layout.fftRmsSideBySide === 'boolean') {
-                fftRmsGrid.classList.toggle('is-side-by-side', state.layout.fftRmsSideBySide);
-            }
-
-            const gyroFftRmsGrid = document.getElementById('gyroFftRmsGrid');
-            if (gyroFftRmsGrid && typeof state.layout.gyroFftRmsSideBySide === 'boolean') {
-                gyroFftRmsGrid.classList.toggle('is-side-by-side', state.layout.gyroFftRmsSideBySide);
-            }
-
-            const sidebar = document.getElementById('sidebar');
-            if (sidebar && typeof state.layout.sidebarExpanded === 'boolean') {
-                sidebar.classList.toggle('expanded', state.layout.sidebarExpanded);
-            }
-        }
-
-        if (state.imu) {
-            if (state.imu.accelRange != null) accelRangeDD2?.setValue?.(state.imu.accelRange, true);
-            if (state.imu.accelSampleRate != null) accelSampleRateDD2?.setValue?.(state.imu.accelSampleRate, true);
-            if (state.imu.accelFilter != null) accelFilterDD2?.setValue?.(state.imu.accelFilter, true);
-            if (state.imu.gyroRange != null) gyroRangeDD2?.setValue?.(state.imu.gyroRange, true);
-            if (state.imu.gyroSampleRate != null) gyroSampleRateDD2?.setValue?.(state.imu.gyroSampleRate, true);
-            if (state.imu.gyroFilter != null) gyroFilterDD2?.setValue?.(state.imu.gyroFilter, true);
-            if (state.imu.tempSampleRate != null) tempSampleRateDD2?.setValue?.(state.imu.tempSampleRate, true);
-            if (state.imu.axis != null) axisselector2?.setValue?.(state.imu.axis, true);
-        }
-
-        if (state.rms) {
-            if (Number.isFinite(Number(state.rms.accDuration))) {
-                displayDurationSecondsRMS = Number(state.rms.accDuration);
-            }
-            if (typeof state.rms.accPaused === 'boolean') {
-                rmsPaused = state.rms.accPaused;
-            }
-            if (Number.isFinite(Number(state.rms.gyroDuration))) {
-                gyroDisplayDurationSecondsRMS = Number(state.rms.gyroDuration);
-            }
-            if (typeof state.rms.gyroPaused === 'boolean') {
-                gyroRmsPaused = state.rms.gyroPaused;
-            }
-        }
-
-        persistAppSettingsCookie();
-
-        return true;
-    } catch (error) {
-        console.warn('App-Settings konnten nicht wiederhergestellt werden:', error);
-        return false;
     }
 }
 
@@ -2673,31 +2145,6 @@ function sanitizeAccelCalibrationScale(scale) {
     }
 
     return normalizedScale;
-}
-
-function sanitizeFusionCalibrationState(calibrationState) {
-    if (!calibrationState || typeof calibrationState !== 'object') {
-        return null;
-    }
-
-    const gyroBias = {
-        x: Number(calibrationState.gyroBias?.x),
-        y: Number(calibrationState.gyroBias?.y),
-        z: Number(calibrationState.gyroBias?.z),
-    };
-    const accVar = Array.isArray(calibrationState.accVar)
-        ? calibrationState.accVar.slice(0, 3).map((value) => Number(value))
-        : [];
-
-    if (![gyroBias.x, gyroBias.y, gyroBias.z].every(Number.isFinite)) {
-        return null;
-    }
-
-    if (accVar.length < 3 || !accVar.every((value) => Number.isFinite(value) && value >= 0)) {
-        return null;
-    }
-
-    return { gyroBias, accVar };
 }
 
 function sanitizeViewportDisplaySettings(settings) {
@@ -2849,11 +2296,6 @@ function getCurrentCalibrationCookieState() {
         state.accelCalibrationScale = accelCalibrationScale;
     }
 
-    const fusionCalibrationState = sanitizeFusionCalibrationState(currentFusionCalibrationState);
-    if (fusionCalibrationState) {
-        state.fusionCalibrationState = fusionCalibrationState;
-    }
-
     if (Number.isFinite(tempgravity) && tempgravity > 0) {
         state.gravityMagnitude = Number(tempgravity);
     }
@@ -2883,7 +2325,6 @@ function persistCalibrationCookie() {
         || state.referenceState
         || state.worldSimpleGyroState
         || (Number.isFinite(state.accelCalibrationScale) && Math.abs(state.accelCalibrationScale - 1) > 1e-6)
-        || state.fusionCalibrationState
         || state.gravityMagnitude
         || state.viewportAdjustmentQuaternion
         || state.viewportDisplaySettings
@@ -2897,8 +2338,8 @@ function persistCalibrationCookie() {
     }
 
     const serializedState = JSON.stringify(state);
+    setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
     setLocalStorageValue(CALIBRATION_STORAGE_KEY, serializedState);
-    clearCookieValue(CALIBRATION_COOKIE_NAME);
 }
 
 function parseCalibrationPersistedState(rawState) {
@@ -2912,7 +2353,6 @@ function parseCalibrationPersistedState(rawState) {
         referenceState: sanitizeReferenceState(parsed?.referenceState),
         worldSimpleGyroState: sanitizeGyroZeroState(parsed?.worldSimpleGyroState),
         accelCalibrationScale: sanitizeAccelCalibrationScale(parsed?.accelCalibrationScale),
-        fusionCalibrationState: sanitizeFusionCalibrationState(parsed?.fusionCalibrationState),
         gravityMagnitude: Number(parsed?.gravityMagnitude),
         viewportDisplaySettings: sanitizeViewportDisplaySettings(parsed?.viewportDisplaySettings),
         motionViewportDisplaySettings: sanitizeMotionViewportDisplaySettings(parsed?.motionViewportDisplaySettings),
@@ -2969,11 +2409,10 @@ function readCalibrationCookieState() {
 function restoreCalibrationFromCookie() {
     const persisted = readCalibrationCookieState();
     if (!persisted?.state) {
-        clearCookieValue(CALIBRATION_COOKIE_NAME);
         return;
     }
 
-    const { state } = persisted;
+    const { state, source } = persisted;
 
     if (state.worldSimpleQuaternion) {
         setOrientationCalibrationQuaternion(state.worldSimpleQuaternion, { persistState: false });
@@ -2992,14 +2431,6 @@ function restoreCalibrationFromCookie() {
     }
 
     setAccelCalibrationScale(state.accelCalibrationScale, { persistState: false });
-
-    if (state.fusionCalibrationState) {
-        currentFusionCalibrationState = state.fusionCalibrationState;
-        fusionWorker.postMessage({
-            type: 'setCalibrationState',
-            payload: state.fusionCalibrationState,
-        });
-    }
 
     if (state.gravityMagnitude) {
         tempgravity = state.gravityMagnitude;
@@ -3029,6 +2460,11 @@ function restoreCalibrationFromCookie() {
 
     if (state.motionViewportDisplaySettings) {
         motionViewport.applyDisplaySettings(state.motionViewportDisplaySettings, { silent: true });
+    }
+
+    if (source === 'localStorage') {
+        const serializedState = JSON.stringify(getCurrentCalibrationCookieState());
+        setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
     }
 
     persistCalibrationCookie();
@@ -3382,8 +2818,6 @@ function syncMotionWorkerTransform({ reset = false } = {}) {
             quaternion: getViewportEffectiveQuaternionXYZW(),
             active: currentOrientationMode !== 0,
             gravityMagnitudeMg: getViewportGravityMagnitude(),
-            samplesPreTransformed: true,
-            subtractGravity: false,
             reset,
         },
     });
@@ -3429,24 +2863,6 @@ function buildLiveAccelerationSample(rawSample, processedSample) {
     }
 
     return calibratedSample;
-}
-
-function buildMotionAccelerationSample(rawSample, processedSample) {
-    const raw = rawSample || processedSample || null;
-    if (!raw) {
-        return null;
-    }
-
-    const gravityMagnitude = getViewportGravityMagnitude();
-    const gravityVector = getGravityCutVectorSample(gravityMagnitude);
-
-    if (currentOrientationMode === 0) {
-        const baseSample = processedSample || raw;
-        return applyGravityCutToSample(baseSample, gravityMagnitude, gravityVector) || baseSample;
-    }
-
-    const calibratedSample = buildViewportBaseAccelerationSample(raw) || processedSample || raw;
-    return applyGravityCutToSample(calibratedSample, gravityMagnitude, gravityVector) || calibratedSample;
 }
 
 function buildLiveGyroSample(rawSample, processedSample) {
@@ -4064,13 +3480,272 @@ const accFilterWorker = new Worker('filter-worker.js');
 const gyroFilterWorker = new Worker('filter-worker.js');
 const downsamplingWorker = new Worker('downsampling-worker.js');
 const fusionWorker = new Worker('fusion-worker5.js');
+let bootOverlayReadyTimer = null;
+const TELEMETRY_PANEL_HIDDEN_KEY = 'telemetryPanelHidden';
+const TELEMETRY_TOOLTIPS = {
+    telemetryWsState: 'Aktueller Zustand der WebSocket-Verbindung zwischen Browser und ESP. Alles ausser "verbunden" bedeutet, dass keine Live-Daten mehr ankommen.',
+    telemetryActiveClients: 'Anzahl der aktuell am ESP registrierten WebSocket-Clients. Fuer dein Live-Setup ist 1 der Normalfall.',
+    telemetrySensorPackets: 'Rohpakete pro Sekunde, die der ESP vom Sensorpfad liest. Faellt der Wert deutlich, ist die Erfassung oder Weitergabe am Limit.',
+    telemetryFramesPerSecond: 'WebSocket-Nutzdatenframes pro Sekunde, die im Browser ankommen. Mehr Frames bedeuten geringere Latenz, aber auch mehr Protokoll-Overhead.',
+    telemetryWsErrors: 'Asynchrone Sendefehler pro Sekunde auf ESP-Seite. Werte ueber 0 zeigen Backpressure, Speicherknappheit oder Socket-Probleme.',
+    telemetryRawBytes: 'Rohdatenrate am Browser-Eingang. Hilft beim Abgleich, ob die effektive Transportlast zum Sensorstrom passt.',
+    telemetryFrameLimit: 'Aktuelle adaptive Obergrenze fuer Pakete pro WebSocket-Frame. Sinkt der Wert, reduziert der ESP aktiv die Framegroesse unter Druck.',
+    telemetryInflightWs: 'Noch nicht fertig abgearbeitete WebSocket-Sendejobs im ESP. Dauerhaft > 0 bedeutet, dass der Netzwerkpfad hinterherlaeuft.',
+    telemetryCpuLoad: 'Grobe CPU-Auslastung des ESP ueber alle aktiven Tasks. Werte nahe 100% lassen kaum Reserve fuer Peaks und koennen Jitter verstaerken.',
+    telemetryCpuTemp: 'Interne Chiptemperatur. Hoehere Last und WLAN-Verkehr treiben diesen Wert nach oben; dauerhaft hohe Temperaturen koennen Instabilitaet beguenstigen.',
+    telemetryFreeHeap: 'Aktuell frei verfuegbarer interner 8-Bit-Heap. Dieser Speicher ist fuer viele zeitkritische Allokationen wichtiger als der gesamte nominelle Heap.',
+    telemetryMinHeap: 'Niedrigster jemals beobachteter freier interner Heap seit Boot. Ein sehr kleiner Wert zeigt, wie knapp das System im Peak bereits war.',
+    telemetryLargestHeap: 'Groesster zusammenhaengender freier interner Heap-Block. Ist dieser klein, leidet das System eher an Fragmentierung als an absolutem Speichermangel.',
+    telemetryPsramTotal: 'Physisch erkanntes PSRAM. Das ist die Gesamtkapazitaet, nicht automatisch der als Heap verfuegbare Anteil.',
+    telemetryFreePsram: 'Aktuell freier PSRAM-Heap. Wenn hier trotz erkanntem PSRAM 0 B steht, ist PSRAM meist nicht als Heap-Caps-Allocator eingebunden oder komplett belegt.',
+    telemetryMinPsram: 'Niedrigster jemals beobachteter freier PSRAM-Heap seit Boot. Hilft zu sehen, ob externe Reserven in Lastspitzen verbraucht wurden.',
+    telemetryLargestPsram: 'Groesster zusammenhaengender freier PSRAM-Block. Ein guter Indikator dafuer, ob groessere externe Puffer noch allokierbar sind.',
+    telemetryDrops: 'Vom ESP bewusst verworfene Rohdaten pro Sekunde, um Rueckstau zu begrenzen. Werte > 0 bedeuten, dass Stabilitaet vor Vollstaendigkeit priorisiert wird.',
+    telemetryBacklogPeak: 'Groesster beobachteter Rueckstau im Stream-Puffer. Hohe Peaks deuten auf kurzfristige Transport- oder Verarbeitungsengpaesse hin.',
+};
+const telemetryElements = {
+    panel: document.getElementById('telemetryPanel'),
+    toggle: document.getElementById('telemetryToggle'),
+    wsState: document.getElementById('telemetryWsState'),
+    activeClients: document.getElementById('telemetryActiveClients'),
+    sensorPackets: document.getElementById('telemetrySensorPackets'),
+    framesPerSecond: document.getElementById('telemetryFramesPerSecond'),
+    wsErrors: document.getElementById('telemetryWsErrors'),
+    rawBytes: document.getElementById('telemetryRawBytes'),
+    frameLimit: document.getElementById('telemetryFrameLimit'),
+    inflightWs: document.getElementById('telemetryInflightWs'),
+    cpuLoad: document.getElementById('telemetryCpuLoad'),
+    cpuTemp: document.getElementById('telemetryCpuTemp'),
+    freeHeap: document.getElementById('telemetryFreeHeap'),
+    minHeap: document.getElementById('telemetryMinHeap'),
+    largestHeap: document.getElementById('telemetryLargestHeap'),
+    psramTotal: document.getElementById('telemetryPsramTotal'),
+    freePsram: document.getElementById('telemetryFreePsram'),
+    minPsram: document.getElementById('telemetryMinPsram'),
+    largestPsram: document.getElementById('telemetryLargestPsram'),
+    drops: document.getElementById('telemetryDrops'),
+    backlogPeak: document.getElementById('telemetryBacklogPeak'),
+};
+const telemetryState = {
+    wsState: 'offline',
+    activeClients: 0,
+    sensorPackets: 0,
+    framesPerSecond: 0,
+    wsErrors: 0,
+    rawBytes: 0,
+    frameLimitPackets: 0,
+    inflightWs: 0,
+    cpuLoad: -1,
+    cpuTemp: Number.NaN,
+    freeHeap: 0,
+    minHeap: 0,
+    largestHeap: 0,
+    psramAvailable: false,
+    psramTotal: 0,
+    freePsram: 0,
+    minPsram: 0,
+    largestPsram: 0,
+    drops: 0,
+    backlogPeak: 0,
+    recentFrames: 0,
+    recentBytes: 0,
+};
+
+function setBootOverlayState(state, message, hint) {
+    window.__espBootOverlay?.setState?.(state, message, hint);
+}
+
+function formatTelemetryBytes(bytesPerSecond) {
+    if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+        return '0 B';
+    }
+
+    if (bytesPerSecond >= 1024 * 1024) {
+        return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MB`;
+    }
+
+    if (bytesPerSecond >= 1024) {
+        return `${(bytesPerSecond / 1024).toFixed(1)} KB`;
+    }
+
+    return `${Math.round(bytesPerSecond)} B`;
+}
+
+function formatTelemetryMetricBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) {
+        return '-';
+    }
+
+    return formatTelemetryBytes(bytes);
+}
+
+function setTelemetrySeverity(element, severity) {
+    if (!element) {
+        return;
+    }
+
+    element.classList.remove('is-warn', 'is-danger');
+    if (severity === 'warn') {
+        element.classList.add('is-warn');
+    }
+    if (severity === 'danger') {
+        element.classList.add('is-danger');
+    }
+}
+
+function setTelemetryTooltip(element, text) {
+    if (!element || !text) {
+        return;
+    }
+
+    element.title = text;
+    element.setAttribute('aria-label', text);
+    const keyElement = element.previousElementSibling;
+    if (keyElement?.classList?.contains('telemetry-key')) {
+        keyElement.title = text;
+        keyElement.setAttribute('aria-label', text);
+    }
+}
+
+function applyTelemetryTooltips() {
+    Object.entries(TELEMETRY_TOOLTIPS).forEach(([elementId, text]) => {
+        setTelemetryTooltip(document.getElementById(elementId), text);
+    });
+}
+
+function applyTelemetryPanelHidden(hidden) {
+    telemetryElements.panel?.classList.toggle('is-collapsed', hidden);
+    if (telemetryElements.toggle) {
+        telemetryElements.toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+        telemetryElements.toggle.setAttribute('title', hidden ? 'Telemetrie einblenden' : 'Telemetrie ausblenden');
+        telemetryElements.toggle.setAttribute('aria-label', hidden ? 'Telemetrie einblenden' : 'Telemetrie ausblenden');
+    }
+}
+
+function renderTelemetry() {
+    if (telemetryElements.wsState) {
+        telemetryElements.wsState.textContent = telemetryState.wsState;
+    }
+    if (telemetryElements.activeClients) {
+        telemetryElements.activeClients.textContent = String(telemetryState.activeClients);
+    }
+    if (telemetryElements.sensorPackets) {
+        telemetryElements.sensorPackets.textContent = String(telemetryState.sensorPackets);
+    }
+    if (telemetryElements.framesPerSecond) {
+        telemetryElements.framesPerSecond.textContent = String(telemetryState.framesPerSecond);
+    }
+    if (telemetryElements.wsErrors) {
+        telemetryElements.wsErrors.textContent = String(telemetryState.wsErrors);
+    }
+    if (telemetryElements.rawBytes) {
+        telemetryElements.rawBytes.textContent = `${formatTelemetryBytes(telemetryState.rawBytes)}/s`;
+    }
+    if (telemetryElements.frameLimit) {
+        telemetryElements.frameLimit.textContent = telemetryState.frameLimitPackets > 0 ? `${telemetryState.frameLimitPackets} pkt` : '-';
+    }
+    if (telemetryElements.inflightWs) {
+        telemetryElements.inflightWs.textContent = String(telemetryState.inflightWs);
+        setTelemetrySeverity(telemetryElements.inflightWs, telemetryState.inflightWs >= 3 ? 'warn' : null);
+    }
+    if (telemetryElements.cpuLoad) {
+        telemetryElements.cpuLoad.textContent = telemetryState.cpuLoad >= 0 ? `${telemetryState.cpuLoad}%` : '-';
+        setTelemetrySeverity(telemetryElements.cpuLoad, telemetryState.cpuLoad >= 90 ? 'danger' : telemetryState.cpuLoad >= 75 ? 'warn' : null);
+    }
+    if (telemetryElements.cpuTemp) {
+        telemetryElements.cpuTemp.textContent = Number.isFinite(telemetryState.cpuTemp) ? `${telemetryState.cpuTemp.toFixed(1)} C` : '-';
+        setTelemetrySeverity(telemetryElements.cpuTemp, telemetryState.cpuTemp >= 80 ? 'danger' : telemetryState.cpuTemp >= 70 ? 'warn' : null);
+    }
+    if (telemetryElements.freeHeap) {
+        telemetryElements.freeHeap.textContent = formatTelemetryMetricBytes(telemetryState.freeHeap);
+        setTelemetrySeverity(telemetryElements.freeHeap, telemetryState.freeHeap < 8 * 1024 ? 'danger' : telemetryState.freeHeap < 16 * 1024 ? 'warn' : null);
+    }
+    if (telemetryElements.minHeap) {
+        telemetryElements.minHeap.textContent = formatTelemetryMetricBytes(telemetryState.minHeap);
+        setTelemetrySeverity(telemetryElements.minHeap, telemetryState.minHeap < 2 * 1024 ? 'danger' : telemetryState.minHeap < 8 * 1024 ? 'warn' : null);
+    }
+    if (telemetryElements.largestHeap) {
+        telemetryElements.largestHeap.textContent = formatTelemetryMetricBytes(telemetryState.largestHeap);
+        setTelemetrySeverity(telemetryElements.largestHeap, telemetryState.largestHeap < 4 * 1024 ? 'danger' : telemetryState.largestHeap < 8 * 1024 ? 'warn' : null);
+    }
+    if (telemetryElements.psramTotal) {
+        telemetryElements.psramTotal.textContent = telemetryState.psramAvailable ? formatTelemetryMetricBytes(telemetryState.psramTotal) : 'n/a';
+    }
+    if (telemetryElements.freePsram) {
+        telemetryElements.freePsram.textContent = telemetryState.psramAvailable ? formatTelemetryMetricBytes(telemetryState.freePsram) : 'n/a';
+        setTelemetrySeverity(telemetryElements.freePsram, telemetryState.psramAvailable && telemetryState.freePsram < 128 * 1024 ? 'warn' : null);
+    }
+    if (telemetryElements.minPsram) {
+        telemetryElements.minPsram.textContent = telemetryState.psramAvailable ? formatTelemetryMetricBytes(telemetryState.minPsram) : 'n/a';
+    }
+    if (telemetryElements.largestPsram) {
+        telemetryElements.largestPsram.textContent = telemetryState.psramAvailable ? formatTelemetryMetricBytes(telemetryState.largestPsram) : 'n/a';
+    }
+    if (telemetryElements.drops) {
+        telemetryElements.drops.textContent = String(telemetryState.drops);
+        setTelemetrySeverity(telemetryElements.drops, telemetryState.drops > 0 ? 'warn' : null);
+    }
+    if (telemetryElements.backlogPeak) {
+        telemetryElements.backlogPeak.textContent = formatTelemetryMetricBytes(telemetryState.backlogPeak);
+        setTelemetrySeverity(telemetryElements.backlogPeak, telemetryState.backlogPeak > 8 * 1024 ? 'warn' : null);
+    }
+}
+
+function updateTelemetry(patch = {}) {
+    Object.assign(telemetryState, patch);
+    renderTelemetry();
+}
+
+window.setInterval(() => {
+    updateTelemetry({
+        framesPerSecond: telemetryState.recentFrames,
+        rawBytes: telemetryState.recentBytes,
+        recentFrames: 0,
+        recentBytes: 0,
+    });
+}, 1000);
+
+telemetryElements.toggle?.addEventListener('click', () => {
+    const willHide = !telemetryElements.panel?.classList.contains('is-collapsed');
+    applyTelemetryPanelHidden(willHide);
+    try {
+        window.localStorage?.setItem(TELEMETRY_PANEL_HIDDEN_KEY, willHide ? '1' : '0');
+    } catch (error) {
+    }
+});
+
+applyTelemetryPanelHidden(true);
+try {
+    window.localStorage?.setItem(TELEMETRY_PANEL_HIDDEN_KEY, '1');
+} catch (error) {
+}
+
+applyTelemetryTooltips();
+renderTelemetry();
+
+function clearBootOverlayReadyTimer() {
+    if (bootOverlayReadyTimer !== null) {
+        window.clearTimeout(bootOverlayReadyTimer);
+        bootOverlayReadyTimer = null;
+    }
+}
+
+function scheduleBootOverlayReadyFallback() {
+    clearBootOverlayReadyTimer();
+    bootOverlayReadyTimer = window.setTimeout(() => {
+        setBootOverlayState(
+            'ready',
+            'Dashboard bereit',
+            'WebSocket verbunden.'
+        );
+        bootOverlayReadyTimer = null;
+    }, 1200);
+}
 
 
 
 // === Init ===
 document.addEventListener("DOMContentLoaded", () => {
-
-    clearLegacyPersistenceCookies();
 
     setupFilterWorker();
     //initChart();
@@ -4079,8 +3754,6 @@ document.addEventListener("DOMContentLoaded", () => {
     setupDecodeWorker();
     restoreCalibrationFromCookie();
     setupUIListeners();
-    initializeAppSettingsPersistenceBindings();
-    restoreAppSettingsFromCookie();
     connectWebSocket();
     startChartUpdates();
     initFFTChart();
@@ -4102,7 +3775,6 @@ document.addEventListener("DOMContentLoaded", () => {
         filterDrawer?.classList.toggle('open');
         const isOpen = filterDrawer?.classList.contains('open');
         filterDrawer?.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-        persistAppSettingsCookie();
     });
 
     const livechartsGrid = document.getElementById('livechartsGrid');
@@ -4143,7 +3815,6 @@ document.addEventListener("DOMContentLoaded", () => {
             chart?.setSize(getSize());
             gyroChart?.setSize(getGyroChartSize());
         });
-        persistAppSettingsCookie();
     });
     fftRmsLayoutToggle?.addEventListener('click', () => {
         fftRmsGrid?.classList.toggle('is-side-by-side');
@@ -4153,7 +3824,6 @@ document.addEventListener("DOMContentLoaded", () => {
             fftPlot?.setSize(getFftChartSize());
             rmsPlot?.setSize(getRmsChartSize());
         });
-        persistAppSettingsCookie();
     });
     gyroFftRmsLayoutToggle?.addEventListener('click', () => {
         gyroFftRmsGrid?.classList.toggle('is-side-by-side');
@@ -4163,7 +3833,6 @@ document.addEventListener("DOMContentLoaded", () => {
             gyroFftPlot?.setSize(getGyroFftChartSize());
             gyroRmsPlot?.setSize(getGyroRmsChartSize());
         });
-        persistAppSettingsCookie();
     });
 
 
@@ -4176,7 +3845,6 @@ document.addEventListener("DOMContentLoaded", () => {
         updateLiveChartPanelHeights();
         updateFftRmsPanelHeights();
         updateGyroFftRmsPanelHeights();
-        persistAppSettingsCookie();
     });
 
     updateLiveChartPanelHeights();
@@ -4218,22 +3886,77 @@ function setupWSWorker() {
         const { type, payload } = event.data;
         if (type === "data") {
             if (payload instanceof ArrayBuffer) {
+                telemetryState.recentFrames += 1;
+                telemetryState.recentBytes += payload.byteLength || 0;
+                renderTelemetry();
+                clearBootOverlayReadyTimer();
+                setBootOverlayState(
+                    'ready',
+                    'Dashboard bereit',
+                    'Sensordaten empfangen.'
+                );
                 // ArrayBuffer als Transferable weitergeben
                 decodeWorker.postMessage(payload, [payload]);
             }
         } else if (type === "connected") {
-            console.log("WebSocket verbunden.");
-            setBootOverlayState('ready');
+            console.log("WebSocket verbunden.", payload?.url || '');
+            updateTelemetry({ wsState: 'verbunden' });
+            setBootOverlayState(
+                'loading',
+                'WebSocket verbunden',
+                payload?.url ? `Sensordaten werden initialisiert. ${payload.url}` : 'Sensordaten werden initialisiert.'
+            );
+            scheduleBootOverlayReadyFallback();
+        } else if (type === "espStats") {
+            updateTelemetry({
+                activeClients: payload?.activeClients ?? telemetryState.activeClients,
+                sensorPackets: payload?.sensorPackets ?? telemetryState.sensorPackets,
+                wsErrors: payload?.wsSendErrors ?? telemetryState.wsErrors,
+                frameLimitPackets: payload?.frameLimitPackets ?? telemetryState.frameLimitPackets,
+                inflightWs: payload?.inflightWs ?? telemetryState.inflightWs,
+                cpuLoad: payload?.cpuLoadPct ?? telemetryState.cpuLoad,
+                cpuTemp: payload?.cpuTempC ?? telemetryState.cpuTemp,
+                freeHeap: payload?.freeHeap ?? telemetryState.freeHeap,
+                minHeap: payload?.minFreeHeap ?? telemetryState.minHeap,
+                largestHeap: payload?.largestHeapBlock ?? telemetryState.largestHeap,
+                psramAvailable: Boolean(payload?.psramAvailable ?? telemetryState.psramAvailable),
+                psramTotal: payload?.psramTotal ?? telemetryState.psramTotal,
+                freePsram: payload?.freePsram ?? telemetryState.freePsram,
+                minPsram: payload?.minFreePsram ?? telemetryState.minPsram,
+                largestPsram: payload?.largestPsramBlock ?? telemetryState.largestPsram,
+                drops: payload?.streamDroppedBytes ?? telemetryState.drops,
+                backlogPeak: payload?.streamBacklogPeak ?? telemetryState.backlogPeak,
+            });
+        } else if (type === "workerStats") {
+            if (typeof payload?.forwardedBinaryFrames === 'number') {
+                updateTelemetry({ framesPerSecond: payload.forwardedBinaryFrames });
+            }
         } else if (type === "closed") {
-            console.warn("WebSocket getrennt.");
-            if (!globalThis.__espBootOverlay?.isReady?.()) {
-                setBootOverlayState('loading', 'WebSocket getrennt, neuer Verbindungsversuch...', 'Bitte kurz warten.');
-            }
+            clearBootOverlayReadyTimer();
+            console.warn("WebSocket getrennt.", payload || '');
+            updateTelemetry({ wsState: 'getrennt', activeClients: 0 });
+            const closeHint = payload?.url
+                ? `${payload.url} (code=${payload.code ?? 'n/a'}${payload?.reason ? `, reason=${payload.reason}` : ''})`
+                : 'Verbindung zum ESP wird erneut aufgebaut.';
+            setBootOverlayState(
+                'loading',
+                'WebSocket getrennt',
+                closeHint
+            );
         } else if (type === "error") {
+            clearBootOverlayReadyTimer();
             console.error("WebSocket-Fehler:", payload);
-            if (!globalThis.__espBootOverlay?.isReady?.()) {
-                setBootOverlayState('loading', 'WebSocket-Verbindung wird aufgebaut...', 'Falls es haengt, Seite kurz neu laden.');
-            }
+            updateTelemetry({ wsState: 'fehler' });
+            const errorHint = typeof payload === 'string'
+                ? payload
+                : [payload?.message, payload?.url, payload?.readyState != null ? `readyState=${payload.readyState}` : null]
+                    .filter(Boolean)
+                    .join(' | ');
+            setBootOverlayState(
+                'loading',
+                'WebSocket-Fehler',
+                errorHint || 'Verbindung zum ESP fehlgeschlagen.'
+            );
         }
     };
 }
@@ -4272,8 +3995,6 @@ const posZ = document.getElementById('posz');
 
 
 let latestFusionData = null;
-let fusionCalibrationSession = null;
-let discardFusionCalibrationResult = false;
 downsamplingWorker.postMessage({ type: 'init' });
 downsamplingWorker.onmessage = (e) => {
 fusionWorker.postMessage(e.data);
@@ -4284,47 +4005,20 @@ fusionWorker.postMessage(e.data);
 fusionWorker.onmessage = (event) => {
 const message = event.data;
 
-if (!message?.type) {
+if (!message || typeof message !== 'object') {
     return;
 }
 
-if (message.type === 'ack') {
-    if (fusionCalibrationSession) {
-        fusionCalibrationSession.statusText.textContent = 'Fusion-Kalibrierung läuft...';
-    }
+if (message.type === 'ack' || message.type === 'state') {
     return;
 }
 
 if (message.type === 'calibrated') {
-    if (discardFusionCalibrationResult) {
-        discardFusionCalibrationResult = false;
-        fusionCalibrationSession = null;
-        return;
-    }
-
-    const sanitizedState = sanitizeFusionCalibrationState(message);
-    if (sanitizedState) {
-        currentFusionCalibrationState = sanitizedState;
-        persistCalibrationCookie();
-    }
-
-    if (fusionCalibrationSession) {
-        clearInterval(fusionCalibrationSession.intervalId);
-        fusionCalibrationSession.progressBar.style.width = '100%';
-        fusionCalibrationSession.statusText.textContent = 'Fertig!';
-        fusionCalibrationSession.button.disabled = false;
-        command.textContent = 'AUTO-Fusion kalibriert';
-        result1.innerHTML = `Gyro-Bias [rad/s]: x=${sanitizedState?.gyroBias.x?.toFixed(4) ?? '0.0000'}, y=${sanitizedState?.gyroBias.y?.toFixed(4) ?? '0.0000'}, z=${sanitizedState?.gyroBias.z?.toFixed(4) ?? '0.0000'}<br>ACC-Varianz [g²]: x=${sanitizedState?.accVar?.[0]?.toExponential(2) ?? '0.00e+0'}, y=${sanitizedState?.accVar?.[1]?.toExponential(2) ?? '0.00e+0'}, z=${sanitizedState?.accVar?.[2]?.toExponential(2) ?? '0.00e+0'}`;
-        okBtn.style.display = 'flex';
-        cancelBtn.style.display = 'none';
-        fusionCalibrationSession = null;
-    }
-
-    applyOrientationMode(1, { syncDropdown: true, optionLabel: 'AUTO' });
+    console.info('Fusion-Kalibrierung abgeschlossen.');
     return;
 }
 
-if (message.type !== 'state') {
+if (!message.tiltHeadingRoll || !message.accWorld) {
     return;
 }
 
@@ -4335,15 +4029,19 @@ if (message.type !== 'state') {
 
 
 
-latestFusionData = message;
+roll.textContent = message.tiltHeadingRoll.roll.toFixed(0);
+pitch.textContent = message.tiltHeadingRoll.pitch.toFixed(0);
+yaw.textContent = message.tiltHeadingRoll.yaw.toFixed(0);
 
-roll && (roll.textContent = message.tiltHeadingRoll.roll.toFixed(0));
-pitch && (pitch.textContent = message.tiltHeadingRoll.pitch.toFixed(0));
-yaw && (yaw.textContent = message.tiltHeadingRoll.yaw.toFixed(0));
+posX.textContent = message.accWorld.x.toFixed(4);
+posY.textContent = message.accWorld.y.toFixed(4);
+posZ.textContent = message.accWorld.z.toFixed(4);
 
-posX && (posX.textContent = message.accWorld.x.toFixed(4));
-posY && (posY.textContent = message.accWorld.y.toFixed(4));
-posZ && (posZ.textContent = message.accWorld.z.toFixed(4));
+setBootOverlayState(
+    'ready',
+    'Dashboard bereit',
+    'Sensorstream aktiv.'
+);
 
 decodeWorker.postMessage({type: "calibdata", payload: {type: 1, quaternion: message.quaternion}});
 
@@ -4363,16 +4061,12 @@ function setupDecodeWorker() {
 
         const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = event.data;
 
-        if ((acc && acc.length > 0) || (gyro && gyro.length > 0)) {
-            const motionAccSamples = Array.isArray(acc)
-                ? acc.map((sample, index) => buildMotionAccelerationSample(accraw?.[index], sample) || sample)
-                : [];
-
+        if ((accraw && accraw.length > 0) || (gyroraw && gyroraw.length > 0)) {
             motionWorker.postMessage({
                 type: 'batch',
                 payload: {
-                    acc: motionAccSamples,
-                    gyro: Array.isArray(gyro) ? gyro : [],
+                    acc: Array.isArray(accraw) ? accraw : [],
+                    gyro: Array.isArray(gyroraw) ? gyroraw : [],
                 },
             });
         }
@@ -4566,7 +4260,6 @@ function setupDecodeWorker() {
                         console.warn("Unbekannte Config-SubID");
                 }
             });
-            persistAppSettingsCookie();
         }
     }
 }
@@ -4582,20 +4275,23 @@ function connectWebSocket() {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams(window.location.search);
     const customWsHost = params.get("ws") || localStorage.getItem("wsHost");
-    const isLocalPreview = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    const previewHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
+    const defaultEspHost = '192.168.4.1';
+    const hasExplicitDevPort = window.location.port !== '' && !['80', '443'].includes(window.location.port);
+    const isLocalPreview = previewHosts.has(window.location.hostname)
+        || (hasExplicitDevPort && window.location.hostname !== defaultEspHost);
 
     let url;
     if (customWsHost) {
         const normalizedHost = customWsHost.replace(/^wss?:\/\//, "").replace(/\/$/, "");
         url = `${protocol}//${normalizedHost}/ws`;
     } else if (isLocalPreview) {
-        url = 'ws://192.168.4.1/ws';
+        url = `ws://${defaultEspHost}/ws`;
     } else {
         url = `${protocol}//${location.host}/ws`;
     }
 
     console.log("[WS] Verbinde zu WebSocket:", url);
-    setBootOverlayState('loading', 'Verbinde mit dem ESP-WebSocket...', url);
     wsWorker.postMessage({ type: "connect", wsServerUrl: url });
 }
 
@@ -5654,7 +5350,6 @@ function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, scr
             const nextDuration = parseInt(timeSlider.value, 10);
             setDuration(nextDuration);
             timeValue.textContent = String(nextDuration);
-            persistAppSettingsCookie();
         });
     }
 
@@ -5664,7 +5359,6 @@ function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, scr
             const nextPaused = !getPaused();
             setPaused(nextPaused);
             pauseBtn.textContent = nextPaused ? '▶' : 'Pause';
-            persistAppSettingsCookie();
         });
     }
 
@@ -5703,7 +5397,6 @@ function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, scr
 
             if (timeSlider) timeSlider.value = String(Math.round(nextDuration));
             if (timeValue) timeValue.textContent = String(Math.round(nextDuration));
-            persistAppSettingsCookie();
         }, { passive: false, capture: true });
     }
 }
@@ -7189,13 +6882,6 @@ function openPopup() {
 function closePopup() {
     popup.style.display = "none";
 
-    if (fusionCalibrationSession) {
-        discardFusionCalibrationResult = true;
-        fusionWorker.postMessage({ type: 'stopCalib' });
-        clearInterval(fusionCalibrationSession.intervalId);
-        fusionCalibrationSession = null;
-    }
-
     resetAll();
 
     //resetStatusbar();
@@ -7315,53 +7001,6 @@ function startCalibWorldSimple(button, progressBar, statusText) {
             console.log("CALIBRATION DONE");
         }
     }, 30);
-}
-
-function startAutoFusionCalibration(button, progressBar, statusText) {
-    if (fusionCalibrationSession) {
-        return;
-    }
-
-    fusionCalibrationSession = {
-        button,
-        progressBar,
-        statusText,
-        progress: 0,
-        intervalId: null,
-    };
-    discardFusionCalibrationResult = false;
-
-    command.textContent = 'Bitte halte das Geraet ruhig. Gyro-Bias und ACC-Rauschen werden fuer AUTO erfasst.';
-    result1.textContent = 'Warte auf Fusionsdaten...';
-    button.disabled = true;
-    okBtn.style.display = 'none';
-    cancelBtn.style.display = 'flex';
-    progressBar.style.width = '0%';
-    statusText.textContent = 'Starte Fusion-Kalibrierung...';
-
-    fusionWorker.postMessage({ type: 'startCalib' });
-    fusionCalibrationSession.intervalId = setInterval(() => {
-        if (!fusionCalibrationSession) {
-            return;
-        }
-
-        fusionCalibrationSession.progress = Math.min(CALIBRATION_CAPTURE_STEPS, fusionCalibrationSession.progress + 1);
-        progressBar.style.width = `${fusionCalibrationSession.progress}%`;
-        statusText.textContent = `Fortschritt: ${fusionCalibrationSession.progress}%`;
-
-        if (latestFusionData?.tiltHeadingRoll) {
-            result1.textContent = `Roll ${latestFusionData.tiltHeadingRoll.roll.toFixed(1)}°, Pitch ${latestFusionData.tiltHeadingRoll.pitch.toFixed(1)}°, Yaw ${latestFusionData.tiltHeadingRoll.yaw.toFixed(1)}°`;
-        }
-
-        if (fusionCalibrationSession.progress < CALIBRATION_CAPTURE_STEPS) {
-            return;
-        }
-
-        clearInterval(fusionCalibrationSession.intervalId);
-        fusionWorker.postMessage({ type: 'stopCalib' });
-        fusionCalibrationSession.intervalId = null;
-        statusText.textContent = 'Kalibrierung wird ausgewertet...';
-    }, CALIBRATION_CAPTURE_STEP_MS);
 }
 
 // WORLD + AXIS
@@ -7690,11 +7329,6 @@ document.getElementById("btn1").addEventListener("click", () => {
     const progressBar = document.getElementById("progress1");
     const statusText = document.getElementById("statusText1");
 
-    if (calibrationFlow === 'autoFusion') {
-        startAutoFusionCalibration(button, progressBar, statusText);
-        return;
-    }
-
     if (calibrationFlow === 'reference') {
         captureCurrentReferenceState(button, progressBar, statusText);
         return;
@@ -7726,13 +7360,6 @@ function resetAll() {
     document.getElementById("headline").textContent = "Koordinatensystem wählen";
     document.getElementById("btn1").textContent = "Starte Kalibrierung";
     calibrationFlow = 'worldSimple';
-
-    if (fusionCalibrationSession) {
-        discardFusionCalibrationResult = true;
-        fusionWorker.postMessage({ type: 'stopCalib' });
-        clearInterval(fusionCalibrationSession.intervalId);
-        fusionCalibrationSession = null;
-    }
 
 
     action1.style.display = "none";
@@ -7789,18 +7416,6 @@ document.getElementById("btnWorldSimple").addEventListener("click", () => {
     action3.style.display = "none";
 });
 
-document.getElementById("btnAutoFusion").addEventListener("click", () => {
-    calibrationFlow = 'autoFusion';
-    headline.textContent = "AUTO Fusion aktiviert";
-    command.textContent = "Bitte halte das Geraet ruhig. Die AUTO-Fusion kalibriert Gyro-Bias und ACC-Rauschen.";
-    document.getElementById("btn1").textContent = "AUTO kalibrieren";
-
-    buttonRow1.style.display = "none";
-    action1.style.display = "block";
-    action2.style.display = "none";
-    action3.style.display = "none";
-});
-
 
 
 document.getElementById("btnTwoAxis").addEventListener("click", () => {
@@ -7844,8 +7459,6 @@ btn.addEventListener('click', function () {
             }
         });
     }
-
-    syncMotionWorkerTransform({ reset: true });
 });
 
 

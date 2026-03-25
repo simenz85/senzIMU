@@ -37,6 +37,7 @@ let previousMotionInputAcc = { x: 0, y: 0, z: 0 };
 let motionBias = { x: 0, y: 0, z: 0 };
 let lastEmitAtMs = 0;
 let stationaryTimeSeconds = 0;
+let inputPort = null;
 
 function clampDt(seconds) {
     if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -450,6 +451,22 @@ function processBatch(payload) {
 
 onmessage = (event) => {
     const data = event.data || {};
+
+    if (data.type === 'attachInputPort') {
+        inputPort = data.port ?? event.ports?.[0] ?? null;
+        if (!inputPort) {
+            return;
+        }
+
+        inputPort.onmessage = (portEvent) => {
+            onmessage({ data: portEvent.data, ports: [] });
+        };
+
+        if (typeof inputPort.start === 'function') {
+            inputPort.start();
+        }
+        return;
+    }
 
     if (data.type === 'config') {
         if (typeof data.payload?.mode === 'string') {

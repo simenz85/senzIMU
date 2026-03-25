@@ -66,9 +66,70 @@ let postQConjX = 0;
 let postQConjY = 0;
 let postQConjZ = 0;
 let postQConjW = 1;
+let inputPort = null;
+let decodedBufferCount = 0;
+let decodedSampleCount = 0;
+let lastDecodeStatsSentAt = 0;
+let downsamplingPort = null;
+let motionPort = null;
+let motionForwardingEnabled = false;
+
+function forwardRawBatchToDownsampling(sensor, data) {
+  if (!downsamplingPort || !Array.isArray(data) || data.length === 0) {
+    return;
+  }
+
+  downsamplingPort.postMessage({
+    type: 'batch',
+    sensor,
+    data,
+  });
+}
+
+function forwardMotionBatch(acc, gyro) {
+  if (!motionPort || !motionForwardingEnabled) {
+    return;
+  }
+
+  const accSamples = Array.isArray(acc) ? acc : [];
+  const gyroSamples = Array.isArray(gyro) ? gyro : [];
+  if (!accSamples.length && !gyroSamples.length) {
+    return;
+  }
+
+  motionPort.postMessage({
+    type: 'batch',
+    payload: {
+      acc: accSamples,
+      gyro: gyroSamples,
+    },
+  });
+}
+
+function maybeReportDecodeStats(replyPort) {
+  if (!replyPort) {
+    return;
+  }
+
+  const now = Date.now();
+  if ((now - lastDecodeStatsSentAt) < 500) {
+    return;
+  }
+
+  lastDecodeStatsSentAt = now;
+  replyPort.postMessage({
+    type: 'decodeStats',
+    payload: {
+      decodedBufferCount,
+      decodedSampleCount,
+    },
+  });
+}
+
+function handleWorkerMessage(data, replyPort = null) {
+  let event = { data };
 
 
-onmessage = function (event) {
   let arrayBuffer = event.data;
   if (arrayBuffer instanceof ArrayBuffer) {
     //console.warn("[DECODE-WORKER] Skipping invalid message " + String(event.data));
@@ -76,6 +137,8 @@ onmessage = function (event) {
 
     let view = new DataView(arrayBuffer);
     let sampleCount = Math.floor(arrayBuffer.byteLength / SAMPLE_SIZE);
+    decodedBufferCount += 1;
+    decodedSampleCount += sampleCount;
 
     let acc = [];
     let gyro = [];
@@ -197,8 +260,6 @@ onmessage = function (event) {
 
           // AUTOORIENT
           if (IMUOrientation === IMUOpt.AUTO) {
-            console.log("FUSION");
-            
             if (quatauto !== null && quatauto !== undefined) {
               
               fusionacc = rotateVectorByQuat({ x, y, z }, quatauto);
@@ -378,7 +439,49 @@ onmessage = function (event) {
       }
     }
 
+    forwardRawBatchToDownsampling('acc', accraw);
+    forwardRawBatchToDownsampling('gyro', gyroraw);
+    forwardMotionBatch(acc, gyro);
+    if (replyPort) {
+      replyPort.postMessage({ type: 'ack' });
+      maybeReportDecodeStats(replyPort);
+    }
     postMessage({ acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib })
+  }
+
+  else if (event.data?.type === 'attachInputPort') {
+    inputPort = event.data.port ?? event.ports?.[0] ?? null;
+    if (!inputPort) {
+      return;
+    }
+
+    inputPort.onmessage = (portEvent) => {
+      handleWorkerMessage(portEvent.data, inputPort);
+    };
+
+    if (typeof inputPort.start === 'function') {
+      inputPort.start();
+    }
+
+    inputPort.postMessage({ type: 'ready' });
+  }
+
+  else if (event.data?.type === 'attachDownsamplingPort') {
+    downsamplingPort = event.data.port ?? event.ports?.[0] ?? null;
+    if (downsamplingPort && typeof downsamplingPort.start === 'function') {
+      downsamplingPort.start();
+    }
+  }
+
+  else if (event.data?.type === 'attachMotionPort') {
+    motionPort = event.data.port ?? event.ports?.[0] ?? null;
+    if (motionPort && typeof motionPort.start === 'function') {
+      motionPort.start();
+    }
+  }
+
+  else if (event.data?.type === 'setMotionForwardingEnabled') {
+    motionForwardingEnabled = Boolean(event.data.enabled);
   }
 
  // ORIENTIERUNGSMODUS AUSWÄHLEN
@@ -503,6 +606,10 @@ onmessage = function (event) {
 
     //console.log("[DECODE-WORKER] Quaternion updated:", calibdata);
   }
+}
+
+onmessage = function (event) {
+  handleWorkerMessage(event.data, null);
 };
 
 function applyCalibrationToAccel1(accelData, calibdata) {

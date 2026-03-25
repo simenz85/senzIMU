@@ -121,6 +121,41 @@ body {
   overflow: hidden;
 }
 
+.sidebar-item-bottom {
+  margin-top: auto;
+  border-top: 1px solid #1a1c22;
+  border-bottom: none;
+}
+
+.sidebar-item-action {
+  padding: 0;
+}
+
+.sidebar-action-button {
+  width: 100%;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-action-button:hover,
+.sidebar-action-button:focus-visible {
+  background: #181c24;
+  color: #FFD600;
+  outline: none;
+}
+
+.sidebar-action-button[aria-pressed="true"] {
+  color: #FFD600;
+}
+
 .sidebar-item:hover, .sidebar-item:focus {
   background: #181c24;
   color: #FFD600;
