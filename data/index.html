@@ -176,6 +176,10 @@
       color: #ff8a8a;
     }
 
+    #telemetryPanel.is-hidden {
+      display: none;
+    }
+
     #telemetryPanel.is-collapsed .telemetry-grid {
       display: none;
     }
@@ -331,7 +335,6 @@
 
       <!-- KALIBRIERUNGSTYP-->
       <div class="button-row" id="buttonRow1">
-        <button id="btnAutoFusion">AUTO Fusion</button>
         <button id="btnWorldSimple">World Simple</button>
         <button id="btnWorldAxis">World + Axis</button>
         <button id="btnTwoAxis">Two Axis</button>
@@ -414,28 +417,28 @@
 
       <li class="sidebar-item" id="navLFFTchart">
         <span class="sidebar-icon">
-          <img src="icons/fft.svg" alt="Einstellungen" />
+          <img src="icons/accfft.svg" alt="ACC FFT" />
           <span class="sidebar-label">ACC FFT</span>
       </li>
 
       <li class="sidebar-item" id="navGyroFFTchart">
         <span class="sidebar-icon">
-          <img src="icons/fft.svg" alt="Gyro FFT" />
+          <img src="icons/gyrofft.svg" alt="Gyro FFT" />
           <span class="sidebar-label">Gyro FFT</span>
       </li>
 
       <li class="sidebar-item" id="navVectorAlign">
         <span class="sidebar-icon">
-          <img src="icons/livechart.svg" alt="3D Align" />
+          <img src="icons/align3d.svg" alt="3D Align" />
         </span>
         <span class="sidebar-label">3D Align</span>
       </li>
 
       <li class="sidebar-item" id="navMotionViewport">
         <span class="sidebar-icon">
-          <img src="icons/livechart.svg" alt="Motion View" />
+          <img src="icons/vibration3d.svg" alt="3D Vibration" />
         </span>
-        <span class="sidebar-label">Motion 3D</span>
+        <span class="sidebar-label">3D Vibration</span>
       </li>
 
       <li class="sidebar-item" id="navSettings">
@@ -1162,9 +1165,8 @@
               <div class="vector-align-stage">
                 <div class="vector-align-toolbar">
                   <div class="vector-align-toolbar-primary">
-                    <div class="vector-align-source-switch" role="group" aria-label="Motion Modus">
-                      <button id="motionModeMotionBtn" class="vector-align-source-btn active" type="button">Bewegung</button>
-                      <button id="motionModeVibrationBtn" class="vector-align-source-btn" type="button">Vibration</button>
+                    <div class="vector-align-source-switch" role="group" aria-label="Vibrationsmodus">
+                      <button id="motionModeVibrationBtn" class="vector-align-source-btn active" type="button">Vibration</button>
                       <button id="motionResetBtn" class="vector-align-source-btn" type="button">Reset Spur</button>
                     </div>
                   </div>
@@ -1173,7 +1175,7 @@
                   </div>
                 </div>
                 <div id="motionViewport" class="acc-vector-viewport motion-vector-viewport">
-                  <div id="motionViewcube" class="vector-align-viewcube" aria-label="Schnellansicht Motion">
+                  <div id="motionViewcube" class="vector-align-viewcube" aria-label="Schnellansicht Vibration">
                     <button type="button" class="vector-align-viewcube-face vector-align-viewcube-top" data-view="top" title="Oben">O</button>
                     <button type="button" class="vector-align-viewcube-face vector-align-viewcube-left" data-view="left" title="Links">L</button>
                     <button type="button" class="vector-align-viewcube-face vector-align-viewcube-front" data-view="front" title="Vorne">V</button>
@@ -1181,17 +1183,17 @@
                     <button type="button" class="vector-align-viewcube-face vector-align-viewcube-back" data-view="back" title="Hinten">H</button>
                     <button type="button" class="vector-align-viewcube-face vector-align-viewcube-bottom" data-view="bottom" title="Unten">U</button>
                   </div>
-                  <div class="vector-align-overlay" aria-label="Motion-Viewport Steuerung und Legende">
+                  <div class="vector-align-overlay" aria-label="Vibrations-Viewport Steuerung und Legende">
                     <details class="vector-align-overlay-details">
                       <summary class="vector-align-overlay-summary">
-                        <span class="vector-align-overlay-title" aria-label="Motion-Regler">&lt;</span>
+                        <span class="vector-align-overlay-title" aria-label="Vibrations-Regler">&lt;</span>
                         <span class="vector-align-overlay-summary-hint"></span>
                       </summary>
                       <div class="vector-align-overlay-controls">
                         <div class="vector-align-overlay-row vector-align-overlay-row--background">
                           <span class="vector-align-legend-swatch vector-align-legend-swatch--world"></span>
                           <label for="motionBackgroundPreset">BG</label>
-                          <select id="motionBackgroundPreset" class="vector-align-slider-input vector-align-overlay-input vector-align-overlay-select" aria-label="Motion Hintergrund">
+                          <select id="motionBackgroundPreset" class="vector-align-slider-input vector-align-overlay-input vector-align-overlay-select" aria-label="Vibration Hintergrund">
                             <option value="steel">Steel</option>
                             <option value="steel-soft">Steel Soft</option>
                             <option value="steel-light">Steel Light</option>
@@ -1291,7 +1293,7 @@
                   <div class="vector-align-slider-row">
                     <label for="motionTrailSecondsInput">Spur</label>
                     <input id="motionTrailSeconds" type="range" min="1" max="20" value="5" step="1" />
-                    <input id="motionTrailSecondsInput" class="vector-align-slider-input" type="number" min="1" max="20" value="5" step="1" inputmode="numeric" aria-label="Spurlänge in Sekunden" />
+                    <input id="motionTrailSecondsInput" class="vector-align-slider-input" type="number" min="1" max="20" value="5" step="1" inputmode="numeric" aria-label="Spurlaenge in Sekunden" />
                     <span aria-hidden="true"></span>
                     <span id="motionTrailSecondsValue">5 s</span>
                   </div>
@@ -1312,7 +1314,7 @@
                   <div class="vector-align-slider-row">
                     <label for="motionStationaryInput">Still</label>
                     <input id="motionStationary" type="range" min="5" max="150" value="12" step="1" />
-                    <input id="motionStationaryInput" class="vector-align-slider-input" type="number" min="5" max="150" value="12" step="1" inputmode="numeric" aria-label="Stillstandsschwelle in 0.01 m/s²" />
+                    <input id="motionStationaryInput" class="vector-align-slider-input" type="number" min="5" max="150" value="12" step="1" inputmode="numeric" aria-label="Stillstandsschwelle in 0.01 m/s^2" />
                     <span aria-hidden="true"></span>
                     <span id="motionStationaryValue">0.12</span>
                   </div>
@@ -1327,7 +1329,7 @@
 
                 <div class="vector-align-metrics-grid">
                   <section class="vector-align-card vector-align-card--metrics">
-                    <div class="vector-align-card-title">Lineare ACC [m/s²]</div>
+                    <div class="vector-align-card-title">Lineare ACC [m/s^2]</div>
                     <div class="vector-align-readout-grid">
                       <div class="vector-align-readout-label">ax</div>
                       <div id="motionAccX" class="vector-align-readout-value">0.000</div>
@@ -1372,7 +1374,7 @@
                     <div class="vector-align-card-title">Betrieb</div>
                     <div class="vector-align-readout-grid">
                       <div class="vector-align-readout-label">Modus</div>
-                      <div id="motionModeReadout" class="vector-align-readout-value">Bewegung</div>
+                      <div id="motionModeReadout" class="vector-align-readout-value">Vibration</div>
                       <div class="vector-align-readout-label">Orientierung</div>
                       <div id="motionOrientationReadout" class="vector-align-readout-value">inaktiv</div>
                       <div class="vector-align-readout-label">Samples</div>

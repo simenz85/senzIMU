@@ -263,13 +263,11 @@ function handleWorkerMessage(data, replyPort = null) {
             if (quatauto !== null && quatauto !== undefined) {
               
               fusionacc = rotateVectorByQuat({ x, y, z }, quatauto);
-              
-              if (cutgravity === true) {
-                fusionacc.z = fusionacc.z + gravity;
-                //console.log("CUTGRAVITY");
-              }
               if (postTransformEnabled) {
                 [fusionacc.x, fusionacc.y, fusionacc.z] = applyPostTransformFast(fusionacc.x, fusionacc.y, fusionacc.z);
+              }
+              if (cutgravity === true) {
+                [fusionacc.x, fusionacc.y, fusionacc.z] = subtractGravityFast(fusionacc.x, fusionacc.y, fusionacc.z);
               }
               total = Math.sqrt(fusionacc.x * fusionacc.x + fusionacc.y * fusionacc.y + fusionacc.z * fusionacc.z);
               
@@ -283,13 +281,11 @@ function handleWorkerMessage(data, replyPort = null) {
           if (IMUOrientation === IMUOpt.WORLD_SIMPLE) {
             if (quatworldsimple !== null && quatworldsimple !== undefined) {
               [x, y, z] = applyCalibrationToAccelFast(x, y, z);
-              
-              if (cutgravity === true) {
-                //console.log("CUTGRAVITY");
-                z = z + gravity;
-              }
               if (postTransformEnabled) {
                 [x, y, z] = applyPostTransformFast(x, y, z);
+              }
+              if (cutgravity === true) {
+                [x, y, z] = subtractGravityFast(x, y, z);
               }
               total = Math.sqrt(x * x + y * y + z * z);
               acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
@@ -760,6 +756,19 @@ function applyPostTransformFast(x, y, z) {
     tw * postQConjX + tx * postQConjW + ty * postQConjZ - tz * postQConjY,
     tw * postQConjY + ty * postQConjW + tz * postQConjX - tx * postQConjZ,
     tw * postQConjZ + tz * postQConjW + tx * postQConjY - ty * postQConjX,
+  ];
+}
+
+function subtractGravityFast(x, y, z) {
+  const normalizedGravity = Number.isFinite(gravity) && gravity > 0 ? gravity : 1000;
+  const gravityVector = postTransformEnabled
+    ? applyPostTransformFast(0, 0, -normalizedGravity)
+    : [0, 0, -normalizedGravity];
+
+  return [
+    x - gravityVector[0],
+    y - gravityVector[1],
+    z - gravityVector[2],
   ];
 }
 

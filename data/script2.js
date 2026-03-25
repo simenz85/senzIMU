@@ -38,11 +38,13 @@ const APP_SETTINGS_COOKIE_NAME = 'imuAppSettings';
 const APP_SETTINGS_COOKIE_VERSION = 1;
 const APP_SETTINGS_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const APP_SETTINGS_STORAGE_KEY = 'imuAppSettings.local';
+const LEGACY_WS_HOST_STORAGE_KEY = 'wsHost';
 let referenceCaptureActive = false;
 let worldSimpleGyroCaptureActive = false;
 let currentOrientationMode = 0;
 let currentOrientationLabel = null;
 let gravityCutEnabled = false;
+let persistedCustomWsHost = null;
 let currentReferenceState = null;
 let currentWorldSimpleGyroState = null;
 let currentAccelCalibrationScale = 1;
@@ -177,9 +179,34 @@ const FILTER_WARMUP_ORDER_SECONDS = 0.18;
 const FILTER_ZERO_PHASE_PAD_MIN_SAMPLES = 96;
 const FILTER_ZERO_PHASE_PAD_MAX_SAMPLES = 1024;
 const lastAppliedFilterSettings = { acc: null, gyro: null };
+const ENABLE_MOTION_VIEW = true;
+const ENABLE_FUSION_PIPELINE = false;
+
+function createNoopWorker() {
+    return {
+        onmessage: null,
+        postMessage() {},
+        terminate() {},
+    };
+}
+
+function createNoopMotionViewport() {
+    return {
+        options: {},
+        setDisplayScale() {},
+        setState() {},
+        setStatus() {},
+        setVisible() {},
+        getDisplaySettings() {
+            return null;
+        },
+        applyDisplaySettings() {},
+    };
+}
+
 const accVectorViewport = new AccVectorViewport();
-const motionViewport = new MotionViewport();
-const motionWorker = new Worker('motion-worker.js');
+const motionViewport = ENABLE_MOTION_VIEW ? new MotionViewport() : createNoopMotionViewport();
+const motionWorker = ENABLE_MOTION_VIEW ? new Worker('motion-worker.js') : createNoopWorker();
 const motionModeMotionBtn = document.getElementById('motionModeMotionBtn');
 const motionModeVibrationBtn = document.getElementById('motionModeVibrationBtn');
 const motionResetBtn = document.getElementById('motionResetBtn');
@@ -215,7 +242,7 @@ const motionPositionY = document.getElementById('motionPositionY');
 const motionPositionZ = document.getElementById('motionPositionZ');
 const motionPositionMagnitude = document.getElementById('motionPositionMagnitude');
 const motionUiState = {
-    mode: 'motion',
+    mode: 'vibration',
     trailSeconds: 5,
     displayScale: 3,
     deadbandMg: 10,
@@ -433,10 +460,12 @@ bindMotionNumericControl(motionVibrationLeakSlider, motionVibrationLeakInput, (v
     }
 });
 
-syncMotionWorkerConfig({ reset: true });
+if (ENABLE_MOTION_VIEW) {
+    syncMotionWorkerConfig({ reset: true });
+}
 
-// Regelmäßiges Update, Standard: 30 fps
-let FFT_UPDATE_INTERVAL = 1000 / 30;
+// Regelmäßiges Update, Standard: 20 fps
+let FFT_UPDATE_INTERVAL = 1000 / 20;
 let RMS_UPDATE_INTERVAL = 50;
 let FFT_WINDOW_SIZE = 2048; // Größte Zweierpotenz, ggf. auch 2048
 let fftUpdateTimerId = null;
@@ -450,7 +479,7 @@ let fftWorker = null;
 let rmsWorker = null;
 let RMS_WINDOW_SIZE = 100;
 
-let GYRO_FFT_UPDATE_INTERVAL = 1000 / 30;
+let GYRO_FFT_UPDATE_INTERVAL = 1000 / 20;
 let GYRO_FFT_WINDOW_SIZE = 2048;
 let gyroFftUpdateTimerId = null;
 let gyroRmsUpdateTimerId = null;
@@ -472,8 +501,8 @@ const dropdown1 = new UniDropdown(document.getElementById('dropdown1'), {
     type: 'select',
     label: 'Blocksize',
     items: [
-        { value: 254, label: 254 },
-        { value: 508, label: 508 },
+        { value: 256, label: 256 },
+        { value: 512, label: 512 },
         { value: 1024, label: 1024 },
         { value: 2048, label: 2048 },
         { value: 4096, label: 4096 }
@@ -595,8 +624,8 @@ const gyroDropdown1 = new UniDropdown(document.getElementById('gyroDropdown1'), 
     type: 'select',
     label: 'Blocksize',
     items: [
-        { value: 254, label: 254 },
-        { value: 508, label: 508 },
+        { value: 256, label: 256 },
+        { value: 512, label: 512 },
         { value: 1024, label: 1024 },
         { value: 2048, label: 2048 },
         { value: 4096, label: 4096 }
@@ -2010,10 +2039,6 @@ const CSDD2 = new UniDropdown(document.getElementById('CSDD2'), {
     label: 'Orientation',
     items: [
         { value: 0, label: " - " },
-        { value: 1, label: "AUTO" }
-        // { value: 1, label: "World Simple" },
-        // { value: 2, label: "World + Axis" },
-        // { value: 3, label: "2 Axis" },
     ],
     onChange: (value, label) => {
         applyOrientationMode(value);
@@ -2096,6 +2121,157 @@ function clearLocalStorageValue(name) {
         globalThis.localStorage?.removeItem(name);
     } catch (error) {
         console.warn('Lokaler Persistenzspeicher konnte nicht gelöscht werden:', error);
+    }
+}
+
+function sanitizeAppSettingsBoolean(value, fallback = false) {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    if (typeof value === 'number') {
+        return value !== 0;
+    }
+
+    if (typeof value === 'string') {
+        const normalizedValue = value.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) {
+            return true;
+        }
+        if (['0', 'false', 'no', 'off'].includes(normalizedValue)) {
+            return false;
+        }
+    }
+
+    return fallback;
+}
+
+function sanitizeCustomWsHost(value) {
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const normalizedHost = value
+        .trim()
+        .replace(/^wss?:\/\//i, '')
+        .replace(/\/ws\/?$/i, '')
+        .replace(/\/+$/g, '');
+
+    if (!normalizedHost || /\s/.test(normalizedHost) || normalizedHost.includes('/')) {
+        return null;
+    }
+
+    return normalizedHost;
+}
+
+function getCurrentAppSettingsState() {
+    return {
+        version: APP_SETTINGS_COOKIE_VERSION,
+        savedAt: Date.now(),
+        telemetryPanelHidden: telemetryElements.panel?.classList.contains('is-hidden') ?? true,
+        gravityCutEnabled: Boolean(gravityCutEnabled),
+        customWsHost: sanitizeCustomWsHost(persistedCustomWsHost),
+    };
+}
+
+function parseAppSettingsPersistedState(rawState) {
+    const parsed = JSON.parse(rawState);
+    const version = Number(parsed?.version);
+
+    if (version !== APP_SETTINGS_COOKIE_VERSION) {
+        return null;
+    }
+
+    return {
+        version,
+        telemetryPanelHidden: sanitizeAppSettingsBoolean(parsed?.telemetryPanelHidden, true),
+        gravityCutEnabled: sanitizeAppSettingsBoolean(parsed?.gravityCutEnabled, false),
+        customWsHost: sanitizeCustomWsHost(parsed?.customWsHost),
+    };
+}
+
+function buildLegacyAppSettingsState() {
+    const legacyTelemetryHidden = getLocalStorageValue(TELEMETRY_PANEL_HIDDEN_KEY);
+    const legacyWsHost = getLocalStorageValue(LEGACY_WS_HOST_STORAGE_KEY);
+
+    if (legacyTelemetryHidden === null && !legacyWsHost) {
+        return null;
+    }
+
+    return {
+        version: APP_SETTINGS_COOKIE_VERSION,
+        telemetryPanelHidden: sanitizeAppSettingsBoolean(legacyTelemetryHidden, true),
+        gravityCutEnabled: false,
+        customWsHost: sanitizeCustomWsHost(legacyWsHost),
+    };
+}
+
+function clearLegacyAppSettingsStorage() {
+    clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
+    clearLocalStorageValue(TELEMETRY_PANEL_HIDDEN_KEY);
+    clearLocalStorageValue(LEGACY_WS_HOST_STORAGE_KEY);
+}
+
+function persistAppSettingsCookie() {
+    const serializedState = JSON.stringify(getCurrentAppSettingsState());
+    setCookieValue(APP_SETTINGS_COOKIE_NAME, serializedState, APP_SETTINGS_COOKIE_MAX_AGE_SECONDS);
+}
+
+function readAppSettingsCookieState() {
+    const rawCookie = getCookieValue(APP_SETTINGS_COOKIE_NAME);
+    if (rawCookie) {
+        try {
+            const state = parseAppSettingsPersistedState(rawCookie);
+            if (!state) {
+                clearCookieValue(APP_SETTINGS_COOKIE_NAME);
+                return null;
+            }
+
+            return { state, source: 'cookie' };
+        } catch (error) {
+            console.warn('App-Settings-Cookie konnte nicht gelesen werden:', error);
+            clearCookieValue(APP_SETTINGS_COOKIE_NAME);
+        }
+    }
+
+    const rawStorage = getLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
+    if (rawStorage) {
+        try {
+            const state = parseAppSettingsPersistedState(rawStorage);
+            if (!state) {
+                clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
+            } else {
+                return { state, source: 'localStorage' };
+            }
+        } catch (error) {
+            console.warn('App-Settings-Backup konnte nicht gelesen werden:', error);
+            clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
+        }
+    }
+
+    const legacyState = buildLegacyAppSettingsState();
+    if (legacyState) {
+        return { state: legacyState, source: 'legacy' };
+    }
+
+    return null;
+}
+
+function restoreAppSettingsFromCookie() {
+    const persisted = readAppSettingsCookieState();
+    const state = persisted?.state || {
+        telemetryPanelHidden: true,
+        gravityCutEnabled: false,
+        customWsHost: null,
+    };
+
+    persistedCustomWsHost = sanitizeCustomWsHost(state.customWsHost);
+    applyTelemetryPanelHidden(state.telemetryPanelHidden, { persistState: false });
+    setGravityCutEnabled(state.gravityCutEnabled, { persistState: false, notifyWorker: true });
+
+    if (persisted && persisted.source !== 'cookie') {
+        persistAppSettingsCookie();
+        clearLegacyAppSettingsStorage();
     }
 }
 
@@ -2247,10 +2423,6 @@ function getOrientationLabelForMode(mode) {
     const existingItem = CSDD2.items?.find((item) => Number(item.value) === normalizedMode);
     if (existingItem?.label) {
         return existingItem.label;
-    }
-
-    if (normalizedMode === 1) {
-        return 'AUTO';
     }
 
     if (normalizedMode === 2) {
@@ -2501,9 +2673,13 @@ function setAccelCalibrationScale(scale, { persistState = true } = {}) {
 }
 
 function applyOrientationMode(mode, { syncDropdown = false, optionLabel = null, persistState = true } = {}) {
-    const normalizedMode = Number(mode);
+    let normalizedMode = Number(mode);
     if (!Number.isFinite(normalizedMode)) {
         return;
+    }
+
+    if (!ENABLE_FUSION_PIPELINE && normalizedMode === 1) {
+        normalizedMode = 0;
     }
 
     currentOrientationMode = normalizedMode;
@@ -2812,6 +2988,10 @@ function getViewportEffectiveQuaternionXYZW() {
 }
 
 function syncMotionWorkerTransform({ reset = false } = {}) {
+    if (!ENABLE_MOTION_VIEW) {
+        return;
+    }
+
     motionWorker.postMessage({
         type: 'transform',
         payload: {
@@ -2863,6 +3043,18 @@ function buildLiveAccelerationSample(rawSample, processedSample) {
     }
 
     return calibratedSample;
+}
+
+function buildMotionAccelerationSample(rawSample, processedSample) {
+    const raw = rawSample || processedSample || null;
+    if (!raw) {
+        return null;
+    }
+
+    const gravityMagnitude = getViewportGravityMagnitude();
+    const gravityVector = getGravityCutVectorSample(gravityMagnitude);
+    const calibratedSample = buildViewportBaseAccelerationSample(raw) || processedSample || raw;
+    return applyGravityCutToSample(calibratedSample, gravityMagnitude, gravityVector) || calibratedSample;
 }
 
 function buildLiveGyroSample(rawSample, processedSample) {
@@ -3478,8 +3670,8 @@ const wsWorker = new Worker("ws-worker.js");
 const decodeWorker = new Worker("decode-worker2.js");
 const accFilterWorker = new Worker('filter-worker.js');
 const gyroFilterWorker = new Worker('filter-worker.js');
-const downsamplingWorker = new Worker('downsampling-worker.js');
-const fusionWorker = new Worker('fusion-worker5.js');
+const downsamplingWorker = ENABLE_FUSION_PIPELINE ? new Worker('downsampling-worker.js') : createNoopWorker();
+const fusionWorker = ENABLE_FUSION_PIPELINE ? new Worker('fusion-worker5.js') : createNoopWorker();
 let bootOverlayReadyTimer = null;
 const TELEMETRY_PANEL_HIDDEN_KEY = 'telemetryPanelHidden';
 const TELEMETRY_TOOLTIPS = {
@@ -3613,12 +3805,16 @@ function applyTelemetryTooltips() {
     });
 }
 
-function applyTelemetryPanelHidden(hidden) {
-    telemetryElements.panel?.classList.toggle('is-collapsed', hidden);
+function applyTelemetryPanelHidden(hidden, { persistState = true } = {}) {
+    telemetryElements.panel?.classList.toggle('is-hidden', hidden);
     if (telemetryElements.toggle) {
         telemetryElements.toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
         telemetryElements.toggle.setAttribute('title', hidden ? 'Telemetrie einblenden' : 'Telemetrie ausblenden');
         telemetryElements.toggle.setAttribute('aria-label', hidden ? 'Telemetrie einblenden' : 'Telemetrie ausblenden');
+    }
+
+    if (persistState) {
+        persistAppSettingsCookie();
     }
 }
 
@@ -3706,22 +3902,22 @@ window.setInterval(() => {
 }, 1000);
 
 telemetryElements.toggle?.addEventListener('click', () => {
-    const willHide = !telemetryElements.panel?.classList.contains('is-collapsed');
+    const willHide = !telemetryElements.panel?.classList.contains('is-hidden');
     applyTelemetryPanelHidden(willHide);
-    try {
-        window.localStorage?.setItem(TELEMETRY_PANEL_HIDDEN_KEY, willHide ? '1' : '0');
-    } catch (error) {
-    }
 });
-
-applyTelemetryPanelHidden(true);
-try {
-    window.localStorage?.setItem(TELEMETRY_PANEL_HIDDEN_KEY, '1');
-} catch (error) {
-}
 
 applyTelemetryTooltips();
 renderTelemetry();
+
+const initialAppSettings = readAppSettingsCookieState()?.state || {
+    telemetryPanelHidden: true,
+    gravityCutEnabled: false,
+    customWsHost: null,
+};
+
+persistedCustomWsHost = sanitizeCustomWsHost(initialAppSettings.customWsHost);
+gravityCutEnabled = Boolean(initialAppSettings.gravityCutEnabled);
+applyTelemetryPanelHidden(initialAppSettings.telemetryPanelHidden, { persistState: false });
 
 function clearBootOverlayReadyTimer() {
     if (bootOverlayReadyTimer !== null) {
@@ -3752,6 +3948,7 @@ document.addEventListener("DOMContentLoaded", () => {
     //enableChartZoomAndPan();
     setupWSWorker();
     setupDecodeWorker();
+    restoreAppSettingsFromCookie();
     restoreCalibrationFromCookie();
     setupUIListeners();
     connectWebSocket();
@@ -4061,23 +4258,28 @@ function setupDecodeWorker() {
 
         const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = event.data;
 
-        if ((accraw && accraw.length > 0) || (gyroraw && gyroraw.length > 0)) {
+        if (ENABLE_MOTION_VIEW && ((accraw && accraw.length > 0) || (gyroraw && gyroraw.length > 0))) {
+            const motionAccSamples = Array.isArray(accraw) && accraw.length > 0
+                ? accraw.map((sample, index) => buildMotionAccelerationSample(sample, acc?.[index]) || acc?.[index] || sample)
+                : (Array.isArray(acc) ? acc.map((sample) => buildMotionAccelerationSample(sample, sample) || sample) : []);
             motionWorker.postMessage({
                 type: 'batch',
                 payload: {
-                    acc: Array.isArray(accraw) ? accraw : [],
+                    acc: motionAccSamples,
                     gyro: Array.isArray(gyroraw) ? gyroraw : [],
                 },
             });
         }
 
 
-        if (accraw && accraw.length > 0) {            
-            downsamplingWorker.postMessage({
-            type: "batch",
-            sensor: "acc",
-            data: accraw.map(s => ({ x: s.x, y: s.y, z: s.z, time: s.time }))
-            });
+        if (accraw && accraw.length > 0) {
+            if (ENABLE_FUSION_PIPELINE) {
+                downsamplingWorker.postMessage({
+                    type: "batch",
+                    sensor: "acc",
+                    data: accraw.map(s => ({ x: s.x, y: s.y, z: s.z, time: s.time }))
+                });
+            }
 
             for (let sample of accraw) {
                 accRawBuffer.push([sample.time, sample.x, sample.y, sample.z, Math.hypot(sample.x, sample.y, sample.z)]);
@@ -4088,11 +4290,13 @@ function setupDecodeWorker() {
         }
 
         if (gyroraw && gyroraw.length > 0) {
-            downsamplingWorker.postMessage({
-                type: "batch",
-                sensor: "gyro",
-                data: gyroraw.map(s => ({ x: s.x, y: s.y, z: s.z, time: s.time }))
-            });
+            if (ENABLE_FUSION_PIPELINE) {
+                downsamplingWorker.postMessage({
+                    type: "batch",
+                    sensor: "gyro",
+                    data: gyroraw.map(s => ({ x: s.x, y: s.y, z: s.z, time: s.time }))
+                });
+            }
 
             for (let sample of gyroraw) {
                 gyroRawBuffer.push([sample.time, sample.x, sample.y, sample.z]);
@@ -4274,7 +4478,7 @@ function setupDecodeWorker() {
 function connectWebSocket() {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams(window.location.search);
-    const customWsHost = params.get("ws") || localStorage.getItem("wsHost");
+    const customWsHost = sanitizeCustomWsHost(params.get("ws")) || persistedCustomWsHost;
     const previewHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
     const defaultEspHost = '192.168.4.1';
     const hasExplicitDevPort = window.location.port !== '' && !['80', '443'].includes(window.location.port);
@@ -7439,26 +7643,29 @@ document.getElementById("btnReferenceState").addEventListener("click", () => {
 // GRAVITY
 
 const btn = document.getElementById('gravityBtn');
-btn.addEventListener('click', function () {
-    btn.classList.toggle('toggle-on');
-    gravityCutEnabled = btn.classList.contains('toggle-on');
+btn?.classList.toggle('toggle-on', gravityCutEnabled);
 
-    decodeWorker.postMessage({
-        type: "setgravity",
-        payload: {
-            gravity: true,
-        }
-    });
+function setGravityCutEnabled(enabled, { persistState = true, notifyWorker = true } = {}) {
+    const normalizedEnabled = Boolean(enabled);
+    gravityCutEnabled = normalizedEnabled;
+    btn?.classList.toggle('toggle-on', normalizedEnabled);
 
-    if (!btn.classList.contains('toggle-on')) {
-        gravityCutEnabled = false;
+    if (notifyWorker) {
         decodeWorker.postMessage({
             type: "setgravity",
             payload: {
-                gravity: false,
+                gravity: normalizedEnabled,
             }
         });
     }
+
+    if (persistState) {
+        persistAppSettingsCookie();
+    }
+}
+
+btn?.addEventListener('click', function () {
+    setGravityCutEnabled(!gravityCutEnabled);
 });
 
 
