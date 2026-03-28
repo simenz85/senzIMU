@@ -371,8 +371,9 @@ export class UniDropdown {
 
         this.optionsElements = [...this.dropdownContent.querySelectorAll('a')];
 
-        if (options.defaultValue) {
-            const opt = this.optionsElements.find(o => o.dataset.value === options.defaultValue);
+        if (options.defaultValue !== undefined) {
+            const defaultStr = String(options.defaultValue);
+            const opt = this.optionsElements.find(o => o.dataset.value === defaultStr);
             this.setActiveOption(opt || this.optionsElements[0]);
         } else if (options.defaultIndex !== undefined && this.optionsElements[options.defaultIndex]) {
             this.setActiveOption(this.optionsElements[options.defaultIndex]);

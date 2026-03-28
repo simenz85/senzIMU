@@ -139,15 +139,17 @@ let displayDurationSeconds = 5;
 
 let filePartIndex = 0;
 const MAX_RECORDED_ROWS = 500000;
-const RECORDED_CSV_HEADERS = [
+const ACC_CSV_HEADERS = [
     "timestamp_us",
-    "sensor",
     "acc_x_mg",
     "acc_y_mg",
     "acc_z_mg",
-    "gyro_x_mdps",
-    "gyro_y_mdps",
-    "gyro_z_mdps",
+];
+const GYRO_CSV_HEADERS = [
+    "timestamp_us",
+    "gyro_x_m°/s",
+    "gyro_y_m°/s",
+    "gyro_z_m°/s",
 ];
 
 let fftDBoutput = false;
@@ -489,9 +491,9 @@ let gyroAvgFFTBuffer = [];
 let gyroFftWorker = null;
 let gyroRmsWorker = null;
 const GYRO_FFT_RING_SIZE = 2 * 1000 / GYRO_FFT_UPDATE_INTERVAL;
-let GYRO_FFT_WINDOW_TYPE;
+let GYRO_FFT_WINDOW_TYPE = "BLACKMAN";
 let GYRO_DC_CUTOFF = true;
-let GYRO_FFT_AXIS_MODE;
+let GYRO_FFT_AXIS_MODE = "COMBI";
 let gyroFftHighPass = 0;
 let gyroDisplayDurationSecondsRMS = 20;
 let gyroRmsPaused = false;
@@ -564,7 +566,7 @@ const dropdown3 = new UniDropdown(document.getElementById('dropdown3'), {
 dropdown3.button.title = "Wähle die Anzahl der Samples für den FFT Mittelwert";
 
 
-let FFT_WINDOW_TYPE;
+let FFT_WINDOW_TYPE = "BLACKMAN";
 const dropdown4 = new UniDropdown(document.getElementById('dropdown4'), {
     type: 'select',
     label: 'WinType',
@@ -574,7 +576,7 @@ const dropdown4 = new UniDropdown(document.getElementById('dropdown4'), {
         { value: "HAMMING", label: "HAMMING" },
         { value: "RECTANGULAR", label: "RECTANGULAR" },
     ],
-    defaultValue: N_AVG,
+    defaultValue: FFT_WINDOW_TYPE,
     onChange: (value, label) => {
         FFT_WINDOW_TYPE = value;
         console.log('Ausgewählt:', value, label);
@@ -600,7 +602,7 @@ const dropdown5 = new UniDropdown(document.getElementById('dropdown5'), {
 dropdown5.button.title = "Wähle den DC Cutoff für FFT";
 
 
-let FFT_AXIS_MODE;
+let FFT_AXIS_MODE = "COMBI";
 const dropdown6 = new UniDropdown(document.getElementById('dropdown6'), {
     type: 'select',
     label: 'AXIS',
@@ -610,7 +612,7 @@ const dropdown6 = new UniDropdown(document.getElementById('dropdown6'), {
         { value: "ONLYY", label: "Y" },
         { value: "ONLYZ", label: "Z" },
     ],
-    defaultValue: N_AVG,
+    defaultValue: FFT_AXIS_MODE,
     onChange: (value, label) => {
         FFT_AXIS_MODE = value;
         console.log('Ausgewählt:', value, label);
@@ -690,7 +692,7 @@ const gyroDropdown4 = new UniDropdown(document.getElementById('gyroDropdown4'), 
         { value: 'HAMMING', label: 'HAMMING' },
         { value: 'RECTANGULAR', label: 'RECTANGULAR' },
     ],
-    defaultValue: gyroN_AVG,
+    defaultValue: GYRO_FFT_WINDOW_TYPE,
     onChange: (value, label) => {
         GYRO_FFT_WINDOW_TYPE = value;
         console.log('Gyro FFT Fenstertyp:', value, label);
@@ -722,7 +724,7 @@ const gyroDropdown6 = new UniDropdown(document.getElementById('gyroDropdown6'), 
         { value: 'ONLYY', label: 'Y' },
         { value: 'ONLYZ', label: 'Z' },
     ],
-    defaultValue: gyroN_AVG,
+    defaultValue: GYRO_FFT_AXIS_MODE,
     onChange: (value, label) => {
         GYRO_FFT_AXIS_MODE = value;
         console.log('Gyro FFT Achse:', value, label);
@@ -3535,7 +3537,8 @@ let currentTimeRange = 5;
 let samplesReceived = 0;
 let lastRateCheck = performance.now();
 let isRecording = false;
-let recordedRows = [];
+let recordedAccRows = [];
+let recordedGyroRows = [];
 
 let SamplesPerSecond = 0;
 let samplecount = 0;
@@ -3551,23 +3554,15 @@ function formatRecordedValue(value, digits = 1) {
 function createAccRecordingRow(sample) {
     return [
         sample.time,
-        "acc",
         formatRecordedValue(sample.x),
         formatRecordedValue(sample.y),
         formatRecordedValue(sample.z),
-        "",
-        "",
-        "",
     ];
 }
 
 function createGyroRecordingRow(sample) {
     return [
         sample.time,
-        "gyro",
-        "",
-        "",
-        "",
         formatRecordedValue(sample.x),
         formatRecordedValue(sample.y),
         formatRecordedValue(sample.z),
@@ -3575,27 +3570,56 @@ function createGyroRecordingRow(sample) {
 }
 
 function downloadRecordedCsv(isIntermediate = false) {
-    if (!recordedRows.length) {
+    if (!recordedAccRows.length && !recordedGyroRows.length) {
         return false;
     }
 
     const downloadBtn = document.getElementById("downloadBtn");
-    const header = RECORDED_CSV_HEADERS.join(",");
-    const csv = `${header}\n${recordedRows.map((row) => row.join(",")).join("\n")}`;
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
     const timestamp = new Date().toISOString().replace(/[:.]/g, "_");
     const suffix = isIntermediate ? `_part${String(filePartIndex).padStart(3, '0')}` : "";
 
-    anchor.href = url;
-    anchor.download = `recording_${timestamp}${suffix}.csv`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    function getActiveQuaternion() {
+        if (typeof calibrationMemory !== 'undefined' && Array.isArray(calibrationMemory[1]) && calibrationMemory[1].length === 4) {
+            return calibrationMemory[1];
+        }
+        if (typeof ausrichtung !== 'undefined' && ausrichtung && ausrichtung.some(v => v !== 0)) {
+            return ausrichtung;
+        }
+        return [0, 0, 0, 1];
+    }
+    const activeQuat = getActiveQuaternion();
+    const quatString = activeQuat.map(v => Number(v).toFixed(4)).join(", ");
+
+    if (recordedAccRows.length > 0) {
+        const headerInfoAcc = `"# Gesamtquaternion: [${quatString}]"\n`;
+        const headerAcc = ACC_CSV_HEADERS.join(",");
+        const csvAcc = `${headerInfoAcc}${headerAcc}\n${recordedAccRows.map((row) => row.join(",")).join("\n")}`;
+        const blobAcc = new Blob([csvAcc], { type: "text/csv" });
+        const urlAcc = URL.createObjectURL(blobAcc);
+        const anchorAcc = document.createElement("a");
+        anchorAcc.href = urlAcc;
+        anchorAcc.download = `recording_${timestamp}${suffix}_acc.csv`;
+        anchorAcc.click();
+        URL.revokeObjectURL(urlAcc);
+    }
+
+    if (recordedGyroRows.length > 0) {
+        const headerInfoGyro = `"# Gesamtquaternion: [${quatString}]"\n`;
+        const headerGyro = GYRO_CSV_HEADERS.join(",");
+        const csvGyro = `${headerInfoGyro}${headerGyro}\n${recordedGyroRows.map((row) => row.join(",")).join("\n")}`;
+        const blobGyro = new Blob([csvGyro], { type: "text/csv" });
+        const urlGyro = URL.createObjectURL(blobGyro);
+        const anchorGyro = document.createElement("a");
+        anchorGyro.href = urlGyro;
+        anchorGyro.download = `recording_${timestamp}${suffix}_gyro.csv`;
+        anchorGyro.click();
+        URL.revokeObjectURL(urlGyro);
+    }
 
     if (isIntermediate) {
         filePartIndex += 1;
-        recordedRows = [];
+        recordedAccRows = [];
+        recordedGyroRows = [];
     } else if (downloadBtn) {
         downloadBtn.style.display = "none";
     }
@@ -4070,12 +4094,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // SLIDER ACTION
 
-document.getElementById('fpsSlider').addEventListener('input', function () {
-    const fps = parseInt(this.value, 10);
-    document.getElementById('fpsValue').textContent = fps;
-    updateIntervalMs = Math.round(1000 / fps);
-    startChartUpdates(); // setzt neuen Intervall
-});
+const fpsSlider = document.getElementById('fpsSlider');
+if (fpsSlider) {
+    fpsSlider.addEventListener('input', function () {
+        const fps = parseInt(this.value, 10);
+        const fpsValueLabel = document.getElementById('fpsValue');
+        if (fpsValueLabel) fpsValueLabel.textContent = fps;
+        updateIntervalMs = Math.round(1000 / fps);
+        startChartUpdates(); // setzt neuen Intervall
+    });
+}
 
 // === WebSocket Worker einrichten ===
 function setupWSWorker() {
@@ -4162,7 +4190,7 @@ function setupWSWorker() {
 
 let chartUpdateRunning = false;
 let lastChartUpdate = 0;
-let updateIntervalMs = 40; // 25 FPS
+let updateIntervalMs = 50; // 20 FPS
 
 function startChartUpdates() {
     function updateLoop(now) {
@@ -4349,10 +4377,10 @@ function setupDecodeWorker() {
                 
                 // --- RECORDING LOGIC ADDED HERE ---
                 if (isRecording) {
-                    recordedRows.push(createAccRecordingRow(sample));
+                    recordedAccRows.push(createAccRecordingRow(sample));
                     
-                    if (recordedRows.length >= MAX_RECORDED_ROWS) {
-                        console.log("Max rows reached. Triggering intermediate download.");
+                    if (recordedAccRows.length >= MAX_RECORDED_ROWS) {
+                        console.log("Max rows reached (ACC). Triggering intermediate download.");
                         downloadRecordedCsv(true);
                     }
                 }
@@ -4400,10 +4428,10 @@ function setupDecodeWorker() {
                 batchZs[index] = sample.z;
 
                 if (isRecording) {
-                    recordedRows.push(createGyroRecordingRow(sample));
+                    recordedGyroRows.push(createGyroRecordingRow(sample));
 
-                    if (recordedRows.length >= MAX_RECORDED_ROWS) {
-                        console.log("Max rows reached. Triggering intermediate download.");
+                    if (recordedGyroRows.length >= MAX_RECORDED_ROWS) {
+                        console.log("Max rows reached (GYRO). Triggering intermediate download.");
                         downloadRecordedCsv(true);
                     }
                 }
@@ -4522,11 +4550,12 @@ function handleDecodedSample(sample) {
 
     if (isRecording) {
         if (id === 1) {
-            recordedRows.push(createAccRecordingRow({ time: timestamp, x: value1, y: value2, z: value3 }));
+            recordedAccRows.push(createAccRecordingRow({ time: timestamp, x: value1, y: value2, z: value3 }));
+            if (recordedAccRows.length >= MAX_RECORDED_ROWS) downloadRecordedCsv(true);
         } else if (id === 2) {
-            recordedRows.push(createGyroRecordingRow({ time: timestamp, x: value1, y: value2, z: value3 }));
+            recordedGyroRows.push(createGyroRecordingRow({ time: timestamp, x: value1, y: value2, z: value3 }));
+            if (recordedGyroRows.length >= MAX_RECORDED_ROWS) downloadRecordedCsv(true);
         }
-        if (recordedRows.length % 50 === 0) console.log("Recording... rows:", recordedRows.length);
     } // DEBUGGING: Removed console.log
     else {
         // console.log("handleDecodedSample: not recording. isRecording=", isRecording);
@@ -4867,6 +4896,73 @@ function setupUIListeners() {
             recordBtn.classList.toggle("active", isRecording);
         }
 
+        if (!document.getElementById('recordingPulseStyle')) {
+            const style = document.createElement('style');
+            style.id = 'recordingPulseStyle';
+            style.innerHTML = `
+                @keyframes pulseRecordGradient {
+                    0% { opacity: 0.85; }
+                    50% { opacity: 0.15; }
+                    100% { opacity: 0.85; }
+                }
+                .recording-overlay {
+                    position: fixed;
+                    top: 0;
+                    right: 0;
+                    bottom: 0;
+                    width: 120px;
+                    background: linear-gradient(to right, transparent, rgba(255, 0, 0, 0.7));
+                    pointer-events: none;
+                    z-index: 9999;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: space-between;
+                    align-items: flex-end;
+                    padding: 30px 15px;
+                    box-sizing: border-box;
+                    animation: pulseRecordGradient 1.5s infinite ease-in-out;
+                }
+                .recording-label-box {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    color: #ff3333;
+                    font-family: 'Segoe UI', sans-serif;
+                    font-weight: 900;
+                    font-size: 20px;
+                    text-shadow: 0 0 10px rgba(0,0,0,0.9);
+                    letter-spacing: 2px;
+                }
+                .recording-circle {
+                    width: 16px;
+                    height: 16px;
+                    background-color: red;
+                    border-radius: 50%;
+                    box-shadow: 0 0 8px red;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        let recOverlay = document.getElementById('recordingOverlayDynamic');
+        if (isRecording) {
+            if (!recOverlay) {
+                recOverlay = document.createElement('div');
+                recOverlay.id = 'recordingOverlayDynamic';
+                recOverlay.className = 'recording-overlay';
+                recOverlay.innerHTML = `
+                    <div class="recording-label-box"><div class="recording-circle"></div>REC</div>
+                    <div class="recording-label-box"><div class="recording-circle"></div>REC</div>
+                `;
+                document.body.appendChild(recOverlay);
+            }
+        } else {
+            if (recOverlay) {
+                recOverlay.remove();
+            }
+        }
+        document.body.classList.remove('recording-active-border'); // Cleanup legacy class
+
         if (recBtn2) {
             recBtn2.textContent = isRecording ? "⏹" : "🔴";
             recBtn2.classList.toggle("active", isRecording);
@@ -4888,12 +4984,13 @@ function setupUIListeners() {
 
         if (isRecording) {
             console.log("toggleRecording: STARTING. recordedRows reset.");
-            recordedRows = [];
+            recordedAccRows = [];
+            recordedGyroRows = [];
             filePartIndex = 0;
             if (downloadBtn) {
                 downloadBtn.style.display = "none";
             }
-        } else if (recordedRows.length > 0) {
+        } else if (recordedAccRows.length > 0 || recordedGyroRows.length > 0) {
             downloadRecordedCsv(false);
         }
 
@@ -5032,7 +5129,7 @@ function initRMSChart() {
             x: {
                 values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
             },
-            y: { auto: true }
+            y: { auto: true, range: (s, min, max) => [0, Math.max(250, (max == null ? 250 : max * 1.1))] }
         },
         axes: [
             {
@@ -5072,6 +5169,10 @@ function initRMSChart() {
 
     rmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById("rmsChart"));
     installManualLegendToggle(rmsPlot, "rmsChartLegendHost");
+    
+    // Bind overlays immediately after chart is defined
+    bindYAxisOverlay("rms-y-axis-overlay", rmsPlot, true);
+    bindRmsXAxisOverlay("rms-x-axis-overlay", rmsPlot, false);
 
 
 
@@ -5267,7 +5368,7 @@ function initGyroRMSChart() {
             x: {
                 values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
             },
-            y: { auto: true }
+            y: { auto: true, range: (s, min, max) => [0, Math.max(1.0, (max == null ? 1 : max * 1.1))] }
         },
         axes: [
             {
@@ -5290,10 +5391,10 @@ function initGyroRMSChart() {
         ],
         series: [
             { label: 'Zeit', value: (u, v) => formatMicrosecondsToHMS(v, 2) },
-            { label: 'Gyro X (mdps)', stroke: '#4dd0e1' },
-            { label: 'Gyro Y (mdps)', stroke: '#ffb74d' },
-            { label: 'Gyro Z (mdps)', stroke: '#81c784' },
-            { label: 'Gyro Total (mdps)', stroke: '#ce93d8', fill: 'rgba(206,147,216,0.18)' },
+            { label: 'Gyro X (m°/s)', stroke: '#4dd0e1' },
+            { label: 'Gyro Y (m°/s)', stroke: '#ffb74d' },
+            { label: 'Gyro Z (m°/s)', stroke: '#81c784' },
+            { label: 'Gyro Total (m°/s)', stroke: '#ce93d8', fill: 'rgba(206,147,216,0.18)' },
         ],
         cursor: {
             drag: { x: true, y: true, setScale: true }
@@ -5307,6 +5408,10 @@ function initGyroRMSChart() {
 
     gyroRmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById('gyroRmsChart'));
     installManualLegendToggle(gyroRmsPlot, 'gyroRmsChartLegendHost');
+
+    // Bind overlays immediately after chart is defined
+    bindYAxisOverlay("gyro-rms-y-axis-overlay", gyroRmsPlot, true);
+    bindRmsXAxisOverlay("gyro-rms-x-axis-overlay", gyroRmsPlot, true);
 }
 
 // FFT Worker initialisieren
@@ -5451,53 +5556,29 @@ function setupRMSWorker() {
 
         rmsBuffer.push([time, rmsX, rmsY, rmsZ, rmsTotal]);
 
-        // console.log("[Main] RMS Worker received:", rmsBuffer.length);
-
-        const actadata = rmsBuffer.getLast();
-        // console.log("[Main] RMS Worker last data:", actadata);
-        const times = rmsBuffer.getFieldTypedArray('time', rmsBuffer.length);
-        const latestTimestamp2 = rmsBuffer.getLast().time;
-        // let N = 5000;
-        
-        // Calculate N based on displayDurationSecondsRMS
-        // We need to know how many samples fit in X seconds.
-        // RMS updates happen every RMS_UPDATE_INTERVAL (e.g. 100ms?)
-        // Let's assume RMS_UPDATE_INTERVAL is 50ms => 20 samples/sec.
-        // Or better: use the time difference.
-        // For now, let's estimate based on interval.
-        // const samplesPerSec = 1000 / RMS_UPDATE_INTERVAL;
-        // let N = Math.round(samplesPerSec * displayDurationSecondsRMS);
-        // But samplesPerSec is not defined here.
-        // Let's rely on time filtering! 
-        // Or just use a large N?
-        // Wait, displayDurationSecondsRMS is in seconds.
-        // We can just ask for N samples? 
-        // rmsBuffer.getFieldTypedArray returns last N samples.
-        // Let's try to calculate N dynamically.
-        // Assuming RMS_UPDATE_INTERVAL is defined globally.
-        
         const updatesPerSecond = 1000 / RMS_UPDATE_INTERVAL;
-        let N = Math.ceil(updatesPerSecond * displayDurationSecondsRMS);
+        const requiredDuration = displayDurationSecondsRMS + Math.max(0, Math.abs(rmsPanOffset / 1000000));
+        let N = Math.ceil(updatesPerSecond * requiredDuration);
         if (N < 10) N = 10;
-        
-        // console.log("bufferlänge: " + rmsBuffer.length);
 
-        // const rmst = rmsBuffer.getChannelTypedArray("time",N);
         const rmsx = rmsBuffer.getFieldTypedArray("x", N);
         const rmsy = rmsBuffer.getFieldTypedArray("y", N);
         const rmsz = rmsBuffer.getFieldTypedArray("z", N);
         const rmstotal = rmsBuffer.getFieldTypedArray("total", N);
         const rmst = rmsBuffer.getFieldTypedArray("time", N);
 
-        // console.log("RMSTIME" + latestTimestamp2);
+        const yMinBefore = rmsPlot?.scales?.y?.min;
+        const yMaxBefore = rmsPlot?.scales?.y?.max;
+
         rmsPlot.setData([rmst, rmsx, rmsy, rmsz, rmstotal]);
-        
-        // Auto-Scale X Axis
-        if (rmst.length > 0) {
-            rmsPlot.setScale("x", { min: rmst[0], max: rmst[rmst.length - 1] });
+
+        if (rmsPlot._yLocked && yMinBefore !== undefined && yMaxBefore !== undefined) {
+            rmsPlot.setScale("y", { min: yMinBefore, max: yMaxBefore });
         }
-        
-        // window.dispatchEvent(new CustomEvent("rmsDataUpdate", { detail: { latestTimestamp2: times[length - 1] } }));
+
+        if (rmst.length > 0) {
+            window.dispatchEvent(new CustomEvent("rmsDataUpdate", { detail: { latestTimestamp: rmst[rmst.length - 1] } }));
+        }
     };
 }
 
@@ -5517,7 +5598,8 @@ function setupGyroRMSWorker() {
         gyroRmsBuffer.push([time, rmsX, rmsY, rmsZ, rmsTotal]);
 
         const updatesPerSecond = 1000 / RMS_UPDATE_INTERVAL;
-        let N = Math.ceil(updatesPerSecond * gyroDisplayDurationSecondsRMS);
+        const requiredDuration = gyroDisplayDurationSecondsRMS + Math.max(0, Math.abs(gyroRmsPanOffset / 1000000));
+        let N = Math.ceil(updatesPerSecond * requiredDuration);
         if (N < 10) N = 10;
 
         const rmsx = gyroRmsBuffer.getFieldTypedArray('x', N);
@@ -5526,10 +5608,17 @@ function setupGyroRMSWorker() {
         const rmstotal = gyroRmsBuffer.getFieldTypedArray('total', N);
         const rmst = gyroRmsBuffer.getFieldTypedArray('time', N);
 
+        const yMinBefore = gyroRmsPlot?.scales?.y?.min;
+        const yMaxBefore = gyroRmsPlot?.scales?.y?.max;
+
         gyroRmsPlot?.setData([rmst, rmsx, rmsy, rmsz, rmstotal]);
 
+        if (gyroRmsPlot?._yLocked && yMinBefore !== undefined && yMaxBefore !== undefined) {
+             gyroRmsPlot?.setScale("y", { min: yMinBefore, max: yMaxBefore });
+        }
+
         if (rmst.length > 0) {
-            gyroRmsPlot?.setScale('x', { min: rmst[0], max: rmst[rmst.length - 1] });
+            window.dispatchEvent(new CustomEvent("gyroRmsDataUpdate", { detail: { latestTimestamp: rmst[rmst.length - 1] } }));
         }
     };
 }
@@ -5595,7 +5684,7 @@ function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, scr
             let nextDuration = getDuration() * factor;
 
             if (nextDuration < 1) nextDuration = 1;
-            if (nextDuration > 60) nextDuration = 60;
+            if (nextDuration > 300) nextDuration = 300;
 
             setDuration(nextDuration);
 
@@ -6462,7 +6551,7 @@ const gyroOptions = {
             size: 56,
             label: "Wert",
             grid: { show: true },
-            ticks: { format: (u, v) => v.toFixed(2) + " mdps" },
+            ticks: { format: (u, v) => v.toFixed(2) + " m°/s" },
             stroke: "white"
         }
     ],
@@ -6472,9 +6561,9 @@ const gyroOptions = {
     },
     series: [
         { label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 5) },
-        { label: "Gyro X (mdps)", stroke: "#4dd0e1" },
-        { label: "Gyro Y (mdps)", stroke: "#ffb74d" },
-        { label: "Gyro Z (mdps)", stroke: "#81c784" },
+        { label: "Gyro X (m°/s)", stroke: "#4dd0e1" },
+        { label: "Gyro Y (m°/s)", stroke: "#ffb74d" },
+        { label: "Gyro Z (m°/s)", stroke: "#81c784" },
     ],
     cursor: {
         points: {},
@@ -6627,11 +6716,20 @@ let liveChartResizeObserver = new ResizeObserver(() => {
 
         syncAxisOverlayPositions(chart, "livechart2", "y-axis-overlay", "x-axis-overlay");
         syncAxisOverlayPositions(gyroChart, "gyrochart", "gyro-y-axis-overlay", "gyro-x-axis-overlay");
+
+        if (typeof rmsPlot !== "undefined" && rmsPlot) {
+            syncAxisOverlayPositions(rmsPlot, "rmsPanel", "rms-y-axis-overlay", "rms-x-axis-overlay");
+        }
+        if (typeof gyroRmsPlot !== "undefined" && gyroRmsPlot) {
+            syncAxisOverlayPositions(gyroRmsPlot, "gyroRmsPanel", "gyro-rms-y-axis-overlay", "gyro-rms-x-axis-overlay");
+        }
     });
 });
 
 liveChartResizeObserver.observe(document.getElementById("livechart2"));
 liveChartResizeObserver.observe(document.getElementById("gyrochart"));
+if (document.getElementById("rmsPanel")) liveChartResizeObserver.observe(document.getElementById("rmsPanel"));
+if (document.getElementById("gyroRmsPanel")) liveChartResizeObserver.observe(document.getElementById("gyroRmsPanel"));
 
 let resourcesDisposed = false;
 
@@ -6685,6 +6783,27 @@ pauseBtn2.onclick = () => {
 
 let liveChartPanOffset = 0;
 let rmsPanOffset = 0;
+let gyroRmsPanOffset = 0;
+let rmsDisplayDurationSeconds = 20;
+let gyroRmsDisplayDurationSeconds = 20;
+
+const rmsTimeSlider = document.getElementById("rmsTimeSlider");
+const rmsTimeValue = document.getElementById("rmsTimeValue");
+if (rmsTimeSlider && rmsTimeValue) {
+    rmsTimeSlider.addEventListener("input", (e) => {
+        rmsDisplayDurationSeconds = Number(e.target.value);
+        rmsTimeValue.textContent = rmsDisplayDurationSeconds;
+    });
+}
+
+const gyroRmsTimeSlider = document.getElementById("gyroRmsTimeSlider");
+const gyroRmsTimeValue = document.getElementById("gyroRmsTimeValue");
+if (gyroRmsTimeSlider && gyroRmsTimeValue) {
+    gyroRmsTimeSlider.addEventListener("input", (e) => {
+        gyroRmsDisplayDurationSeconds = Number(e.target.value);
+        gyroRmsTimeValue.textContent = gyroRmsDisplayDurationSeconds;
+    });
+}
 
 function syncTimeRangeUi(rangeUs) {
     let rangeSecs = rangeUs / 1000000;
@@ -6750,8 +6869,10 @@ function zoomSharedXAxis(factor, pointerPos, sourceChart = chart) {
     if (!sc) return;
     const range = sc.max - sc.min;
     const newRange = range * factor;
-    const newMin = sc.min + range * pointerPos - newRange * pointerPos;
-    const newMax = newMin + newRange;
+    
+    // Oszilloskop-Modus: Wir nageln die rechte Kante fest
+    const newMax = sc.max;
+    const newMin = newMax - newRange;
     if (newMax - newMin < 1e-9) return;
 
     setSharedXScale(newMin, newMax, { preserveY: true, syncUi: true });
@@ -6771,22 +6892,39 @@ function panSharedXAxis(deltaPx, axisPxLength, sourceChart = chart) {
     setSharedXScale(sc.min + deltaUs, sc.max + deltaUs, { preserveY: true, syncUi: false });
 }
 
-function zoomPlotYAxis(targetChart, factor, pointerPos) {
+function zoomPlotYAxis(targetChart, factor, pointerPos, nailZero = false) {
+    targetChart._yLocked = true;
     const sc = targetChart.scales.y;
     const range = sc.max - sc.min;
-    const newRange = range * factor;
-    const newMin = sc.min + range * pointerPos - newRange * pointerPos;
-    const newMax = newMin + newRange;
-    if (newMax - newMin < 1e-9) return;
-    targetChart.setScale("y", { min: newMin, max: newMax });
+    
+    if (nailZero) {
+        let newMax = sc.max * factor;
+        if (newMax < 1e-9) newMax = 1e-9;
+        targetChart.setScale("y", { min: 0, max: newMax });
+    } else {
+        const newRange = range * factor;
+        const newMin = sc.min + range * pointerPos - newRange * pointerPos;
+        const newMax = newMin + newRange;
+        if (newMax - newMin < 1e-9) return;
+        targetChart.setScale("y", { min: newMin, max: newMax });
+    }
 }
 
-function panPlotYAxis(targetChart, deltaPx, axisPxLength) {
+function panPlotYAxis(targetChart, deltaPx, axisPxLength, nailZero = false) {
     if (axisPxLength === 0) return;
+    targetChart._yLocked = true;
     const sc = targetChart.scales.y;
     const range = sc.max - sc.min;
     const delta = -(deltaPx / axisPxLength) * range;
-    targetChart.setScale("y", { min: sc.min + delta, max: sc.max + delta });
+    
+    if (nailZero) {
+        // When nailed to 0, dragging acts purely as a scale multiplier
+        let newMax = sc.max + delta * 2;
+        if (newMax < 1e-9) return;
+        targetChart.setScale("y", { min: 0, max: newMax });
+    } else {
+        targetChart.setScale("y", { min: sc.min + delta, max: sc.max + delta });
+    }
 }
 
 function updateCursor(el, dragging, canDrag, axis) {
@@ -6799,7 +6937,7 @@ function updateCursor(el, dragging, canDrag, axis) {
     }
 }
 
-function bindYAxisOverlay(overlayId, targetChart) {
+function bindYAxisOverlay(overlayId, targetChart, nailZero = false) {
     const yOverlay = document.getElementById(overlayId);
     if (!yOverlay || !targetChart) return;
 
@@ -6812,8 +6950,16 @@ function bindYAxisOverlay(overlayId, targetChart) {
         const rect = yOverlay.getBoundingClientRect();
         const pointerPos = (e.clientY - rect.top) / rect.height;
         const factor = e.deltaY < 0 ? 0.85 : 1.15;
-        zoomPlotYAxis(targetChart, factor, pointerPos);
+        zoomPlotYAxis(targetChart, factor, pointerPos, nailZero);
     }, { passive: false });
+
+    yOverlay.addEventListener("dblclick", () => {
+        targetChart._yLocked = false;
+        // Durch erneutes Setzen der Daten triggern wir das Auto-Scaling
+        if (targetChart.data) {
+            targetChart.setData(targetChart.data);
+        }
+    });
 
     yOverlay.addEventListener("mousedown", e => {
         if (e.button !== 0) return;
@@ -6829,7 +6975,7 @@ function bindYAxisOverlay(overlayId, targetChart) {
         e.preventDefault();
         const deltaY = lastY - e.clientY;
         lastY = e.clientY;
-        panPlotYAxis(targetChart, deltaY, yOverlay.getBoundingClientRect().height);
+        panPlotYAxis(targetChart, deltaY, yOverlay.getBoundingClientRect().height, nailZero);
     });
 
     window.addEventListener("mouseup", () => {
@@ -6890,6 +7036,93 @@ bindYAxisOverlay("gyro-y-axis-overlay", gyroChart);
 bindSharedXAxisOverlay("x-axis-overlay", chart);
 bindSharedXAxisOverlay("gyro-x-axis-overlay", gyroChart);
 
+function syncRmsTimeRangeUi(rangeUs, isGyro) {
+    let rangeSecs = rangeUs / 1000000;
+    if (rangeSecs < 1) rangeSecs = 1;
+
+    if (isGyro) {
+        gyroRmsDisplayDurationSeconds = rangeSecs;
+        const timeSlider = document.getElementById("gyroRmsTimeSlider");
+        const timeValue = document.getElementById("gyroRmsTimeValue");
+        if (timeSlider) timeSlider.value = Math.min(300, Math.round(rangeSecs));
+        if (timeValue) timeValue.textContent = Math.round(rangeSecs);
+    } else {
+        rmsDisplayDurationSeconds = rangeSecs;
+        const timeSlider = document.getElementById("rmsTimeSlider");
+        const timeValue = document.getElementById("rmsTimeValue");
+        if (timeSlider) timeSlider.value = Math.min(300, Math.round(rangeSecs));
+        if (timeValue) timeValue.textContent = Math.round(rangeSecs);
+    }
+}
+
+function bindRmsXAxisOverlay(overlayId, targetChart, isGyro) {
+    const xOverlay = document.getElementById(overlayId);
+    if (!xOverlay || !targetChart) return;
+    let isPanning = false;
+    let lastX = 0;
+
+    const getOffset = () => isGyro ? gyroRmsPanOffset : rmsPanOffset;
+    const setOffset = (val) => { if (isGyro) gyroRmsPanOffset = val; else rmsPanOffset = val; };
+
+    xOverlay.addEventListener("wheel", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = xOverlay.getBoundingClientRect();
+        const pointerPos = (e.clientX - rect.left) / rect.width;
+        const factor = e.deltaY < 0 ? 0.85 : 1.15;
+        const sc = targetChart.scales.x;
+        const range = sc.max - sc.min;
+        const newRange = range * factor;
+        
+        // Oszilloskop-Modus: Rechte Kante bleibt fest
+        const newMax = sc.max;
+        const newMin = newMax - newRange;
+        if (newMax - newMin < 1e-9) return;
+        
+        syncRmsTimeRangeUi(newRange, isGyro);
+        
+        targetChart.setScale("x", { min: newMin, max: newMax });
+    }, { passive: false });
+
+    xOverlay.addEventListener("mousedown", e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        isPanning = true;
+        lastX = e.clientX;
+        updateCursor(xOverlay, true, true, "x");
+    });
+
+    window.addEventListener("mousemove", e => {
+        if (!isPanning) return;
+        e.preventDefault();
+        const deltaX = e.clientX - lastX;
+        lastX = e.clientX;
+        const axisPxLength = xOverlay.getBoundingClientRect().width;
+        if (axisPxLength === 0) return;
+        const sc = targetChart.scales.x;
+        const range = sc.max - sc.min;
+        const deltaUs = -(deltaX / axisPxLength) * range;
+
+        let offset = getOffset();
+        offset += deltaUs;
+        if (offset > 0) offset = 0;
+        setOffset(offset);
+
+        targetChart.setScale("x", { min: sc.min + deltaUs, max: sc.max + deltaUs });
+    });
+
+    window.addEventListener("mouseup", () => {
+        if (!isPanning) return;
+        isPanning = false;
+        updateCursor(xOverlay, false, true, "x");
+    });
+
+    xOverlay.addEventListener("mouseenter", () => !isPanning && updateCursor(xOverlay, false, true, "x"));
+    xOverlay.addEventListener("mouseleave", () => !isPanning && updateCursor(xOverlay, false, false, "x"));
+}
+
+
 window.addEventListener("liveDataUpdate", (e) => {
     const latest = e.detail.latestTimestamp;
     const currentVisibleRange = chart.scales.x.max - chart.scales.x.min;
@@ -6914,15 +7147,39 @@ window.addEventListener("liveDataUpdate", (e) => {
 
 window.addEventListener("rmsDataUpdate", (e) => {
     const latest2 = e.detail.latestTimestamp;
-    const visibleRange = rmsPlot.scales.x.max - rmsPlot.scales.x.min;
+    const currentVisibleRange = rmsPlot.scales.x.max - rmsPlot.scales.x.min;
+    const desiredVisibleRange = rmsDisplayDurationSeconds * 1000000;
+    const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
+        ? currentVisibleRange
+        : desiredVisibleRange;
 
     if (rmsPanOffset > -0.5) {
         rmsPanOffset = 0;
-        rmsPlot.setScale("x", { min: latest2 - visibleRange, max: latest2 });
+        rmsPlot.setScale("x", { min: latest2 - desiredVisibleRange, max: latest2 });
     } else {
         rmsPlot.setScale("x", {
             min: latest2 - visibleRange + rmsPanOffset,
             max: latest2 + rmsPanOffset
+        });
+    }
+});
+
+window.addEventListener("gyroRmsDataUpdate", (e) => {
+    const latest2 = e.detail.latestTimestamp;
+    if (!gyroRmsPlot) return;
+    const currentVisibleRange = gyroRmsPlot.scales.x.max - gyroRmsPlot.scales.x.min;
+    const desiredVisibleRange = gyroRmsDisplayDurationSeconds * 1000000;
+    const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
+        ? currentVisibleRange
+        : desiredVisibleRange;
+
+    if (gyroRmsPanOffset > -0.5) {
+        gyroRmsPanOffset = 0;
+        gyroRmsPlot.setScale("x", { min: latest2 - desiredVisibleRange, max: latest2 });
+    } else {
+        gyroRmsPlot.setScale("x", {
+            min: latest2 - visibleRange + gyroRmsPanOffset,
+            max: latest2 + gyroRmsPanOffset
         });
     }
 });
@@ -6961,6 +7218,18 @@ gyroChart.over.addEventListener("dblclick", () => {
         chart.setScale("y", { min: -1100, max: 1100 });
     }
     gyroChart.setScale("y", { auto: true });
+});
+
+[rmsPlot, gyroRmsPlot].forEach((p, idx) => {
+    if (!p || !p.over) return;
+    p.over.addEventListener("dblclick", () => {
+        const isGyro = idx === 1;
+        if (isGyro) gyroRmsPanOffset = 0;
+        else rmsPanOffset = 0;
+        
+        p.setScale("y", { auto: true });
+        // X-axis will snap back on next data update due to panOffset = 0
+    });
 });
 
 
@@ -7497,9 +7766,9 @@ function captureCurrentReferenceState(button, progressBar, statusText) {
         console.log('Reference ACC Streuung X [mg]:', accStats.x.stdDev.toFixed(2));
         console.log('Reference ACC Streuung Y [mg]:', accStats.y.stdDev.toFixed(2));
         console.log('Reference ACC Streuung Z [mg]:', accStats.z.stdDev.toFixed(2));
-        console.log('Reference Gyro Streuung X [mdps]:', gyroStats.x.stdDev.toFixed(2));
-        console.log('Reference Gyro Streuung Y [mdps]:', gyroStats.y.stdDev.toFixed(2));
-        console.log('Reference Gyro Streuung Z [mdps]:', gyroStats.z.stdDev.toFixed(2));
+        console.log('Reference GYRO Streuung X [m°/s]:', gyroStats.x.stdDev.toFixed(2));
+        console.log('Reference GYRO Streuung Y [m°/s]:', gyroStats.y.stdDev.toFixed(2));
+        console.log('Reference GYRO Streuung Z [m°/s]:', gyroStats.z.stdDev.toFixed(2));
 
         currentReferenceState = {
             x: accStats.x.mean,

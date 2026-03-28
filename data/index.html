@@ -601,19 +601,19 @@
         <div class="imu-tile">
           <div class="label">Gyro X:</div>
           <div class="value" id="gyroX">0.00</div>
-          <div class="unit">mg</div>
+          <div class="unit">m°/s</div>
         </div>
 
         <div class="imu-tile">
           <div class="label">Gyro Y:</div>
           <div class="value" id="gyroY">0.00</div>
-          <div class="unit">mg</div>
+          <div class="unit">m°/s</div>
         </div>
 
         <div class="imu-tile">
           <div class="label">Gyro Z:</div>
           <div class="value" id="gyroZ">0.00</div>
-          <div class="unit">mg</div>
+          <div class="unit">m°/s</div>
         </div>
 
         <div class="imu-tile">
@@ -816,7 +816,7 @@
               <div class="chart-controls" id="fftRmsChartControls">
                 <button id="fftRmsLayoutToggle" title="FFT und RMS nebeneinander oder untereinander anzeigen">Nebeneinander</button>
                 <label for="rmsTimeSlider">RMS Anzeigezeit: <span id="rmsTimeValue">20</span>s</label>
-                <input id="rmsTimeSlider" type="range" min="1" max="60" value="20" step="1" />
+                <input id="rmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
               </div>
 
               <div class="livecharts-grid" id="fftRmsGrid">
@@ -834,6 +834,8 @@
                     <button id="rmsRecordBtn" title="CSV erzeugen">🔴</button>
                     <button id="rmsSSBtn" title="Screenshot speichern">⎙</button>
                   </div>
+                  <div id="rms-y-axis-overlay" title="RMS Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+                  <div id="rms-x-axis-overlay" title="RMS X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 </div>
               </div>
 
@@ -902,7 +904,7 @@
               <div class="chart-controls" id="gyroFftRmsChartControls">
                 <button id="gyroFftRmsLayoutToggle" title="Gyro FFT und RMS nebeneinander oder untereinander anzeigen">Nebeneinander</button>
                 <label for="gyroRmsTimeSlider">RMS Anzeigezeit: <span id="gyroRmsTimeValue">20</span>s</label>
-                <input id="gyroRmsTimeSlider" type="range" min="1" max="60" value="20" step="1" />
+                <input id="gyroRmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
               </div>
 
               <div class="livecharts-grid" id="gyroFftRmsGrid">
@@ -920,6 +922,8 @@
                     <button id="gyroRmsRecordBtn" title="CSV erzeugen">🔴</button>
                     <button id="gyroRmsSSBtn" title="Screenshot speichern">⎙</button>
                   </div>
+                  <div id="gyro-rms-y-axis-overlay" title="Gyro RMS Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+                  <div id="gyro-rms-x-axis-overlay" title="Gyro RMS X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 </div>
               </div>
 

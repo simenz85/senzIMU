@@ -1,52 +1,43 @@
-// --- Signalverarbeitungsfunktionen ---
-function removeDCOffset(signal) {
-  const mean = signal.reduce((sum, x) => sum + x, 0) / signal.length;
-  return signal.map(x => x - mean);
-}
-
 // --- Haupt-RMS-Verarbeitung ---
 self.onmessage = (event) => {
-  const {
-    x,
-    y,
-    z,
-    time,
-    dcCutoff = false,
-    debug = false,
-  } = event.data;
+  const { x, y, z, time } = event.data;
 
-  //console.log("EVENT DATA:", event.data);
-  //console.log("X", x, "Y", y, "Z", z);
+  if (!x || !y || !z) return;
 
-  // 1. Optional DC-Offset entfernen
-  const signalX = dcCutoff ? removeDCOffset(x) : x;
-  const signalY = dcCutoff ? removeDCOffset(y) : y;
-  const signalZ = dcCutoff ? removeDCOffset(z) : z;
+  const len = x.length;
+  if (len === 0) return;
 
-  // 2. RMS-Funktion
-  function calcRMS(arr) {
-    let sumSquares = 0;
-    for (let i = 0; i < arr.length; i++) {
-      sumSquares += arr[i] * arr[i];
-    }
-    return Math.sqrt(sumSquares / arr.length);
+  // 1. DC-Offset (Mittelwert) berechnen für jede Achse
+  let sumX = 0, sumY = 0, sumZ = 0;
+  for (let i = 0; i < len; i++) {
+    sumX += x[i];
+    sumY += y[i];
+    sumZ += z[i];
+  }
+  const meanX = sumX / len;
+  const meanY = sumY / len;
+  const meanZ = sumZ / len;
+
+  // 2. Signale zentrieren (AC-Anteil) und Quadrate aufsummieren
+  let sumSqX = 0, sumSqY = 0, sumSqZ = 0;
+  for (let i = 0; i < len; i++) {
+    const acX = x[i] - meanX;
+    const acY = y[i] - meanY;
+    const acZ = z[i] - meanZ;
+    sumSqX += acX * acX;
+    sumSqY += acY * acY;
+    sumSqZ += acZ * acZ;
   }
 
-  const rmsX = calcRMS(signalX);
-  const rmsY = calcRMS(signalY);
-  const rmsZ = calcRMS(signalZ);
+  // 3. Einzelne RMS-Werte pro Achse (√ von Varianz = Standardabweichung)
+  const rmsX = Math.sqrt(sumSqX / len);
+  const rmsY = Math.sqrt(sumSqY / len);
+  const rmsZ = Math.sqrt(sumSqZ / len);
 
-  // 3. Gesamt-RMS über alle Achsen
+  // 4. Gesamter RMS-Wert der Vibration (3D-Vektorbetrag der RMS-Werte)
   const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY + rmsZ * rmsZ);
 
-  if (debug) {
-    self.postMessage({
-      debugMsg: 'RMS Werte berechnet',
-      rmsX, rmsY, rmsZ, rmsTotal
-    });
-  }
-
-  // 4. Ergebnis zurückgeben
+  // 5. Ergebnis zurückgeben
   self.postMessage({
     rmsX,
     rmsY,

@@ -616,7 +616,9 @@ body {
 }
 
 #y-axis-overlay,
-#gyro-y-axis-overlay {
+#gyro-y-axis-overlay,
+#rms-y-axis-overlay,
+#gyro-rms-y-axis-overlay {
   position: absolute;
   left: 0;
   top: 0;
@@ -629,7 +631,9 @@ body {
 }
 
 #x-axis-overlay,
-#gyro-x-axis-overlay {
+#gyro-x-axis-overlay,
+#rms-x-axis-overlay,
+#gyro-rms-x-axis-overlay {
   position: absolute;
   left: 0;
   top: 0;
