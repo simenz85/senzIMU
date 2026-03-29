@@ -8,12 +8,15 @@
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "esp_log.h"
 #include "LSM6DSO.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include <sys/param.h>
 #include "freertos/ringbuf.h"
+#include "driver/touch_pad.h"
+#include "esp_sleep.h"
 
 // WIFI UND SERVER INCLUDES
 #include "esp_vfs.h"
@@ -62,6 +65,201 @@
 // Bitte ueber `idf.py menuconfig` -> `Component config` -> `LWIP` anpassen!
 // Insbesondere: CONFIG_LWIP_MAX_ACTIVE_TCP auf mindestens 16 erhoehen!
 // =========================================================================
+
+// =========================================================================
+// RGB LED CONFIGURATION (Zero-Performance-Impact)
+// =========================================================================
+#define LED_R_PIN GPIO_NUM_1
+#define LED_G_PIN GPIO_NUM_2
+#define LED_B_PIN GPIO_NUM_3
+
+typedef enum {
+    LED_STATE_OFF = 0,
+    LED_STATE_GREEN, // System ready
+    LED_STATE_BLUE,  // Stream running
+    LED_STATE_RED    // Error / Problem
+} rgb_led_state_t;
+
+static volatile bool led_blinking_active = false;
+static rgb_led_state_t current_led_state = LED_STATE_OFF;
+static rgb_led_state_t pending_led_state = LED_STATE_OFF;
+
+static void set_rgb_pins_raw(int r_duty, int g_duty, int b_duty) {
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, r_duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, g_duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, b_duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+}
+
+static void set_rgb_state(rgb_led_state_t new_state) {
+    pending_led_state = new_state;
+
+    if (led_blinking_active) {
+        return; // Prevent unnecessary register writes while animating
+    }
+
+    if (current_led_state == new_state) return; 
+    current_led_state = new_state;
+
+    // Assuming Common Cathode. 
+    // Blau wird auf 25/255 (ca. 10%) gedimmt, da der Stream dauerhaft an ist.
+    set_rgb_pins_raw(
+        (new_state == LED_STATE_RED) ? 255 : 0,
+        (new_state == LED_STATE_GREEN) ? 255 : 0,
+        (new_state == LED_STATE_BLUE) ? 25 : 0
+    );
+}
+
+static void led_boot_sequence_task(void *arg) {
+    led_blinking_active = true;
+    for(int i = 0; i < 3; i++) {
+        set_rgb_pins_raw(255, 0, 0); vTaskDelay(pdMS_TO_TICKS(150)); // Rot
+        set_rgb_pins_raw(0, 255, 0); vTaskDelay(pdMS_TO_TICKS(150)); // Grün
+        set_rgb_pins_raw(0, 0, 255); vTaskDelay(pdMS_TO_TICKS(150)); // Blau
+        if(i < 2) {
+            set_rgb_pins_raw(0, 0, 0); vTaskDelay(pdMS_TO_TICKS(150)); // Pause
+        }
+    }
+    led_blinking_active = false;
+    current_led_state = LED_STATE_OFF; 
+    set_rgb_state(pending_led_state); 
+    vTaskDelete(NULL);
+}
+
+static void led_disconnect_blink_task(void *arg) {
+    if(led_blinking_active) {
+        vTaskDelete(NULL);
+        return;
+    }
+    led_blinking_active = true;
+    
+    // Ganz kurzer, rasanter Blitz (3x rot) als Disconnect-Warnung (total 600ms)
+    for(int i = 0; i < 3; i++) {
+        set_rgb_pins_raw(255, 0, 0); 
+        vTaskDelay(pdMS_TO_TICKS(100));
+        set_rgb_pins_raw(0, 0, 0); 
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    led_blinking_active = false;
+    current_led_state = LED_STATE_OFF; 
+    set_rgb_state(pending_led_state);
+    vTaskDelete(NULL);
+}
+
+// Forward declaration
+static int count_active_ws_clients();
+
+static void sleep_watchdog_task(void *arg) {
+    TickType_t last_active_time = xTaskGetTickCount();
+    while (1) {
+        if (count_active_ws_clients() > 0) {
+            last_active_time = xTaskGetTickCount();
+        } else {
+            if ((xTaskGetTickCount() - last_active_time) > pdMS_TO_TICKS(60000)) {
+                ESP_LOGI("Sleep", "60s Timeout ohne Clients. Gehe in Deep Sleep...");
+                
+                led_blinking_active = true;
+                bool abort_sleep = false;
+                // 3x abwechselnd Grün und Blau
+                for(int i = 0; i < 3; i++) {
+                    if (count_active_ws_clients() > 0) { abort_sleep = true; break; }
+                    set_rgb_pins_raw(0, 255, 0); vTaskDelay(pdMS_TO_TICKS(200));
+                    if (count_active_ws_clients() > 0) { abort_sleep = true; break; }
+                    set_rgb_pins_raw(0, 0, 255); vTaskDelay(pdMS_TO_TICKS(200));
+                }
+                set_rgb_pins_raw(0, 0, 0);
+
+                if (abort_sleep) {
+                    ESP_LOGI("Sleep", "Client connected during prep! Aborting Deep Sleep.");
+                    led_blinking_active = false;
+                    continue; // Gehe zurück in die while(1) Überwachungsschleife
+                }
+                vTaskDelay(pdMS_TO_TICKS(100));
+
+                // Touch-Sensor Initialisieren (D4 = GPIO5 = TOUCH5)
+                touch_pad_init();
+                #if SOC_TOUCH_SENSOR_VERSION == 2 // ESP32-S2 und S3
+                
+                touch_pad_config(TOUCH_PAD_NUM5);
+                
+                // Leerer Handler um Panics beim Einschlafen zu verhindern, falls Trigger zuckt
+                touch_pad_isr_register([](void *arg) {}, NULL, (touch_pad_intr_mask_t)TOUCH_PAD_INTR_MASK_ALL);
+                
+                touch_pad_set_fsm_mode(TOUCH_FSM_MODE_TIMER); // ZWINGEND für Hintergrundmessungen nötig!
+                touch_pad_sleep_channel_enable(TOUCH_PAD_NUM5, true); // Erst Sleep Channel registrieren
+                touch_pad_fsm_start(); // DANN FSM starten!
+                           vTaskDelay(pdMS_TO_TICKS(150)); // Warten bis die FSM Messungen abgeschlossen hat
+                
+                uint32_t sleep_base = 0;
+                touch_pad_sleep_channel_read_benchmark(TOUCH_PAD_NUM5, &sleep_base);
+                
+                if (sleep_base == 0 || sleep_base >= 4000000) {
+                    sleep_base = 25000;
+                    ESP_LOGW("Sleep", "Ungültiger Benchmark (%u)! Setze Notfall-Base auf 25000.", (unsigned int)sleep_base);
+                }
+
+                uint32_t threshold = sleep_base / 15; // ~6.6% Delta - Sehr empfindlich für 0.5mm Plastik!
+                esp_err_t err = touch_pad_sleep_set_threshold(TOUCH_PAD_NUM5, threshold);
+                
+                // Explizit das Active Mode Threshold zusaetzlich setzen, manche Hardware Revs benoetigen das als Fallback
+                touch_pad_set_thresh(TOUCH_PAD_NUM5, threshold);
+                
+                // Setze explizite Taktvorgaben für den Sleep Modus, falls der RTC Oszillator abbricht
+                touch_pad_sleep_channel_set_work_time(1000, 500);
+                
+                ESP_LOGI("Sleep", "S3 Config: Base=%u, Thresh=%u, Err_Thresh=%s", 
+                         (unsigned int)sleep_base, (unsigned int)threshold, esp_err_to_name(err));
+                
+                #else
+                uint16_t sleep_base;
+                touch_pad_read(TOUCH_PAD_NUM5, &sleep_base);
+                uint16_t threshold = sleep_base - (sleep_base / 5); // 20% für ESP32
+                touch_pad_set_thresh(TOUCH_PAD_NUM5, threshold); 
+                ESP_LOGI("Sleep", "ESP32 Deep Sleep Touch Configured! Pad: D4, Base: %u, Threshold (Absolut): %u", sleep_base, threshold);
+                #endif
+
+                // RTC-Peripherie zwingend anlassen, damit die Touch-FSM im Schlaf weiterläuft
+                esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+                esp_sleep_enable_touchpad_wakeup();
+                
+                // ZWINGEND: Status/Interrupts VOR dem Sleep löschen, damit der RTC Controller nicht in einem 
+                // bereits ausgelösten Event hängt und den ESP nie wieder aufweckt!
+                touch_pad_intr_clear((touch_pad_intr_mask_t)TOUCH_PAD_INTR_MASK_ALL);
+                
+                // S3 benoetigt zwingend aktivierte Interrupts, damit das RTC-Modul das Event fängt.
+                touch_pad_intr_enable((touch_pad_intr_mask_t)(TOUCH_PAD_INTR_MASK_ACTIVE));
+
+                vTaskDelay(pdMS_TO_TICKS(50)); // Kurze Pause damit die UART den Print sicher abschickt
+                esp_deep_sleep_start();
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+static void init_rgb_led() {
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_LOW_SPEED_MODE,
+        .duty_resolution  = LEDC_TIMER_8_BIT,
+        .timer_num        = LEDC_TIMER_0,
+        .freq_hz          = 4000,
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&ledc_timer);
+
+    ledc_channel_config_t ledc_channel[3] = {
+        { .gpio_num = LED_R_PIN, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_0, .intr_type = LEDC_INTR_DISABLE, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0 },
+        { .gpio_num = LED_G_PIN, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1, .intr_type = LEDC_INTR_DISABLE, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0 },
+        { .gpio_num = LED_B_PIN, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_2, .intr_type = LEDC_INTR_DISABLE, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0 }
+    };
+    for(int i=0; i<3; i++) { ledc_channel_config(&ledc_channel[i]); }
+
+    xTaskCreate(led_boot_sequence_task, "led_boot", 2048, NULL, 5, NULL);
+    xTaskCreate(sleep_watchdog_task, "sleep_wdg", 2048, NULL, 5, NULL);
+}
 
 // CONFIG IDS
 
@@ -482,7 +680,6 @@ httpd_handle_t ws_server = NULL;
 
 #define MAX_CLIENTS 8
 int ws_clients[MAX_CLIENTS];
-TickType_t ws_last_pong[MAX_CLIENTS];
 
 static int count_active_ws_clients() {
     int count = 0;
@@ -536,7 +733,20 @@ static void ws_send_work(void *arg) {
     const esp_err_t result = httpd_ws_send_frame_async(item->server, item->fd, &frame);
     if (result != ESP_OK) {
         __atomic_add_fetch(&g_runtime_transport_stats.ws_send_errors, 1, __ATOMIC_RELAXED);
-        ESP_LOGW("WS", "Send error async (FD %d): %s", item->fd, esp_err_to_name(result));
+        ESP_LOGW("WS", "Send error async (FD %d): %s, entferne Client passiv", item->fd, esp_err_to_name(result));
+        
+        // Passive Disconnect Erkennung: Wenn Send fehlschlug (z.B. ESP_ERR_INVALID_ARG oder ESP_FAIL),
+        // ist der Socket tot. Client aus der Liste nehmen (spart den ganzen Ping-Task Overhead).
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (ws_clients[i] == item->fd) {
+                ws_clients[i] = -1;
+                if (count_active_ws_clients() == 0) {
+                    set_rgb_state(LED_STATE_GREEN);
+                    xTaskCreate(led_disconnect_blink_task, "led_disconnect", 2048, NULL, 5, NULL);
+                }
+                break;
+            }
+        }
     }
 
     if (item->payload != NULL) {
@@ -602,7 +812,6 @@ LSM6DSO imu;
 
 // Forward declarations
 esp_err_t websocket_handler(httpd_req_t *req);
-void ws_keepalive_task(void *arg);
 void sensor_task(void *arg);
 void ws_net_task(void *arg);
 
@@ -931,7 +1140,10 @@ void start_http_server() {
             .uri = "/",
             .method = HTTP_GET,
             .handler = http_serve_static_file,
-            .user_ctx = NULL
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
         };
         esp_err_t root_err = httpd_register_uri_handler(server, &root);
         if (root_err != ESP_OK) {
@@ -946,8 +1158,7 @@ void start_http_server() {
             .user_ctx = NULL,
             .is_websocket = true,
             .handle_ws_control_frames = false,
-            
-            
+            .supported_subprotocol = NULL
         };
         esp_err_t ws_err = httpd_register_uri_handler(server, &ws_uri);
         if (ws_err != ESP_OK) {
@@ -959,7 +1170,10 @@ void start_http_server() {
             .uri = "/*",
             .method = HTTP_GET,
             .handler = http_serve_static_file,
-            .user_ctx = NULL
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
         };
         esp_err_t wildcard_err = httpd_register_uri_handler(server, &wildcard);
         if (wildcard_err != ESP_OK) {
@@ -980,7 +1194,6 @@ void start_http_server() {
 void init_ws_clients(void) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         ws_clients[i] = -1;
-        ws_last_pong[i] = 0;
     }
 }
 
@@ -989,6 +1202,7 @@ void init_ws_clients(void) {
 
 
 #define ESP_ERR_HTTPD_WS_CLIENT_DISCONNECTED  (ESP_ERR_HTTPD_BASE - 1)
+
 // ===== Der WebSocket-Handler =====
 esp_err_t websocket_handler(httpd_req_t *req)
 {
@@ -1010,11 +1224,13 @@ esp_err_t websocket_handler(httpd_req_t *req)
             for (int i = 0; i < MAX_CLIENTS; i++) {
                 if (ws_clients[i] == -1) {
                     ws_clients[i] = fd;
-                    ws_last_pong[i] = xTaskGetTickCount();
                     break;
                 }
             }
         }
+
+        // Neue Verbindung erkannt!
+        set_rgb_state(LED_STATE_BLUE);
 
         // aktuelle Config an neu Verbundenen schicken
                 send_config_value(CFG_ID_ACCELSAMPLERATE , pendingConfig.accelDataRate);
@@ -1051,6 +1267,7 @@ esp_err_t websocket_handler(httpd_req_t *req)
                     char pong_msg[] = "pong";
                     httpd_ws_frame_t pong_frame = {
                         .final = true,
+                        .fragmented = false,
                         .type = HTTPD_WS_TYPE_TEXT,
                         .payload = (uint8_t*)pong_msg,
                         .len = strlen(pong_msg)
@@ -1138,6 +1355,7 @@ esp_err_t websocket_handler(httpd_req_t *req)
             else if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
                 httpd_ws_frame_t pong_pkt = {
                     .final = true,
+                    .fragmented = false,
                     .type  = HTTPD_WS_TYPE_PONG,
                     .payload = NULL,
                     .len = 0
@@ -1147,12 +1365,7 @@ esp_err_t websocket_handler(httpd_req_t *req)
 
             // ------ PONG ------
             else if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
-                for (int i = 0; i < MAX_CLIENTS; i++) {
-                    if (ws_clients[i] == fd) {
-                        ws_last_pong[i] = xTaskGetTickCount();
-                        break;
-                    }
-                }
+                // Pong wird jetzt passiv ignoriert, wir verlassen uns auf Socket-Errors
             }
 
             // ------ CLOSE ------
@@ -1161,6 +1374,10 @@ esp_err_t websocket_handler(httpd_req_t *req)
                 for (int i = 0; i < MAX_CLIENTS; i++) {
                     if (ws_clients[i] == fd) {
                         ws_clients[i] = -1;
+                        if (count_active_ws_clients() == 0) {
+                            set_rgb_state(LED_STATE_GREEN);
+                            xTaskCreate(led_disconnect_blink_task, "led_disconnect", 2048, NULL, 5, NULL);
+                        }
                         ESP_LOGI("WS", "Nach Entfernen: ws_clients: %d %d %d %d %d %d %d %d",
                                 ws_clients[0], ws_clients[1], ws_clients[2], ws_clients[3],
                                 ws_clients[4], ws_clients[5], ws_clients[6], ws_clients[7]); // LOG
@@ -1179,41 +1396,6 @@ esp_err_t websocket_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-
-////////////////////////////////////////////////////////////////////////////////
-// Keepalive Task: Ping senden, Timeout prüfen und Clients entfernen
-
-void ws_keepalive_task(void *arg) {
-    const TickType_t ping_interval = pdMS_TO_TICKS(20000); // 20s
-    const TickType_t pong_timeout  = pdMS_TO_TICKS(40000); // 40s
-
-    while (1) {
-        TickType_t now = xTaskGetTickCount();
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            int fd = ws_clients[i];
-            if (fd < 0) continue;
-
-            httpd_ws_frame_t ping_pkt = {
-                .final = true,
-                .fragmented = false,
-                .type = HTTPD_WS_TYPE_PING,
-                .payload = NULL,
-                .len = 0
-            };
-
-            if (httpd_ws_send_frame_async(ws_server, fd, &ping_pkt) != ESP_OK) {
-                ESP_LOGW("WS_Keepalive", "PING an FD %d fehlgeschlagen, lasse Client bis zum Timeout bestehen", fd);
-                continue;
-            }
-
-            if ((now - ws_last_pong[i]) > pong_timeout) {
-                ESP_LOGW("WS_Keepalive", "FD %d hat Timeout überschritten, entferne Client", fd);
-                ws_clients[i] = -1;
-            }
-        }
-        vTaskDelay(ping_interval);
-    }
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Ringbuffer Init
@@ -1392,9 +1574,11 @@ void sensor_task(void* pvParameters) {
 
 
 
-        int available = imu.getFifoStatus();
-        while (available >= 7) {
-            uint16_t burst = (available / 7) * 7;
+        int available_frames = imu.getFifoStatus();
+        int available_bytes = available_frames * 7;
+
+        while (available_bytes >= 7) {
+            uint16_t burst = available_bytes;
             if (burst > maxFifoBlock) burst = (maxFifoBlock / 7) * 7;
 
             status_t rc = imu.fifoburstRead(fifoBuf, burst);
@@ -1416,16 +1600,20 @@ void sensor_task(void* pvParameters) {
                 }
 
                 if (sent == 0) {
-                    vTaskDelay(pdMS_TO_TICKS(2));
+                    vTaskDelay(0);
                 }
 
                 // Nicht weiter aus der IMU-FIFO ziehen, wenn der StreamBuffer bereits voll läuft.
                 break;
             }
-            available -= burst;
+            available_bytes -= burst;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(4));
+        if (imu.getFifoStatus() < 1) {
+            vTaskDelay(1); // Gib der IDLE-Task Zeit, wenn keine Daten in der FIFO sind
+        } else {
+            vTaskDelay(0); // Ansonsten sofort weitere Daten abholen
+        }
     }
 
     heap_caps_free(fifoBuf);
@@ -1479,7 +1667,7 @@ void ws_net_task(void *arg) {
         size_t total_bytes = xStreamBufferReceive(sensorStream,
                                                  send_buffer,
                                                  PACKET_SIZE,
-                                                 pdMS_TO_TICKS(WS_FRAME_WAIT_MS));
+                                                 (pdMS_TO_TICKS(WS_FRAME_WAIT_MS) == 0) ? 1 : pdMS_TO_TICKS(WS_FRAME_WAIT_MS));
 
         if (total_bytes > 0) {
             const int64_t accumulation_deadline_us = esp_timer_get_time() + ((int64_t)WS_FRAME_ACCUMULATION_MS * 1000);
@@ -1495,7 +1683,7 @@ void ws_net_task(void *arg) {
                         break;
                     }
 
-                    vTaskDelay(pdMS_TO_TICKS(1));
+                    vTaskDelay(0); // Polling yield
                     continue;
                 }
 
@@ -1745,6 +1933,7 @@ void init_psram() {
 extern "C" void app_main() {
    
     ESP_LOGI(TAG, "Starting IMU Application...");
+    init_rgb_led(); // LED Init
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -1778,12 +1967,14 @@ extern "C" void app_main() {
 
     ret = mount_littlefs();
     if (ret != ESP_OK) {
+        set_rgb_state(LED_STATE_RED);
         ESP_LOGE(TAG, "LittleFS mount failed, aborting");
         return;
     }
 
     sensorStream = xStreamBufferCreate(STREAMBUFFER_SIZE, STREAM_TRIGGER_LEVEL); // z.B. 4 KiB Puffer, Trigger-Level 7 Bytes
         if (sensorStream == NULL) {
+            set_rgb_state(LED_STATE_RED);
             ESP_LOGE(TAG, "StreamBuffer creation failed");
             // Fehlerbehandlung
         }
@@ -1804,15 +1995,17 @@ extern "C" void app_main() {
     initIMU();
 
     ESP_LOGI(TAG, "ALL LOADED - READY");
+    set_rgb_state(LED_STATE_GREEN);
 
 
-//xTaskCreatePinnedToCore(systemMonitorTask, "sys_monitor", 6144, NULL, 5, NULL, tskNO_AFFINITY);
-xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 15, NULL, 1); // Sensorlast auf Core 1, damit WiFi/HTTP auf Core 0 Luft behalten
-xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 5, NULL, 0); // WS-Transport nahe am WiFi/HTTP-Stack auf Core 0
+    // FreeRTOS Timer Tick Rate Workaround: 
+    // Löschen des Main-Task-Watchdogs VOR dem Erstellen der anderen Tasks, 
+    // da ws_net_task (Prio 5) und sensor_task (Prio 15) den app_main (Prio 1)
+    // andernfalls sofort verhungern lassen und wir diesen Befehl nie erreichen würden!
+    esp_task_wdt_delete(NULL);
+
+    xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 15, NULL, 1); // Sensorlast auf Core 1, damit WiFi/HTTP auf Core 0 Luft behalten
+    xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 5, NULL, 0); // WS-Transport nahe am WiFi/HTTP-Stack auf Core 0
                             
-    // Hauptloop zum Beispiel für weiter Optionen
-    while (1) {
-        esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    return; // app_main Task sauber beenden
 }
