@@ -133,6 +133,32 @@ const tempBuffer = new MultiRingBuffer2(
 
 let dark = true;
 let currentSampleRate = 0;
+
+window.resetDashboardBuffers = function() {
+    accBuffer.clear();
+    accRawBuffer.clear();
+    gyroRawBuffer.clear();
+    accBufferCALIB.clear();
+    gyroBufferCALIB.clear();
+    rmsBuffer.clear();
+    gyroRmsBuffer.clear();
+    accBufferFiltered.clear();
+    gyroBufferFiltered.clear();
+    gyroBuffer.clear();
+
+    if (window.chartData) {
+        for(let i=0; i<4; i++) {
+            if (window.chartData[i]) window.chartData[i].length = 0;
+            if (window.gyroChartData && window.gyroChartData[i]) window.gyroChartData[i].length = 0;
+        }
+    }
+
+    if (window.waterfallRenderer) window.waterfallRenderer.clear();
+    if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.clear();
+
+    window.samplecount = 0;
+};
+
 let initialisiert = false;
 let displayDurationSeconds = 5;
 
@@ -140,12 +166,14 @@ let displayDurationSeconds = 5;
 let filePartIndex = 0;
 const MAX_RECORDED_ROWS = 500000;
 const ACC_CSV_HEADERS = [
+    "time_local_hms",
     "timestamp_us",
     "acc_x_mg",
     "acc_y_mg",
     "acc_z_mg",
 ];
 const GYRO_CSV_HEADERS = [
+    "time_local_hms",
     "timestamp_us",
     "gyro_x_m°/s",
     "gyro_y_m°/s",
@@ -501,7 +529,7 @@ let gyroRmsPaused = false;
 const FFT_RING_SIZE = 2 * 1000 / FFT_UPDATE_INTERVAL; // z.B. 50
 const dropdown1 = new UniDropdown(document.getElementById('dropdown1'), {
     type: 'select',
-    label: 'Blocksize',
+    label: 'Size',
     items: [
         { value: 256, label: 256 },
         { value: 512, label: 512 },
@@ -519,7 +547,7 @@ dropdown1.button.title = "Wähle die Fenstergröße für FFT";
 
 const dropdown2 = new UniDropdown(document.getElementById('dropdown2'), {
     type: 'select',
-    label: 'Samplerate',
+    label: 'Rate',
     items: [
         { value: 1000 / 60, label: "60 fps" },
         { value: 1000 / 30, label: "30 fps" },
@@ -541,7 +569,7 @@ dropdown2.button.title = "Wähle die Samplerate für FFT";
 
 const dropdown3 = new UniDropdown(document.getElementById('dropdown3'), {
     type: 'select',
-    label: 'Samples',
+    label: 'Avg',
     items: [
         { value: 5, label: "5" },
         { value: 10, label: "10" },
@@ -569,7 +597,7 @@ dropdown3.button.title = "Wähle die Anzahl der Samples für den FFT Mittelwert"
 let FFT_WINDOW_TYPE = "BLACKMAN";
 const dropdown4 = new UniDropdown(document.getElementById('dropdown4'), {
     type: 'select',
-    label: 'WinType',
+    label: 'Window',
     items: [
         { value: "BLACKMAN", label: "BLACKMAN" },
         { value: "HANNING", label: "HANNING" },
@@ -587,7 +615,7 @@ dropdown4.button.title = "Wähle den Fenstertyp für FFT";
 let DC_CUTOFF = true;
 const dropdown5 = new UniDropdown(document.getElementById('dropdown5'), {
     type: 'select',
-    label: 'DC Cutoff',
+    label: 'DC',
     items: [
         { value: true, label: "YES" },
         { value: false, label: "NO" },
@@ -605,7 +633,7 @@ dropdown5.button.title = "Wähle den DC Cutoff für FFT";
 let FFT_AXIS_MODE = "COMBI";
 const dropdown6 = new UniDropdown(document.getElementById('dropdown6'), {
     type: 'select',
-    label: 'AXIS',
+    label: 'Axis',
     items: [
         { value: "COMBI", label: "KOMBINIERT" },
         { value: "ONLYX", label: "X" },
@@ -624,7 +652,7 @@ let fftHighPass = 0;
 
 const gyroDropdown1 = new UniDropdown(document.getElementById('gyroDropdown1'), {
     type: 'select',
-    label: 'Blocksize',
+    label: 'Size',
     items: [
         { value: 256, label: 256 },
         { value: 512, label: 512 },
@@ -642,7 +670,7 @@ gyroDropdown1.button.title = 'Wähle die Fenstergröße für Gyro FFT';
 
 const gyroDropdown2 = new UniDropdown(document.getElementById('gyroDropdown2'), {
     type: 'select',
-    label: 'Samplerate',
+    label: 'Rate',
     items: [
         { value: 1000 / 60, label: '60 fps' },
         { value: 1000 / 30, label: '30 fps' },
@@ -662,7 +690,7 @@ gyroDropdown2.button.title = 'Wähle die Aktualisierungsrate für Gyro FFT';
 
 const gyroDropdown3 = new UniDropdown(document.getElementById('gyroDropdown3'), {
     type: 'select',
-    label: 'Samples',
+    label: 'Avg',
     items: [
         { value: 5, label: '5' },
         { value: 10, label: '10' },
@@ -685,7 +713,7 @@ gyroDropdown3.button.title = 'Wähle die Anzahl der Samples für den Gyro FFT Mi
 
 const gyroDropdown4 = new UniDropdown(document.getElementById('gyroDropdown4'), {
     type: 'select',
-    label: 'WinType',
+    label: 'Window',
     items: [
         { value: 'BLACKMAN', label: 'BLACKMAN' },
         { value: 'HANNING', label: 'HANNING' },
@@ -702,7 +730,7 @@ gyroDropdown4.button.title = 'Wähle den Fenstertyp für Gyro FFT';
 
 const gyroDropdown5 = new UniDropdown(document.getElementById('gyroDropdown5'), {
     type: 'select',
-    label: 'DC Cutoff',
+    label: 'DC',
     items: [
         { value: true, label: 'YES' },
         { value: false, label: 'NO' },
@@ -717,7 +745,7 @@ gyroDropdown5.button.title = 'Wähle den DC Cutoff für Gyro FFT';
 
 const gyroDropdown6 = new UniDropdown(document.getElementById('gyroDropdown6'), {
     type: 'select',
-    label: 'AXIS',
+    label: 'Axis',
     items: [
         { value: 'COMBI', label: 'KOMBINIERT' },
         { value: 'ONLYX', label: 'X' },
@@ -3553,6 +3581,7 @@ function formatRecordedValue(value, digits = 1) {
 
 function createAccRecordingRow(sample) {
     return [
+        formatMicrosecondsToHMS(sample.time, 6),
         sample.time,
         formatRecordedValue(sample.x),
         formatRecordedValue(sample.y),
@@ -3562,6 +3591,7 @@ function createAccRecordingRow(sample) {
 
 function createGyroRecordingRow(sample) {
     return [
+        formatMicrosecondsToHMS(sample.time, 6),
         sample.time,
         formatRecordedValue(sample.x),
         formatRecordedValue(sample.y),
@@ -3589,9 +3619,12 @@ function downloadRecordedCsv(isIntermediate = false) {
     }
     const activeQuat = getActiveQuaternion();
     const quatString = activeQuat.map(v => Number(v).toFixed(4)).join(", ");
+    
+    // Store full local date string captured at the START of the recording
+    const recordingDateStr = window.currentRecordingDateStr || new Date().toLocaleString('de-DE');
 
     if (recordedAccRows.length > 0) {
-        const headerInfoAcc = `"# Gesamtquaternion: [${quatString}]"\n`;
+        const headerInfoAcc = `"# Gesamtquaternion: [${quatString}]"\n"# Recording Date: [${recordingDateStr}]"\n`;
         const headerAcc = ACC_CSV_HEADERS.join(",");
         const csvAcc = `${headerInfoAcc}${headerAcc}\n${recordedAccRows.map((row) => row.join(",")).join("\n")}`;
         const blobAcc = new Blob([csvAcc], { type: "text/csv" });
@@ -3604,7 +3637,7 @@ function downloadRecordedCsv(isIntermediate = false) {
     }
 
     if (recordedGyroRows.length > 0) {
-        const headerInfoGyro = `"# Gesamtquaternion: [${quatString}]"\n`;
+        const headerInfoGyro = `"# Gesamtquaternion: [${quatString}]"\n"# Recording Date: [${recordingDateStr}]"\n`;
         const headerGyro = GYRO_CSV_HEADERS.join(",");
         const csvGyro = `${headerInfoGyro}${headerGyro}\n${recordedGyroRows.map((row) => row.join(",")).join("\n")}`;
         const blobGyro = new Blob([csvGyro], { type: "text/csv" });
@@ -3691,6 +3724,7 @@ let gyroRmsPlot = null;
 
 // === Web Workers ===
 const wsWorker = new Worker("ws-worker.js");
+window.wsWorker = wsWorker; // Export globally for Replay Manager
 const decodeWorker = new Worker("decode-worker2.js");
 const accFilterWorker = new Worker('filter-worker.js');
 const gyroFilterWorker = new Worker('filter-worker.js');
@@ -3966,6 +4000,25 @@ function scheduleBootOverlayReadyFallback() {
 
 // === Init ===
 document.addEventListener("DOMContentLoaded", () => {
+    // Shutdown Overlay UI
+    const sidebarShutdownBtn = document.getElementById("sidebarShutdownBtn");
+    const shutdownOverlay = document.getElementById("shutdownConfirmOverlay");
+    const shutdownYes = document.getElementById("shutdownConfirmYes");
+    const shutdownNo = document.getElementById("shutdownConfirmNo");
+
+    if (sidebarShutdownBtn && shutdownOverlay) {
+        sidebarShutdownBtn.addEventListener("click", () => {
+            shutdownOverlay.classList.add("is-visible");
+        });
+        shutdownNo.addEventListener("click", () => {
+            shutdownOverlay.classList.remove("is-visible");
+        });
+        shutdownYes.addEventListener("click", () => {
+            shutdownOverlay.classList.remove("is-visible");
+            const payload = JSON.stringify({ COMMAND: "SHUTDOWN" });
+            wsWorker.postMessage({ type: "send", msgContent: payload });
+        });
+    }
 
     setupFilterWorker();
     //initChart();
@@ -3989,6 +4042,81 @@ document.addEventListener("DOMContentLoaded", () => {
     startFFTUpdates();
     setupGyroFFTWorker();
     startGyroFFTUpdates();
+
+    if (typeof WaterfallRenderer !== 'undefined') {
+        window.waterfallRenderer = new WaterfallRenderer('waterfallArea', 'waterfallCanvas', 'wf');
+        window.gyroWaterfallRenderer = new WaterfallRenderer('gyroWaterfallArea', 'gyroWaterfallCanvas', 'gwf');
+        
+        // --- ACCELEROMETER WATERFALL SETUP ---
+        const magFilter = document.getElementById('waterfallMagFilter');
+        const magValue = document.getElementById('waterfallMagValue');
+        const wfLblMagMax = document.getElementById('wfLblMagMax');
+        if (magFilter && magValue) {
+            magFilter.addEventListener('input', (e) => {
+                magValue.textContent = e.target.value;
+                if (wfLblMagMax) wfLblMagMax.textContent = e.target.value;
+                if (window.waterfallRenderer) window.waterfallRenderer.setMaxMagnitude(parseInt(e.target.value, 10));
+            });
+            window.waterfallRenderer.setMaxMagnitude(parseInt(magFilter.value, 10));
+        }
+
+        const themeDrop = document.getElementById('waterfallTheme');
+        if (themeDrop) {
+            themeDrop.addEventListener('change', (e) => {
+                if (window.waterfallRenderer) window.waterfallRenderer.setTheme(e.target.value);
+            });
+        }
+        
+        const speedFilter = document.getElementById('waterfallSpeed');
+        const speedValue = document.getElementById('waterfallSpeedValue');
+        if (speedFilter && speedValue) {
+            speedFilter.addEventListener('input', (e) => {
+                speedValue.textContent = e.target.value;
+                if (window.waterfallRenderer) window.waterfallRenderer.setScrollSpeed(parseInt(e.target.value, 10));
+            });
+        }
+
+        const maxHzFilter = document.getElementById('waterfallMaxHz');
+        const maxHzValue = document.getElementById('waterfallMaxHzValue');
+        if (maxHzFilter && maxHzValue) {
+            maxHzFilter.addEventListener('input', (e) => maxHzValue.textContent = e.target.value);
+        }
+
+        // --- GYROSCOPE WATERFALL SETUP ---
+        const gMagFilter = document.getElementById('gyroWaterfallMagFilter');
+        const gMagValue = document.getElementById('gyroWaterfallMagValue');
+        const gwfLblMagMax = document.getElementById('gwfLblMagMax');
+        if (gMagFilter && gMagValue) {
+            gMagFilter.addEventListener('input', (e) => {
+                gMagValue.textContent = e.target.value;
+                if (gwfLblMagMax) gwfLblMagMax.textContent = e.target.value;
+                if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.setMaxMagnitude(parseInt(e.target.value, 10));
+            });
+            window.gyroWaterfallRenderer.setMaxMagnitude(parseInt(gMagFilter.value, 10));
+        }
+
+        const gThemeDrop = document.getElementById('gyroWaterfallTheme');
+        if (gThemeDrop) {
+            gThemeDrop.addEventListener('change', (e) => {
+                if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.setTheme(e.target.value);
+            });
+        }
+        
+        const gSpeedFilter = document.getElementById('gyroWaterfallSpeed');
+        const gSpeedValue = document.getElementById('gyroWaterfallSpeedValue');
+        if (gSpeedFilter && gSpeedValue) {
+            gSpeedFilter.addEventListener('input', (e) => {
+                gSpeedValue.textContent = e.target.value;
+                if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.setScrollSpeed(parseInt(e.target.value, 10));
+            });
+        }
+
+        const gMaxHzFilter = document.getElementById('gyroWaterfallMaxHz');
+        const gMaxHzValue = document.getElementById('gyroWaterfallMaxHzValue');
+        if (gMaxHzFilter && gMaxHzValue) {
+            gMaxHzFilter.addEventListener('input', (e) => gMaxHzValue.textContent = e.target.value);
+        }
+    }
 
     const filterDrawer = document.getElementById('filterDrawer');
     const filterDrawerToggle = document.getElementById('filterDrawerToggle');
@@ -4089,7 +4217,46 @@ document.addEventListener("DOMContentLoaded", () => {
                 gyroRmsPlot?.setSize(getGyroRmsChartSize());
             });
         }
+        
+        if (window.waterfallRenderer) {
+            if (event.detail?.sectionId === 'waterfallArea') {
+                const canvas = document.getElementById('waterfallCanvas');
+                if (canvas) {
+                    const rect = canvas.parentElement.getBoundingClientRect();
+                    window.waterfallRenderer.resize(rect.width, rect.height);
+                }
+            }
+        }
+
+        if (window.gyroWaterfallRenderer) {
+            if (event.detail?.sectionId === 'gyroWaterfallArea') {
+                const canvas = document.getElementById('gyroWaterfallCanvas');
+                if (canvas) {
+                    const rect = canvas.parentElement.getBoundingClientRect();
+                    window.gyroWaterfallRenderer.resize(rect.width, rect.height);
+                }
+            }
+        }
     });
+    
+    window.addEventListener('resize', () => {
+        if (window.waterfallRenderer && window.waterfallRenderer.active) {
+            const canvas = document.getElementById('waterfallCanvas');
+            if (canvas) {
+                const rect = canvas.parentElement.getBoundingClientRect();
+                window.waterfallRenderer.resize(rect.width, rect.height);
+            }
+        }
+
+        if (window.gyroWaterfallRenderer && window.gyroWaterfallRenderer.active) {
+            const canvas = document.getElementById('gyroWaterfallCanvas');
+            if (canvas) {
+                const rect = canvas.parentElement.getBoundingClientRect();
+                window.gyroWaterfallRenderer.resize(rect.width, rect.height);
+            }
+        }
+    });
+
 });
 
 // SLIDER ACTION
@@ -4192,9 +4359,13 @@ let chartUpdateRunning = false;
 let lastChartUpdate = 0;
 let updateIntervalMs = 50; // 20 FPS
 
-function startChartUpdates() {
+window.startChartUpdates = function() {
     function updateLoop(now) {
         if (!chartUpdateRunning) return;
+        if (window.isOfflineReplayMode) {
+            requestAnimationFrame(updateLoop);
+            return;
+        }
 
         if (now - lastChartUpdate >= updateIntervalMs) {
             updateDashboard();
@@ -4210,13 +4381,7 @@ function startChartUpdates() {
 }
 
 
-const roll = document.getElementById('roll');
-const pitch = document.getElementById('pitch');
-const yaw = document.getElementById('yaw');
 
-const posX = document.getElementById('posx');
-const posY = document.getElementById('posy');
-const posZ = document.getElementById('posz');
 
 
 let latestFusionData = null;
@@ -4254,13 +4419,7 @@ if (!message.tiltHeadingRoll || !message.accWorld) {
 
 
 
-roll.textContent = message.tiltHeadingRoll.roll.toFixed(0);
-pitch.textContent = message.tiltHeadingRoll.pitch.toFixed(0);
-yaw.textContent = message.tiltHeadingRoll.yaw.toFixed(0);
 
-posX.textContent = message.accWorld.x.toFixed(4);
-posY.textContent = message.accWorld.y.toFixed(4);
-posZ.textContent = message.accWorld.z.toFixed(4);
 
 setBootOverlayState(
     'ready',
@@ -4281,10 +4440,8 @@ if (currentOrientationMode === 1) {
 
 
 // === Decode Worker einrichten ===
-function setupDecodeWorker() {
-    decodeWorker.onmessage = (event) => {
-
-        const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = event.data;
+window.processSensorBatch = function(data) {
+    const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = data;
 
         if (ENABLE_MOTION_VIEW && ((accraw && accraw.length > 0) || (gyroraw && gyroraw.length > 0))) {
             const motionAccSamples = Array.isArray(accraw) && accraw.length > 0
@@ -4311,6 +4468,17 @@ function setupDecodeWorker() {
 
             for (let sample of accraw) {
                 accRawBuffer.push([sample.time, sample.x, sample.y, sample.z, Math.hypot(sample.x, sample.y, sample.z)]);
+                
+                if (window.sonificationEnabled) {
+                    let totalVibration = Math.hypot(sample.x, sample.y, sample.z);
+                    window.audioHighPass = 0.995 * (window.audioHighPass + totalVibration - window.audioPrevZ);
+                    window.audioPrevZ = totalVibration;
+                    let out = window.audioHighPass / 50.0;
+                    if (out > 1.0) out = 1.0; else if (out < -1.0) out = -1.0;
+                    window.audioRingBuffer[window.audioWriteIdx] = out;
+                    window.audioWriteIdx = (window.audioWriteIdx + 1) % window.audioRingBuffer.length;
+                }
+
                 if (referenceCaptureActive) {
                     accBufferCALIB.push([sample.x, sample.y, sample.z]);
                 }
@@ -4493,7 +4661,12 @@ function setupDecodeWorker() {
                 }
             });
         }
-    }
+};
+
+function setupDecodeWorker() {
+    decodeWorker.onmessage = (event) => {
+        window.processSensorBatch(event.data);
+    };
 }
 
 
@@ -4605,14 +4778,7 @@ function updateDashboard() {
         if (accBuffer.length > 0) {
 
             totalSeconds1 = lastAccSample.time * 0.000001;
-            const hours = Math.floor(totalSeconds1 / 3600);
-            const minutes = Math.floor((totalSeconds1 % 3600) / 60);
-            const seconds = totalSeconds1 % 60;
-            const formattedTime =
-                (hours > 0 ? hours + ":" : "") +
-                (hours > 0 ? String(minutes).padStart(2, '0') : minutes) + ":" +
-                seconds.toFixed(2).padStart(5, '0');
-
+            const formattedTime = formatMicrosecondsToHMS(lastAccSample.time, 2);
             document.getElementById("timestamp").textContent = formattedTime;
 
 
@@ -4984,6 +5150,7 @@ function setupUIListeners() {
 
         if (isRecording) {
             console.log("toggleRecording: STARTING. recordedRows reset.");
+            window.currentRecordingDateStr = new Date().toLocaleString('de-DE');
             recordedAccRows = [];
             recordedGyroRows = [];
             filePartIndex = 0;
@@ -5425,7 +5592,7 @@ function setupFFTWorker() {
     console.log("FFT WORKER STARTED");
 
     fftWorker.onmessage = (e) => {
-        const { freqs, mags } = e.data;
+        const { freqs, mags, timestamp, timeString } = e.data;
         //console.log("[DEBUG] empfangene freqs:", freqs);
         // console.log("[DEBUG] empfangene mags:", mags);
 
@@ -5435,8 +5602,26 @@ function setupFFTWorker() {
         }
 
         //const skipBins = 0;
-        //const plotFreqs = freqs.slice(skipBins);
-        //const plotMags = mags.slice(skipBins);
+        // NEU: Bereich für x-Achse berechnen
+        const minFreq = Math.min(...freqs);
+        const maxFreq = Math.max(...freqs);
+
+        if (window.waterfallRenderer && window.waterfallRenderer.active) {
+            const hzFilter = document.getElementById('waterfallMaxHz');
+            const userMax = hzFilter ? parseInt(hzFilter.value, 10) : maxFreq;
+            const actualMax = Math.min(maxFreq, userMax);
+            window.waterfallRenderer.setFrequencyBounds(maxFreq, actualMax);
+            window.waterfallRenderer.pushData(mags, timestamp, timeString, e.data.clockTimeStr);
+            
+            // Labels aktualisieren (ohne ständiges reflow)
+            if (window.waterfallLastMax !== actualMax) {
+                window.waterfallLastMax = actualMax;
+                const wfLblMax = document.getElementById('wfLblMax');
+                const wfLblMid = document.getElementById('wfLblMid');
+                if (wfLblMax) wfLblMax.textContent = actualMax + " Hz";
+                if (wfLblMid) wfLblMid.textContent = Math.round(actualMax / 2) + " Hz";
+            }
+        }
 
         // MAX PUFFER
         bufferFFTResult(mags); // Magnitudenpuffer für die letzten 5 Sekunden
@@ -5447,9 +5632,7 @@ function setupFFTWorker() {
 
         // setData erwartet ein Array: [x, serie1, serie2]
 
-        // NEU: Bereich für x-Achse berechnen
-        const minFreq = Math.min(...freqs);
-        const maxFreq = Math.max(...freqs);
+
         let maxAmp = Math.max(...meanValues);
         let maxAmpMax = Math.max(...maxValues);
         let maxAmpCurrent = Math.max(...mags);
@@ -5461,7 +5644,7 @@ function setupFFTWorker() {
         }
 
         // X-Achse dynamisch setzen
-        if (fftPlot) {
+        if (fftPlot && !window.isFftHistoryScrubbing) {
 
 
             fftPlot.setScale('y', {
@@ -5499,11 +5682,31 @@ function setupGyroFFTWorker() {
     console.log('[Main] Gyro FFT Worker:', gyroFftWorker);
 
     gyroFftWorker.onmessage = (e) => {
-        const { freqs, mags } = e.data;
+        const { freqs, mags, timestamp, timeString } = e.data;
 
         if (!freqs || !mags) {
             console.warn('[Gyro FFT Worker] Ungültige Daten empfangen:', e.data);
             return;
+        }
+
+        const minFreq = Math.min(...freqs);
+        const maxFreq = Math.max(...freqs);
+
+        if (window.gyroWaterfallRenderer && window.gyroWaterfallRenderer.active) {
+            const hzFilter = document.getElementById('gyroWaterfallMaxHz');
+            const userMax = hzFilter ? parseInt(hzFilter.value, 10) : maxFreq;
+            const actualMax = Math.min(maxFreq, userMax);
+            window.gyroWaterfallRenderer.setFrequencyBounds(maxFreq, actualMax);
+            window.gyroWaterfallRenderer.pushData(mags, timestamp, timeString, e.data.clockTimeStr);
+            
+            // Labels aktualisieren (ohne ständiges reflow)
+            if (window.gyroWaterfallLastMax !== actualMax) {
+                window.gyroWaterfallLastMax = actualMax;
+                const wfLblMax = document.getElementById('gwfLblMax');
+                const wfLblMid = document.getElementById('gwfLblMid');
+                if (wfLblMax) wfLblMax.textContent = actualMax + " Hz";
+                if (wfLblMid) wfLblMid.textContent = Math.round(actualMax / 2) + " Hz";
+            }
         }
 
         bufferFFTResult(mags, gyroFftMaxBuffer, GYRO_FFT_RING_SIZE);
@@ -5520,7 +5723,7 @@ function setupGyroFFTWorker() {
             totalmax = 2000;
         }
 
-        if (gyroFftPlot) {
+        if (gyroFftPlot && !window.isGyroFftHistoryScrubbing) {
             gyroFftPlot.setScale('y', {
                 min: 0,
                 max: totalmax
@@ -5845,6 +6048,101 @@ function computeMaxFFTValues(targetBuffer = fftMaxBuffer) {
     }
     return maxValues;
 }
+
+window.generateStaticWaterfalls = function(accData, gyroData, sampleRate, accTimes, gyroTimes) {
+    console.log(`[Offline FFT] Generiere statischen Waterfall mit ${sampleRate}Hz (Async-Batch)...`);
+    
+    // Set up global sampleRate so scrubbers can use it
+    if (sampleRate > 0 && typeof currentSampleRate !== "undefined") {
+        currentSampleRate = sampleRate;
+    }
+    
+    if (accData && accData.length > 0 && fftWorker) {
+        if (window.waterfallRenderer) window.waterfallRenderer.clear();
+    }
+    if (gyroData && gyroData.length > 0 && gyroFftWorker) {
+        if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.clear();
+    }
+    
+    const frq = sampleRate > 0 ? sampleRate : (typeof currentSampleRate !== 'undefined' ? currentSampleRate : 1000);
+    let step = Math.floor(frq * (FFT_UPDATE_INTERVAL / 1000));
+    if (step < 10) step = 10;
+    
+    let accI = 0;
+    let gyroI = 0;
+    const BATCH_SIZE = 50;
+    
+    function processBatch() {
+        let itemsProcessed = 0;
+        
+        while (itemsProcessed < BATCH_SIZE && accData && accI <= accData.length - FFT_WINDOW_SIZE) {
+            if (fftWorker) {
+                const windowArr = accData.slice(accI, accI + FFT_WINDOW_SIZE);
+                const buf = Float32Array.from(windowArr); 
+                
+                const timestampUs = accTimes ? accTimes[accI + FFT_WINDOW_SIZE - 1] : 0;
+                const tString = typeof formatUsToTime === 'function' ? formatUsToTime(timestampUs) : (timestampUs/1000000).toFixed(2);
+                let clockTimeStr = undefined;
+                if (window.replayData && window.replayData.acc && window.replayData.acc[accI + FFT_WINDOW_SIZE - 1]) {
+                    clockTimeStr = window.replayData.acc[accI + FFT_WINDOW_SIZE - 1].hms;
+                }
+                
+                fftWorker.postMessage({
+                    buffer: buf.buffer,
+                    sampleRate: frq,
+                    windowType: typeof FFT_WINDOW_TYPE !== 'undefined' ? FFT_WINDOW_TYPE : 'BLACKMAN',
+                    highpassCutoff: typeof fftHighPass !== 'undefined' ? fftHighPass : 0,
+                    dcCutoff: typeof DC_CUTOFF !== 'undefined' ? DC_CUTOFF : true,
+                    fftDBoutput: typeof fftDBoutput !== 'undefined' ? fftDBoutput : false,
+                    timestamp: timestampUs,
+                    timeString: tString,
+                    clockTimeStr: clockTimeStr
+                }, [buf.buffer]);
+            }
+            accI += step;
+            itemsProcessed++;
+        }
+        
+        itemsProcessed = 0;
+        while (itemsProcessed < BATCH_SIZE && gyroData && gyroI <= gyroData.length - FFT_WINDOW_SIZE) {
+            if (gyroFftWorker) {
+                const windowArr = gyroData.slice(gyroI, gyroI + FFT_WINDOW_SIZE);
+                const buf = Float32Array.from(windowArr);
+                
+                const timestampUs = gyroTimes ? gyroTimes[gyroI + FFT_WINDOW_SIZE - 1] : 0;
+                const tString = typeof formatUsToTime === 'function' ? formatUsToTime(timestampUs) : (timestampUs/1000000).toFixed(2);
+                let clockTimeStr = undefined;
+                if (window.replayData && window.replayData.gyro && window.replayData.gyro[gyroI + FFT_WINDOW_SIZE - 1]) {
+                    clockTimeStr = window.replayData.gyro[gyroI + FFT_WINDOW_SIZE - 1].hms;
+                }
+                
+                gyroFftWorker.postMessage({
+                    buffer: buf.buffer,
+                    sampleRate: frq,
+                    windowType: typeof FFT_WINDOW_TYPE !== 'undefined' ? FFT_WINDOW_TYPE : 'BLACKMAN',
+                    highpassCutoff: typeof fftHighPass !== 'undefined' ? fftHighPass : 0,
+                    dcCutoff: typeof DC_CUTOFF !== 'undefined' ? DC_CUTOFF : true,
+                    fftDBoutput: typeof fftDBoutput !== 'undefined' ? fftDBoutput : false,
+                    timestamp: timestampUs,
+                    timeString: tString,
+                    clockTimeStr: clockTimeStr
+                }, [buf.buffer]);
+            }
+            gyroI += step;
+            itemsProcessed++;
+        }
+        
+        let pending = false;
+        if (accData && accI <= accData.length - FFT_WINDOW_SIZE) pending = true;
+        if (gyroData && gyroI <= gyroData.length - FFT_WINDOW_SIZE) pending = true;
+        
+        if (pending) {
+            setTimeout(processBatch, 0);
+        }
+    }
+    
+    processBatch();
+};
 
 
 
@@ -6472,6 +6770,60 @@ function createCanvasCursorPointsPlugin() {
     };
 }
 
+function createCursorYPlugin(unit) {
+    let tooltip;
+
+    function init(u) {
+        let over = u.root.querySelector(".u-over");
+        tooltip = document.createElement("div");
+        tooltip.className = "u-tooltip-y";
+        tooltip.style.position = "absolute";
+        tooltip.style.background = "rgba(24, 28, 36, 0.85)";
+        tooltip.style.color = "#FFD600";
+        tooltip.style.padding = "3px 6px";
+        tooltip.style.borderRadius = "4px";
+        tooltip.style.fontSize = "12px";
+        tooltip.style.fontFamily = "monospace";
+        tooltip.style.border = "1px solid rgba(255, 214, 0, 0.3)";
+        tooltip.style.pointerEvents = "none";
+        tooltip.style.display = "none";
+        tooltip.style.zIndex = "100";
+        tooltip.style.whiteSpace = "nowrap";
+        over.appendChild(tooltip);
+    }
+
+    function setCursor(u) {
+        const { left, top } = u.cursor;
+        if (top < 0 || left < 0) {
+            if (tooltip) tooltip.style.display = "none";
+            return;
+        }
+
+        const valY = u.posToVal(top, "y");
+        tooltip.textContent = valY.toFixed(2) + " " + unit;
+        tooltip.style.display = "block";
+
+        const tooltipWidth = tooltip.offsetWidth;
+        const tooltipHeight = tooltip.offsetHeight;
+        let posX = left + 15;
+        let posY = top - tooltipHeight / 2;
+
+        if (posX + tooltipWidth > u.bbox.width) {
+            posX = left - tooltipWidth - 15;
+        }
+
+        tooltip.style.left = Math.round(posX) + "px";
+        tooltip.style.top = Math.round(posY) + "px";
+    }
+
+    return {
+        hooks: {
+            init: [init],
+            setCursor: [setCursor],
+        }
+    };
+}
+
 const container = document.getElementById("livechart2");
 const accChartLegendHost = document.getElementById("accChartLegendHost");
 const options = {
@@ -6522,7 +6874,7 @@ const options = {
             accChartLegendHost?.replaceChildren(table);
         },
     },
-    plugins: [],
+    plugins: [createCursorYPlugin("mg")],
 };
 
 chart = new uPlot(options, [timestamps.slice(), values1.slice(), values2.slice(), values3.slice(), values4.slice()], document.getElementById("accChartHost"));
@@ -6574,7 +6926,7 @@ const gyroOptions = {
             gyroChartLegendHost?.replaceChildren(table);
         },
     },
-    plugins: [],
+    plugins: [createCursorYPlugin("m°/s")],
 };
 
 gyroChart = new uPlot(
@@ -6582,6 +6934,289 @@ gyroChart = new uPlot(
     [timestamps.slice(), values1.slice(), values2.slice(), values3.slice()],
     document.getElementById("gyroChartHost")
 );
+
+window.applyStaticReplayData = function(accData, gyroData, startTimeUs, endTimeUs) {
+    if (accData && chart) {
+        chart.setData(accData);
+        chart.setScale("x", { min: startTimeUs, max: endTimeUs });
+        
+        if (rmsPlot) {
+            const [t, x, y, z, to] = accData;
+            const N = t.length;
+            const windowSize = RMS_WINDOW_SIZE > 0 ? RMS_WINDOW_SIZE : 100;
+            const step = Math.max(1, Math.floor(N / 3000));
+            
+            const rT = [], rX = [], rY = [], rZ = [], rTo = [];
+            for (let i = 0; i <= N - windowSize; i += step) {
+                let sx = 0, sy = 0, sz = 0, sto = 0;
+                for (let j = 0; j < windowSize; j++) {
+                    const idx = i + j;
+                    sx += x[idx]*x[idx];
+                    sy += y[idx]*y[idx];
+                    sz += z[idx]*z[idx];
+                    sto += to[idx]*to[idx];
+                }
+                rX.push(Math.sqrt(sx / windowSize));
+                rY.push(Math.sqrt(sy / windowSize));
+                rZ.push(Math.sqrt(sz / windowSize));
+                rTo.push(Math.sqrt(sto / windowSize));
+                rT.push(t[i + windowSize - 1]);
+            }
+            if (rT.length > 0) {
+                rmsPlot.setData([
+                    new Float64Array(rT),
+                    new Float32Array(rX),
+                    new Float32Array(rY),
+                    new Float32Array(rZ),
+                    new Float32Array(rTo)
+                ]);
+                rmsPlot.setScale("x", { min: startTimeUs, max: endTimeUs });
+            }
+        }
+    }
+    
+    if (gyroData && gyroChart) {
+        gyroChart.setData(gyroData);
+        gyroChart.setScale("x", { min: startTimeUs, max: endTimeUs });
+        
+        if (gyroRmsPlot) {
+            const [t, x, y, z] = gyroData;
+            const N = t.length;
+            const windowSize = RMS_WINDOW_SIZE > 0 ? RMS_WINDOW_SIZE : 100;
+            const step = Math.max(1, Math.floor(N / 3000));
+            
+            const rT = [], rX = [], rY = [], rZ = [], rTo = [];
+            for (let i = 0; i <= N - windowSize; i += step) {
+                let sx = 0, sy = 0, sz = 0, sto = 0;
+                for (let j = 0; j < windowSize; j++) {
+                    const idx = i + j;
+                    sx += x[idx]*x[idx];
+                    sy += y[idx]*y[idx];
+                    sz += z[idx]*z[idx];
+                    
+                    const toVal = Math.hypot(x[idx]||0, y[idx]||0, z[idx]||0);
+                    sto += toVal * toVal;
+                }
+                rX.push(Math.sqrt(sx / windowSize));
+                rY.push(Math.sqrt(sy / windowSize));
+                rZ.push(Math.sqrt(sz / windowSize));
+                rTo.push(Math.sqrt(sto / windowSize));
+                rT.push(t[i + windowSize - 1]);
+            }
+            if (rT.length > 0) {
+                gyroRmsPlot.setData([
+                    new Float64Array(rT),
+                    new Float32Array(rX),
+                    new Float32Array(rY),
+                    new Float32Array(rZ),
+                    new Float32Array(rTo)
+                ]);
+                gyroRmsPlot.setScale("x", { min: startTimeUs, max: endTimeUs });
+            }
+        }
+    }
+    // syncTimeRangeUi(endTimeUs - startTimeUs);  // <-- REMOVED: Auto-expanding to 60s kills the renderer
+};
+
+window.updateReplayDashboard = function(absTimeUs, accSample, gyroSample) {
+    const tsDateEl = document.getElementById('timestampDate');
+    if (tsDateEl) {
+        if (window.replayRecordingDate) {
+            tsDateEl.style.display = 'block';
+            tsDateEl.textContent = window.replayRecordingDate;
+        } else {
+            tsDateEl.style.display = 'none';
+            tsDateEl.textContent = "";
+        }
+    }
+
+    if (accSample) {
+        document.getElementById("accX").textContent = accSample.x.toFixed(1);
+        document.getElementById("accY").textContent = accSample.y.toFixed(1);
+        document.getElementById("accZ").textContent = accSample.z.toFixed(1);
+        if (accVectorViewport) {
+            accVectorViewport.setAccelerationSamples(buildViewportAccelerationSamples(accSample, accSample));
+        }
+    }
+    if (gyroSample) {
+        document.getElementById("gyroX").textContent = gyroSample.x.toFixed(1);
+        document.getElementById("gyroY").textContent = gyroSample.y.toFixed(1);
+        document.getElementById("gyroZ").textContent = gyroSample.z.toFixed(1);
+        if (accVectorViewport) {
+            accVectorViewport.setGyroSamples(buildViewportGyroSamples(gyroSample, gyroSample));
+        }
+    }
+    
+    // Auto-scroll X-Axis limits (mimic Live Mode)
+    const durationUs = (typeof displayDurationSeconds !== 'undefined' ? displayDurationSeconds : 5) * 1000 * 1000;
+    let minX = absTimeUs - durationUs;
+    let maxX = absTimeUs;
+    if (minX < (window.replayStartTimeUs || 0)) {
+        minX = window.replayStartTimeUs || 0;
+        maxX = minX + durationUs;
+    }
+
+    // Sync UI Cursors & Horizons
+    if (chart) {
+        if (!chart.yLocked) {
+            const yMinOriginal = chart.scales.y?.min;
+            const yMaxOriginal = chart.scales.y?.max;
+            chart.setScale("x", { min: minX, max: maxX });
+            if (yMinOriginal !== undefined && yMaxOriginal !== undefined) {
+                chart.setScale("y", { min: yMinOriginal, max: yMaxOriginal });
+            }
+        }
+        const left = chart.valToPos(absTimeUs, "x");
+        if (left > 0) chart.setCursor({ left, top: chart.cursor.top || 10 });
+    }
+    if (gyroChart) {
+        if (!gyroChart.yLocked) {
+            const gyMinOriginal = gyroChart.scales.y?.min;
+            const gyMaxOriginal = gyroChart.scales.y?.max;
+            gyroChart.setScale("x", { min: minX, max: maxX });
+            if (gyMinOriginal !== undefined && gyMaxOriginal !== undefined) {
+                gyroChart.setScale("y", { min: gyMinOriginal, max: gyMaxOriginal });
+            }
+        }
+        const left = gyroChart.valToPos(absTimeUs, "x");
+        if (left > 0) gyroChart.setCursor({ left, top: gyroChart.cursor.top || 10 });
+    }
+    if (typeof rmsPlot !== 'undefined' && rmsPlot) {
+        const rYMinOriginal = rmsPlot.scales.y?.min;
+        const rYMaxOriginal = rmsPlot.scales.y?.max;
+        rmsPlot.setScale("x", { min: minX, max: maxX });
+        if (rYMinOriginal !== undefined && rYMaxOriginal !== undefined) {
+            rmsPlot.setScale("y", { min: rYMinOriginal, max: rYMaxOriginal });
+        }
+        const left = rmsPlot.valToPos(absTimeUs, "x");
+        if (left > 0) rmsPlot.setCursor({ left, top: rmsPlot.cursor.top || 10 });
+    }
+    if (typeof gyroRmsPlot !== 'undefined' && gyroRmsPlot) {
+        const grYMinOriginal = gyroRmsPlot.scales.y?.min;
+        const grYMaxOriginal = gyroRmsPlot.scales.y?.max;
+        gyroRmsPlot.setScale("x", { min: minX, max: maxX });
+        if (grYMinOriginal !== undefined && grYMaxOriginal !== undefined) {
+            gyroRmsPlot.setScale("y", { min: grYMinOriginal, max: grYMaxOriginal });
+        }
+        const left = gyroRmsPlot.valToPos(absTimeUs, "x");
+        if (left > 0) gyroRmsPlot.setCursor({ left, top: gyroRmsPlot.cursor.top || 10 });
+    }
+    
+    // Sync FFT histories
+    if (window.waterfallRenderer && window.waterfallRenderer.timestamps.length > 0) {
+        const ts = window.waterfallRenderer.timestamps;
+        let bestIdx = ts.length - 1;
+        let minDist = Infinity;
+        for (let i = 0; i < ts.length; i++) {
+            const dist = Math.abs(ts[i] - absTimeUs);
+            if (dist <= minDist) {
+                minDist = dist;
+                bestIdx = i;
+            }
+        }
+        const mags = window.waterfallRenderer.history[bestIdx];
+        if (fftPlot && mags) {
+            const freqs = new Array(mags.length);
+            const sr = (typeof currentSampleRate !== 'undefined' && currentSampleRate > 0) ? currentSampleRate : 1000;
+            for(let i=0; i<mags.length; i++) freqs[i] = i * sr / (mags.length * 2); 
+            
+            const numAvg = typeof N_AVG !== 'undefined' ? N_AVG : 10;
+            const startIdx = Math.max(0, bestIdx - numAvg + 1);
+            const avgArr = new Float32Array(mags.length);
+            const maxArr = new Float32Array(mags.length);
+            maxArr.fill(-Infinity);
+            
+            for(let j=0; j<=bestIdx; j++) {
+                const h = window.waterfallRenderer.history[j];
+                for(let i=0; i<mags.length; i++) {
+                    if (h[i] > maxArr[i]) maxArr[i] = h[i];
+                }
+            }
+            
+            let count = 0;
+            for(let j=startIdx; j<=bestIdx; j++) {
+                const h = window.waterfallRenderer.history[j];
+                for(let i=0; i<mags.length; i++) avgArr[i] += h[i];
+                count++;
+            }
+            if(count > 0) {
+                for(let i=0; i<mags.length; i++) avgArr[i] /= count;
+            }
+            
+            fftPlot.setData([freqs, Array.from(avgArr), Array.from(maxArr), Array.from(mags)]);
+            
+            // Optionally update the main UI timestamp with absolute clock time if available
+            const tsEl = document.getElementById('timestamp');
+            if (tsEl && window.waterfallRenderer.clockStrings[bestIdx]) {
+                tsEl.textContent = window.waterfallRenderer.clockStrings[bestIdx];
+            }
+        }
+        
+        if (window.isOfflineReplayMode) {
+            const wR = window.waterfallRenderer;
+            wR.scrollOffset = Math.max(0, wR.history.length - 1 - bestIdx);
+            if (wR.active) {
+                wR.renderHistory();
+                wR.updateLabels();
+                wR.syncScrollbar();
+            }
+        }
+    }
+
+    if (window.gyroWaterfallRenderer && window.gyroWaterfallRenderer.timestamps.length > 0) {
+        const ts = window.gyroWaterfallRenderer.timestamps;
+        let bestIdx = ts.length - 1;
+        let minDist = Infinity;
+        for (let i = 0; i < ts.length; i++) {
+            const dist = Math.abs(ts[i] - absTimeUs);
+            if (dist <= minDist) {
+                minDist = dist;
+                bestIdx = i;
+            }
+        }
+        const mags = window.gyroWaterfallRenderer.history[bestIdx];
+        if (gyroFftPlot && mags) {
+            const freqs = new Array(mags.length);
+            const sr = (typeof currentSampleRate !== 'undefined' && currentSampleRate > 0) ? currentSampleRate : 1000;
+            for(let i=0; i<mags.length; i++) freqs[i] = i * sr / (mags.length * 2); 
+
+            const numAvg = typeof N_AVG !== 'undefined' ? N_AVG : 10;
+            const startIdx = Math.max(0, bestIdx - numAvg + 1);
+            const avgArr = new Float32Array(mags.length);
+            const maxArr = new Float32Array(mags.length);
+            maxArr.fill(-Infinity);
+
+            for(let j=0; j<=bestIdx; j++) {
+                const h = window.gyroWaterfallRenderer.history[j];
+                for(let i=0; i<mags.length; i++) {
+                    if (h[i] > maxArr[i]) maxArr[i] = h[i];
+                }
+            }
+
+            let count = 0;
+            for(let j=startIdx; j<=bestIdx; j++) {
+                const h = window.gyroWaterfallRenderer.history[j];
+                for(let i=0; i<mags.length; i++) avgArr[i] += h[i];
+                count++;
+            }
+            if(count > 0) {
+                for(let i=0; i<mags.length; i++) avgArr[i] /= count;
+            }
+
+            gyroFftPlot.setData([freqs, Array.from(avgArr), Array.from(maxArr), Array.from(mags)]);
+        }
+        
+        if (window.isOfflineReplayMode) {
+            const gwR = window.gyroWaterfallRenderer;
+            gwR.scrollOffset = Math.max(0, gwR.history.length - 1 - bestIdx);
+            if (gwR.active) {
+                gwR.renderHistory();
+                gwR.updateLabels();
+                gwR.syncScrollbar();
+            }
+        }
+    }
+};
 
 function syncAxisOverlayPositions(chartInstance, panelId, yOverlayId, xOverlayId) {
     const panel = document.getElementById(panelId);
@@ -7936,6 +8571,87 @@ function setGravityCutEnabled(enabled, { persistState = true, notifyWorker = tru
 btn?.addEventListener('click', function () {
     setGravityCutEnabled(!gravityCutEnabled);
 });
+
+
+// ======= AUDIO SONIFICATION POC =======
+window.audioCtx = null;
+window.audioScriptNode = null;
+window.audioRingBuffer = new Float32Array(65536);
+window.audioWriteIdx = 0;
+window.audioReadIdx = 0;
+window.sonificationEnabled = false;
+window.audioHighPass = 0;
+window.audioPrevZ = 0;
+
+window.audioFractionalReadIdx = 0;
+
+window.toggleSonification = function() {
+    const btn = document.getElementById("btnSonification");
+    if (!window.sonificationEnabled) {
+        if (!window.audioCtx) {
+            try {
+                window.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+            } catch(e) {
+                window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            window.audioScriptNode = window.audioCtx.createScriptProcessor(2048, 0, 1);
+            
+            window.audioScriptNode.onaudioprocess = function(e) {
+                let out = e.outputBuffer.getChannelData(0);
+                let srIn = 6600; // Expected sensor rate
+                let srOut = window.audioCtx.sampleRate;
+                let step = srIn / srOut;
+
+                for (let i = 0; i < out.length; i++) {
+                    let integerIdx = Math.floor(window.audioFractionalReadIdx);
+                    let available = (window.audioWriteIdx - integerIdx + window.audioRingBuffer.length) % window.audioRingBuffer.length;
+                    
+                    if (available > 10000) {
+                        // Resync if we fell way behind
+                        window.audioFractionalReadIdx = (window.audioWriteIdx - 1000 + window.audioRingBuffer.length) % window.audioRingBuffer.length;
+                        available = 1000;
+                    }
+
+                    if (available > 2) {
+                        let idx1 = integerIdx;
+                        let idx2 = (idx1 + 1) % window.audioRingBuffer.length;
+                        let frac = window.audioFractionalReadIdx - idx1;
+                        
+                        out[i] = window.audioRingBuffer[idx1] + frac * (window.audioRingBuffer[idx2] - window.audioRingBuffer[idx1]);
+                        
+                        window.audioFractionalReadIdx += step;
+                        if (window.audioFractionalReadIdx >= window.audioRingBuffer.length) {
+                            window.audioFractionalReadIdx -= window.audioRingBuffer.length;
+                        }
+                    } else {
+                        out[i] = 0; // buffer underrun/starvation
+                    }
+                }
+            };
+            window.audioScriptNode.connect(window.audioCtx.destination);
+        }
+        window.audioCtx.resume().then(() => {
+            window.sonificationEnabled = true;
+            if (btn) {
+                btn.innerHTML = `<i class="fas fa-volume-up"></i> AUDIO: ON`;
+                btn.style.background = "rgba(255, 0, 0, 0.3)";
+                btn.style.color = "#FFD600";
+                btn.style.border = "1px solid red";
+            }
+        });
+    } else {
+        if (window.audioCtx) {
+            window.audioCtx.suspend().then(() => {
+                window.sonificationEnabled = false;
+                if (btn) {
+                    btn.innerHTML = `<i class="fas fa-volume-up"></i> Audio: OFF`;
+                    btn.style.background = "";
+                    btn.style.border = "";
+                }
+            });
+        }
+    }
+};
 
 
 

@@ -122,6 +122,7 @@
       color: rgba(255, 214, 0, 0.92);
     }
 
+
     .telemetry-grid {
       display: grid;
       grid-template-columns: auto auto;
@@ -186,6 +187,65 @@
 
     #telemetryPanel.is-collapsed .telemetry-thresholds {
       display: none;
+    }
+
+    #shutdownConfirmOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 4000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(10px);
+      color: #f1f4f8;
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 200ms ease, visibility 200ms ease;
+    }
+    #shutdownConfirmOverlay.is-visible {
+      opacity: 1;
+      visibility: visible;
+    }
+    .shutdown-card {
+      max-width: 400px;
+      padding: 24px;
+      border: 1px solid rgba(255, 100, 100, 0.3);
+      border-radius: 12px;
+      background: #1c1515;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+      text-align: center;
+    }
+    .shutdown-title {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #ff6b6b;
+      margin-bottom: 12px;
+    }
+    .shutdown-buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      justify-content: center;
+    }
+    .shutdown-btn-yes {
+      background: #ff4a4a;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .shutdown-btn-no {
+      background: #333;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
     }
   </style>
   <script>
@@ -257,6 +317,7 @@
   <link rel="stylesheet" href="stylesheet.css">
   <script defer src="uPlot.iife.min.js"></script>
   <script defer src="fft.min.js"></script>
+  <script defer src="ui/waterfall.js"></script>
   <script defer src="fili.min.js"></script>
   <script defer src="three.min.js"></script>
   <script defer src="OrbitControls.min.js"></script>
@@ -279,6 +340,20 @@
       <p id="bootOverlayStatus" class="boot-status">Lade Dashboard-Dateien...</p>
       <div class="boot-progress"></div>
       <div id="bootOverlayHint" class="boot-hint">Der ESP bereitet Weboberfläche und Sensorverbindung vor.</div>
+      <button id="btnStartOfflineReplay" onclick="if(window.initOfflineReplay) window.initOfflineReplay()" style="margin-top: 24px; padding: 10px 20px; background: rgba(255, 214, 0, 0.15); border: 1px solid #FFD600; color: #FFD600; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;">
+        Offline Replay (CSV)
+      </button>
+    </div>
+  </div>
+
+  <div id="shutdownConfirmOverlay">
+    <div class="shutdown-card">
+      <div class="shutdown-title">System herunterfahren?</div>
+      <p>Gerät wirklich in den Deep Sleep versetzen?</p>
+      <div class="shutdown-buttons">
+        <button id="shutdownConfirmNo" class="shutdown-btn-no">Abbrechen</button>
+        <button id="shutdownConfirmYes" class="shutdown-btn-yes">Herunterfahren</button>
+      </div>
     </div>
   </div>
 
@@ -400,62 +475,92 @@
   </div>
 
   <div class="sidebar" id="sidebar">
-    <button class="sidebar-toggle" id="sidebarToggle">
-      <svg width="20" height="20" viewBox="0 0 576 512" aria-hidden="true" focusable="scfalse">
-        <path fill="currentColor"
-          d="M541 229.16l-61.05-53.59V56a24 24 0 0 0-24-24h-72a24 24 0 0 0-24 24v36.11L314.56 43a40 40 0 0 0-53.12 0L35 229.16a16 16 0 0 0-1.16 22.59l21.4 23.32a16 16 0 0 0 22.59 1.16L96 232.37V488a24 24 0 0 0 24 24H456a24 24 0 0 0 24-24V232.37l18.17 16.86a16 16 0 0 0 22.59-1.16l21.4-23.32a16 16 0 0 0-1.16-22.59z" />
-      </svg>
-    </button>
     <ul class="sidebar-content">
+      <li class="sidebar-item sidebar-item-action" id="sidebarToggleWrapper">
+        <button class="sidebar-action-button sidebar-toggle" id="sidebarToggle" type="button" aria-pressed="false" title="Menü" style="outline: none !important; border: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent;">
+          <span class="sidebar-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
+              <path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+            </svg>
+          </span>
+        </button>
+      </li>
 
-      <li class="sidebar-item" id="navLivechart">
+      <li class="sidebar-item" id="navLivechart" title="Livechart">
         <span class="sidebar-icon">
-          <img src="icons/livechart.svg" alt="Einstellungen" />
+          <img src="icons/livechart.svg" alt="Livechart" />
         </span>
         <span class="sidebar-label">Livechart</span>
       </li>
 
-      <li class="sidebar-item" id="navLFFTchart">
+      <li class="sidebar-item" id="navLFFTchart" title="ACC FFT">
         <span class="sidebar-icon">
           <img src="icons/accfft.svg" alt="ACC FFT" />
-          <span class="sidebar-label">ACC FFT</span>
+        </span>
+        <span class="sidebar-label">ACC FFT</span>
       </li>
 
-      <li class="sidebar-item" id="navGyroFFTchart">
+      <li class="sidebar-item" id="navGyroFFTchart" title="Gyro FFT">
         <span class="sidebar-icon">
           <img src="icons/gyrofft.svg" alt="Gyro FFT" />
-          <span class="sidebar-label">Gyro FFT</span>
+        </span>
+        <span class="sidebar-label">Gyro FFT</span>
       </li>
 
-      <li class="sidebar-item" id="navVectorAlign">
+      <li class="sidebar-item" id="navWaterfall" title="Waterfall">
+        <span class="sidebar-icon">
+          <img src="icons/accwaterfall.svg" alt="ACC Waterfall" />
+        </span>
+        <span class="sidebar-label">WATERFALL</span>
+      </li>
+
+      <li class="sidebar-item" id="navGyroWaterfall" title="Gyro Waterfall">
+        <span class="sidebar-icon">
+          <img src="icons/gyrowaterfall.svg" alt="Gyro Waterfall" />
+        </span>
+        <span class="sidebar-label">GYRO W'FALL</span>
+      </li>
+
+      <li class="sidebar-item" id="navVectorAlign" title="3D Align">
         <span class="sidebar-icon">
           <img src="icons/align3d.svg" alt="3D Align" />
         </span>
         <span class="sidebar-label">3D Align</span>
       </li>
 
-      <li class="sidebar-item" id="navMotionViewport">
+      <li class="sidebar-item" id="navMotionViewport" title="3D Vibration">
         <span class="sidebar-icon">
           <img src="icons/vibration3d.svg" alt="3D Vibration" />
         </span>
         <span class="sidebar-label">3D Vibration</span>
       </li>
 
-      <li class="sidebar-item" id="navSettings">
+      <li class="sidebar-item sidebar-item-bottom" id="navReplayMode" title="Offline Replay" onclick="if(window.initOfflineReplay) window.initOfflineReplay(); document.getElementById('replayCsvInput').click();">
         <span class="sidebar-icon">
-          <img src="icons/settings.svg" alt="Einstellungen" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="1.2rem" height="1.2rem" style="margin-top: 5px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
         </span>
-        <span class="sidebar-label">Einstellungen</span>
+        <span class="sidebar-label">Offline Replay</span>
       </li>
 
-      <li class="sidebar-item sidebar-item-bottom sidebar-item-action">
-        <button id="telemetryToggle" class="sidebar-action-button" type="button" aria-pressed="false" aria-label="Telemetrie ein- oder ausblenden" title="Telemetrie ein- oder ausblenden">
+      <li class="sidebar-item sidebar-item-action">
+        <button id="telemetryToggle" class="sidebar-action-button" type="button" aria-pressed="false" aria-label="Telemetrie ein- oder ausblenden" title="Telemetrie ein- oder ausblenden" style="outline: none !important; border: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent;">
           <span class="sidebar-icon" aria-hidden="true">
             <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
               <path fill="currentColor" d="M4 19h16v2H2V3h2v16zm2-2V9h3v8H6zm5 0V5h3v12h-3zm5 0v-6h3v6h-3z"/>
             </svg>
           </span>
           <span class="sidebar-label">Telemetrie</span>
+        </button>
+      </li>
+
+      <li class="sidebar-item sidebar-item-action">
+        <button id="sidebarShutdownBtn" class="sidebar-action-button" type="button" aria-pressed="false" title="System Shutdown" style="outline: none !important; border: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent;">
+          <span class="sidebar-icon" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
+              <path fill="currentColor" d="M12 2v10h2V2h-2zm4.5 2.5c2.6 1.6 4.5 4.5 4.5 8.5 0 5.5-4.5 10-10 10S1 18.5 1 13c0-4 1.9-6.9 4.5-8.5l1.5 1.5C5 7.2 3.5 9.5 3.5 13c0 4.1 3.4 7.5 7.5 7.5s7.5-3.4 7.5-7.5c0-3.5-1.5-5.8-3.5-7l1.5-1.5z"/>
+            </svg>
+          </span>
+          <span class="sidebar-label">System Shutdown</span>
         </button>
       </li>
 
@@ -468,7 +573,7 @@
 
 
     <!-- Zahnrad öffnen Button -->
-    <button id="rightSettingsBtn" class="right-settings-btn" title="Weitere Einstellungen">
+    <button id="rightSettingsBtn" class="right-settings-btn" title="SENSOR">
       <img src="icons/settings.svg" alt="Einstellungen" class="settings-icon" />
     </button>
 
@@ -476,7 +581,7 @@
     <div id="rightSettingsPanel" class="right-settings-panel">
       <div class="right-settings-header">
         <button id="closeRightPanel" class="close-arrow">←</button>
-        <h2>Weitere Einstellungen</h2>
+        <h2>SENSOR</h2>
       </div>
       <div class="right-settings-content">
 
@@ -575,7 +680,7 @@
 
 
       </div>
-      <div class="label1">GYRO SETTINGS</div>
+
     </div>
 
 
@@ -619,6 +724,7 @@
         <div class="imu-tile">
           <div class="label">Time:</div>
           <div class="value" id="timestamp">0.00</div>
+          <div id="timestampDate" class="unit" style="display: none; font-size: 0.7em; margin-top: 2px;"></div>
         </div>
 
         <div class="imu-tile">
@@ -695,9 +801,10 @@
                   Reset</button>
                 <button id="recordBtn" title="Daten recording starten/stoppen"><i class="fas fa-circle"></i>
                   Record</button>
+                <button id="btnSonification" onclick="window.toggleSonification()" title="Audioausgabe der Z-Achse aktivieren"><i class="fas fa-volume-up"></i> Audio: OFF</button>
                 <button id="downloadBtn" style="display:none;" title="CSV herunterladen"><i class="fas fa-download"></i>
                   Download CSV</button>
-                <button id="chartLayoutToggle" title="Charts nebeneinander oder untereinander anzeigen">Nebeneinander</button>
+                <button id="chartLayoutToggle" title="Charts nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
                 <label for="fpsSlider">FPS: <span id="fpsValue">33</span></label>
                 <input id="fpsSlider" type="range" min="1" max="100" value="33" step="1" />
                 <label for="timeSlider">Anzeigezeit: <span id="timeValue">5</span>s</label>
@@ -814,8 +921,8 @@
               </div>
 
               <div class="chart-controls" id="fftRmsChartControls">
-                <button id="fftRmsLayoutToggle" title="FFT und RMS nebeneinander oder untereinander anzeigen">Nebeneinander</button>
-                <label for="rmsTimeSlider">RMS Anzeigezeit: <span id="rmsTimeValue">20</span>s</label>
+                <button id="fftRmsLayoutToggle" title="FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+                <label for="rmsTimeSlider" style="margin-left:auto;">Zeit: <span id="rmsTimeValue">20</span>s</label>
                 <input id="rmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
               </div>
 
@@ -902,8 +1009,9 @@
               </div>
 
               <div class="chart-controls" id="gyroFftRmsChartControls">
-                <button id="gyroFftRmsLayoutToggle" title="Gyro FFT und RMS nebeneinander oder untereinander anzeigen">Nebeneinander</button>
-                <label for="gyroRmsTimeSlider">RMS Anzeigezeit: <span id="gyroRmsTimeValue">20</span>s</label>
+                <button id="gyroFftRmsLayoutToggle" title="Gyro FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+
+                <label for="gyroRmsTimeSlider" style="margin-left:auto;">Zeit: <span id="gyroRmsTimeValue">20</span>s</label>
                 <input id="gyroRmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
               </div>
 
@@ -929,6 +1037,183 @@
 
           </div>
         </div>
+
+          <div id="waterfallArea" class="dashboard-section" style="display:none; width: 100%; height: calc(100vh - 120px); max-height: calc(100vh - 120px); padding: 15px 20px; box-sizing: border-box; overflow: hidden;">
+            <div style="background: rgba(22, 27, 34, 0.4); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; height: 100%; display: flex; flex-direction: column;">
+              <div style="padding: 10px 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <h2 style="margin: 0; color: #fff; font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                  ACCELEROMETER SPECTROGRAM
+                  <button id="wfInfoBtn" onclick="document.getElementById('wfInfoOverlay').style.display='block';" title="Erklärung anzeigen" style="background: rgba(255,214,0,0.15); border: 1px solid #FFD600; color: #FFD600; cursor: pointer; border-radius: 50%; width: 22px; height: 22px; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; padding: 0; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,214,0,0.4)';" onmouseout="this.style.background='rgba(255,214,0,0.15)';">?</button>
+                </h2>
+                <div style="display: flex; gap: 15px; align-items: center; font-size: 13px;">
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Theme:</label>
+                     <select id="waterfallTheme" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold; font-size: 13px;">
+                       <option value="fire">Fire</option>
+                       <option value="ocean">Ocean</option>
+                       <option value="mono">Mono</option>
+                       <option value="matrix">Matrix</option>
+                       <option value="plasma">Plasma</option>
+                       <option value="magma">Magma</option>
+                     </select>
+                   </div>
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Speed:</label>
+                     <input type="range" id="waterfallSpeed" min="1" max="10" value="1" step="1" style="vertical-align: middle; width: 60px;">
+                     <span id="waterfallSpeedValue" style="color: #FFD600; font-weight: bold; width: 15px; display: inline-block;">1</span>
+                   </div>
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Max Hz:</label>
+                     <input type="range" id="waterfallMaxHz" min="10" max="3300" value="3300" step="10" style="vertical-align: middle; width: 80px;">
+                     <span id="waterfallMaxHzValue" style="color: #FFD600; font-weight: bold; width: 35px; display: inline-block;">3300</span>
+                   </div>
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Mag Limit:</label>
+                     <input type="range" id="waterfallMagFilter" min="10" max="5000" value="1000" step="10" style="vertical-align: middle; width: 80px;">
+                     <span id="waterfallMagValue" style="color: #FFD600; font-weight: bold; min-width: 65px; text-align: right; display: inline-block;">1000</span>
+                   </div>
+                   <div style="margin-left: 10px;">
+                     <button id="wfBtnScreenshot" title="Screenshot speichern (Taste P)" onclick="if(window.waterfallRenderer) window.waterfallRenderer.downloadScreenshot();" style="background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.2); height: 26px; width: 32px; border-radius: 4px; outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)';" onmouseout="this.style.background='rgba(255,255,255,0.15)';">⎙</button>
+                   </div>
+                </div>
+              </div>
+              <div style="flex-grow: 1; position: relative; overflow: hidden; padding: 8px;">
+                <canvas id="waterfallCanvas" style="width: 100%; height: 100%; display: block; border-radius: 8px; filter: brightness(1.2); cursor: none;"></canvas>
+                <div id="wfCrossV" style="position: absolute; width: 1px; height: calc(100% - 16px); background: rgba(255, 214, 0, 0.4); top: 8px; left: 0; display: none; pointer-events: none; z-index: 5; border-left: 1px dashed rgba(255,214,0,0.8);"></div>
+                <div id="wfCrossH" style="position: absolute; width: calc(100% - 16px); height: 1px; background: rgba(255, 214, 0, 0.4); top: 0; left: 8px; display: none; pointer-events: none; z-index: 5; border-top: 1px dashed rgba(255,214,0,0.8);"></div>
+                <div id="waterfallYAxis" style="position: absolute; left: 15px; top: 15px; bottom: 15px; display: flex; flex-direction: column; justify-content: space-between; color: #FFD600; font-family: monospace; font-weight: bold; font-size: 11px; text-shadow: 1px 1px 2px black; pointer-events: none; align-items: flex-start;">
+                  <span id="wfLblMax" style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">3300 Hz</span>
+                  <span id="wfLblMid" style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">1650 Hz</span>
+                  <span id="wfLblMin" style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">0 Hz</span>
+                </div>
+                <div id="waterfallTimeTracker" style="position: absolute; left: 80px; top: 15px; display: flex; gap: 10px; align-items: center; color: #FFD600; font-family: monospace; font-weight: bold; opacity: 0.9; font-size: 11px; z-index: 10; pointer-events: none;">
+                  <span id="wfLblSpan" style="background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Fenster: 0.0 s</span>
+                  <span id="wfLblPos" style="background: rgba(0,0,0,0.6); color: #4caf50; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Pos: LIVE</span>
+                  <button id="wfBtnLive" onclick="if(window.waterfallRenderer) window.waterfallRenderer.returnToLive();" style="display: none; pointer-events: auto; background: #FFD600; color: black; font-weight: bold; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: 0.2s;" onmouseover="this.style.filter='brightness(1.2)';" onmouseout="this.style.filter='brightness(1)';">⏵ ZURÜCK ZU LIVE</button>
+                </div>
+
+
+                <div id="waterfallColorLegend" style="position: absolute; right: 15px; top: 15px; display: flex; align-items: center; gap: 8px; color: #FFD600; font-family: monospace; font-weight: bold; font-size: 11px; text-shadow: 1px 1px 2px black; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); pointer-events: none;">
+                  <span>0</span>
+                  <div id="wfColorBar" style="width: 100px; height: 10px; background: linear-gradient(to right, black, red, orange, yellow, white); border-radius: 2px;"></div>
+                  <span id="wfLblMagMax">1000</span>
+                </div>
+
+
+                <div id="wfInfoOverlay" style="display: none; position: absolute; z-index: 100; top: 10%; bottom: 10%; left: 10%; right: 10%; max-width: 800px; margin: auto; background: rgba(16, 20, 26, 0.95); backdrop-filter: blur(10px); border: 2px solid #FFD600; border-radius: 12px; padding: 20px 30px; overflow-y: auto; color: #fff; font-size: 14px; line-height: 1.6; font-family: sans-serif; box-shadow: 0 10px 40px rgba(0,0,0,0.9);">
+                  <h3 style="color: #FFD600; margin-top: 0; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px;">Was zeigt das Spektrogramm an?</h3>
+                  <p>Das Spektrogramm (oder <i>Wasserfalldiagramm</i>) visualisiert die spektrale Zusammensetzung des Beschleunigungssignals über die <b>Zeit</b>.</p>
+                  
+                  <ul style="padding-left: 20px; list-style-type: square;">
+                    <li style="margin-bottom: 8px;"><strong style="color:#FFD600;">Y-Achse (Höhe):</strong> Zeigt das Frequenzspektrum an. Ganz unten am Rand bei 0 Hz befinden sich die Gleichanteile und langsame Wipp-Bewegungen der Platine. Weiter oben werden die hochfrequenten Vibrationen (mechanisches Sirren) abgebildet.</li>
+                    <li style="margin-bottom: 8px;"><strong style="color:#FFD600;">X-Achse (Zeit):</strong> Der Live-Moment entsteht immer rechts am Rand. Mit jedem neuen Frame wandert das bisherige Bild nach links. So rutscht die Historie der letzten Sekunden allmählich aus dem Bild.</li>
+                    <li style="margin-bottom: 8px;"><strong style="color:#FFD600;">Pixelhelligkeit (Farbe):</strong> Die Farbintensität gibt an, wie stark ("wie laut") das System auf einer bestimmen Frequenz vibriert. Wirft man eine Münze neben den Sensor, leuchtet ein großer Teil des Frequenzbandes kurz gelb-weiß hell auf.</li>
+                  </ul>
+                  
+                  <h4 style="color:#FFD600; margin-bottom: 5px;">Wofür benutze ich diese Ansicht?</h4>
+                  <p style="margin-top: 0;">Während andere Liniendiagramme nur den momentanen Höchstwert abbilden, erkennst du hier komplette Muster. Wenn z.B. ein Motor anläuft, siehst du ganz deutlich eine durchgehende Linie, die langsam von unten (niedrige Drehzahl) nach oben klettert. Netzbrummen bildet ewig anhaltende, waagrechte Linien. Transiente Stöße tauchen als vertikale weiße Balkenränder auf.</p>
+                  
+                  <h4 style="color:#FFD600; margin-bottom: 5px; margin-top: 25px;">Wie nutzt du die Bedienelemente optimal?</h4>
+                  <ul style="padding-left: 20px; margin-top: 0;">
+                    <li style="margin-bottom: 8px;"><b>Speed:</b> Zieht das Bild künstlich pro Sensor-Paket schneller seitlich auseinander. Ideal, um kurze Millisekunden-Klicks/Hammerschläge "gespreizt" darzustellen. Für Langzeitanalysen (Wartungszyklen über Minuten) stell den Regler auf 1.</li>
+                    <li style="margin-bottom: 8px;"><b>Max Hz:</b> Das mächtigste Werkzeug! Maschinenfehler passieren meist weit unter der theoretischen Limite von 3.300 Hz. Wenn du den Regler hinab ziehst (z.B. auf 500 Hz), werden alle leeren Frequenzen oben weggeschnitten, und das Diagramm entfaltet den Bass-Bereich feingranular über den ganzen Monitor.</li>
+                    <li style="margin-bottom: 8px;"><b>Mag Limit:</b> Passe dieses Limit an (wie den "Gain"-Regler eines Verstärkers), um schwache Töne grellweiß einzufärben oder das Diagramm etwas abzudunkeln, wenn das Bild durch Rauschen rotdominiert stört.</li>
+                  </ul>
+
+                  <button onclick="document.getElementById('wfInfoOverlay').style.display='none';" style="display: block; width: 100%; max-width: 250px; margin: 30px auto 0 auto; background: #FFD600; color: #000; font-weight: bold; border: none; padding: 12px; border-radius: 6px; cursor: pointer; transition: filter 0.2s;" onmouseover="this.style.filter='brightness(1.2)';" onmouseout="this.style.filter='brightness(1)';">Alles klar, verstanden!</button>
+                </div>
+
+              </div>
+              <div id="waterfallXAxis" style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.5); color: #FFD600; font-size: 13px; font-family: monospace; font-weight: bold; padding: 6px 60px 6px 80px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; border-top: 1px solid rgba(255,255,255,0.05);">
+                <span id="wfLblTimeLeft"></span>
+                <span id="wfLblTimeMid"></span>
+                <span id="wfLblTimeRight"></span>
+              </div>
+              <div style="padding: 10px 15px; background: rgba(0,0,0,0.3); border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
+                <input type="range" id="wfScrollbar" min="0" max="0" value="0" style="width: 100%; margin: 0; padding: 0; cursor: pointer; display: block; accent-color: #2196F3;">
+              </div>
+          </div>
+        </div>
+
+          <!-- ================= GYROSCOPE WATERFALL ================= -->
+          <div id="gyroWaterfallArea" class="dashboard-section" style="display:none; width: 100%; height: calc(100vh - 120px); max-height: calc(100vh - 120px); padding: 15px 20px; box-sizing: border-box; overflow: hidden;">
+            <div style="background: rgba(22, 27, 34, 0.4); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; height: 100%; display: flex; flex-direction: column;">
+              <div style="padding: 10px 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <h2 style="margin: 0; color: #fff; font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                  GYROSCOPE SPECTROGRAM
+                  <button id="gwfInfoBtn" onclick="document.getElementById('gwfInfoOverlay').style.display='block';" title="Erklärung anzeigen" style="background: rgba(255,214,0,0.15); border: 1px solid #FFD600; color: #FFD600; cursor: pointer; border-radius: 50%; width: 22px; height: 22px; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; padding: 0; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,214,0,0.4)';" onmouseout="this.style.background='rgba(255,214,0,0.15)';">?</button>
+                </h2>
+                <div style="display: flex; gap: 15px; align-items: center; font-size: 13px;">
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Theme:</label>
+                     <select id="gyroWaterfallTheme" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold; font-size: 13px;">
+                       <option value="fire">Fire</option>
+                       <option value="ocean">Ocean</option>
+                       <option value="mono">Mono</option>
+                       <option value="matrix">Matrix</option>
+                       <option value="plasma">Plasma</option>
+                       <option value="magma">Magma</option>
+                     </select>
+                   </div>
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Speed:</label>
+                     <input type="range" id="gyroWaterfallSpeed" min="1" max="10" value="1" step="1" style="vertical-align: middle; width: 60px;">
+                     <span id="gyroWaterfallSpeedValue" style="color: #FFD600; font-weight: bold; width: 15px; display: inline-block;">1</span>
+                   </div>
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Max Hz:</label>
+                     <input type="range" id="gyroWaterfallMaxHz" min="10" max="3300" value="3300" step="10" style="vertical-align: middle; width: 80px;">
+                     <span id="gyroWaterfallMaxHzValue" style="color: #FFD600; font-weight: bold; width: 35px; display: inline-block;">3300</span>
+                   </div>
+                   <div>
+                     <label style="color: var(--secondary-text); margin-right: 5px;">Mag Limit:</label>
+                     <input type="range" id="gyroWaterfallMagFilter" min="100" max="2000000" value="100000" step="1000" style="vertical-align: middle; width: 80px;">
+                     <span id="gyroWaterfallMagValue" style="color: #FFD600; font-weight: bold; min-width: 65px; text-align: right; display: inline-block;">100000</span>
+                   </div>
+                   <div style="margin-left: 10px;">
+                     <button id="gwfBtnScreenshot" title="Screenshot speichern (Taste P)" onclick="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.downloadScreenshot();" style="background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.2); height: 26px; width: 32px; border-radius: 4px; outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)';" onmouseout="this.style.background='rgba(255,255,255,0.15)';">⎙</button>
+                   </div>
+                </div>
+              </div>
+              <div style="flex-grow: 1; position: relative; overflow: hidden; padding: 8px;">
+                <canvas id="gyroWaterfallCanvas" style="width: 100%; height: 100%; display: block; border-radius: 8px; filter: brightness(1.2); cursor: none;"></canvas>
+                <div id="gwfCrossV" style="position: absolute; width: 1px; height: calc(100% - 16px); background: rgba(255, 214, 0, 0.4); top: 8px; left: 0; display: none; pointer-events: none; z-index: 5; border-left: 1px dashed rgba(255,214,0,0.8);"></div>
+                <div id="gwfCrossH" style="position: absolute; width: calc(100% - 16px); height: 1px; background: rgba(255, 214, 0, 0.4); top: 0; left: 8px; display: none; pointer-events: none; z-index: 5; border-top: 1px dashed rgba(255,214,0,0.8);"></div>
+                <div id="gyroWaterfallYAxis" style="position: absolute; left: 15px; top: 15px; bottom: 15px; display: flex; flex-direction: column; justify-content: space-between; color: #FFD600; font-family: monospace; font-weight: bold; font-size: 11px; text-shadow: 1px 1px 2px black; pointer-events: none; align-items: flex-start;">
+                  <span id="gwfLblMax" style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">3300 Hz</span>
+                  <span id="gwfLblMid" style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">1650 Hz</span>
+                  <span id="gwfLblMin" style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">0 Hz</span>
+                </div>
+                <div id="gyroWaterfallTimeTracker" style="position: absolute; left: 80px; top: 15px; display: flex; gap: 10px; align-items: center; color: #FFD600; font-family: monospace; font-weight: bold; opacity: 0.9; font-size: 11px; z-index: 10; pointer-events: none;">
+                  <span id="gwfLblSpan" style="background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Fenster: 0.0 s</span>
+                  <span id="gwfLblPos" style="background: rgba(0,0,0,0.6); color: #4caf50; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Pos: LIVE</span>
+                  <button id="gwfBtnLive" onclick="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.returnToLive();" style="display: none; pointer-events: auto; background: #FFD600; color: black; font-weight: bold; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: 0.2s;" onmouseover="this.style.filter='brightness(1.2)';" onmouseout="this.style.filter='brightness(1)';">⏵ ZURÜCK ZU LIVE</button>
+                </div>
+
+                <div id="gyroWaterfallColorLegend" style="position: absolute; right: 15px; top: 15px; display: flex; align-items: center; gap: 8px; color: #FFD600; font-family: monospace; font-weight: bold; font-size: 11px; text-shadow: 1px 1px 2px black; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); pointer-events: none;">
+                  <span>0</span>
+                  <div id="gwfColorBar" style="width: 100px; height: 10px; background: linear-gradient(to right, black, red, orange, yellow, white); border-radius: 2px;"></div>
+                  <span id="gwfLblMagMax">100000</span>
+                </div>
+
+                <div id="gwfInfoOverlay" style="display: none; position: absolute; z-index: 100; top: 10%; bottom: 10%; left: 10%; right: 10%; max-width: 800px; margin: auto; background: rgba(16, 20, 26, 0.95); backdrop-filter: blur(10px); border: 2px solid #FFD600; border-radius: 12px; padding: 20px 30px; overflow-y: auto; color: #fff; font-size: 14px; line-height: 1.6; font-family: sans-serif; box-shadow: 0 10px 40px rgba(0,0,0,0.9);">
+                  <h3 style="color: #FFD600; margin-top: 0; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px;">Was zeigt das Gyro-Spektrogramm an?</h3>
+                  <p>Das Gyro-Spektrogramm visualisiert die spektrale Zusammensetzung des Winkelgeschwindigkeits-Signals (Drehraten) über die <b>Zeit</b>.</p>
+                  
+                  <button onclick="document.getElementById('gwfInfoOverlay').style.display='none';" style="display: block; width: 100%; max-width: 250px; margin: 30px auto 0 auto; background: #FFD600; color: #000; font-weight: bold; border: none; padding: 12px; border-radius: 6px; cursor: pointer; transition: filter 0.2s;" onmouseover="this.style.filter='brightness(1.2)';" onmouseout="this.style.filter='brightness(1)';">Schließen</button>
+                </div>
+
+              </div>
+              <div id="gyroWaterfallXAxis" style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.5); color: #FFD600; font-size: 13px; font-family: monospace; font-weight: bold; padding: 6px 60px 6px 80px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; border-top: 1px solid rgba(255,255,255,0.05);">
+                <span id="gwfLblTimeLeft"></span>
+                <span id="gwfLblTimeMid"></span>
+                <span id="gwfLblTimeRight"></span>
+              </div>
+              <div style="padding: 10px 15px; background: rgba(0,0,0,0.3); border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
+                <input type="range" id="gwfScrollbar" min="0" max="0" value="0" style="width: 100%; margin: 0; padding: 0; cursor: pointer; display: block; accent-color: #2196F3;">
+              </div>
+            </div>
+          </div>
 
           <div id="vectorAlignArea" style="display:none;">
             <div id="accVectorTab" class="vector-align-layout">
@@ -1420,49 +1705,50 @@
                   <div class="dropdown-content">
                     <!-- Optionen werden dynamisch eingefügt -->
                   </div>
+                </div>
 
-                  <div class="dropdown" id="accelFilterDD">
-                    <button class="dropdown-button">
-                      <span class="label"></span>
-                      <span class="arrow">▼</span>
-                    </button>
-                    <div class="dropdown-content">
-                      <!-- Optionen werden dynamisch eingefügt -->
-                    </div>
-
-
-                    <div class="dropdown" id="gyroRangeDD">
-                      <button class="dropdown-button">
-                        <span class="label"></span>
-                        <span class="arrow">▼</span>
-                      </button>
-                      <div class="dropdown-content">
-                        <!-- Optionen werden dynamisch eingefügt -->
-                      </div>
-                    </div>
-
-                    <div class="dropdown" id="gyroSampleRateDD">
-                      <button class="dropdown-button">
-                        <span class="label"></span>
-                        <span class="arrow">▼</span>
-                      </button>
-                      <div class="dropdown-content">
-                        <!-- Optionen werden dynamisch eingefügt -->
-                      </div>
-
-                      <div class="dropdown" id="gyroFilterDD">
-                        <button class="dropdown-button">
-                          <span class="label"></span>
-                          <span class="arrow">▼</span>
-                        </button>
-                        <div class="dropdown-content">
-                          <!-- Optionen werden dynamisch eingefügt -->
-                        </div>
-
-
-                      </div>
-                    </div>
+                <div class="dropdown" id="accelFilterDD">
+                  <button class="dropdown-button">
+                    <span class="label"></span>
+                    <span class="arrow">▼</span>
+                  </button>
+                  <div class="dropdown-content">
+                    <!-- Optionen werden dynamisch eingefügt -->
                   </div>
+                </div>
+
+                <div class="dropdown" id="gyroRangeDD">
+                  <button class="dropdown-button">
+                    <span class="label"></span>
+                    <span class="arrow">▼</span>
+                  </button>
+                  <div class="dropdown-content">
+                    <!-- Optionen werden dynamisch eingefügt -->
+                  </div>
+                </div>
+
+                <div class="dropdown" id="gyroSampleRateDD">
+                  <button class="dropdown-button">
+                    <span class="label"></span>
+                    <span class="arrow">▼</span>
+                  </button>
+                  <div class="dropdown-content">
+                    <!-- Optionen werden dynamisch eingefügt -->
+                  </div>
+                </div>
+
+                <div class="dropdown" id="gyroFilterDD">
+                  <button class="dropdown-button">
+                    <span class="label"></span>
+                    <span class="arrow">▼</span>
+                  </button>
+                  <div class="dropdown-content">
+                    <!-- Optionen werden dynamisch eingefügt -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
 
 
@@ -1474,11 +1760,11 @@
 
 
 
+  
 
-
-                  <script type="module" src="script2.js"></script>
-                  <script src="gl-matrix-min.js"></script>
-                  <script src="svd-js.min.js"></script>
+  <script type="module" src="script2.js?v=2"></script>
+  <script type="module" src="ui/replay-manager.js?v=2"></script>
+  <script src="gl-matrix-min.js"></script>
 
                   <script>
 
@@ -1494,6 +1780,7 @@
                     const sidebar = document.querySelector('.sidebar');
 
                     sidebar.querySelectorAll('.sidebar-item').forEach(item => {
+                      if (item.id === 'sidebarToggleWrapper') return; // Toggle-Button NICHT automatisch schließen lassen
                       item.addEventListener('click', () => {
                         sidebar.classList.remove('expanded');
                       });
@@ -1503,7 +1790,7 @@
                       sidebar.classList.remove('expanded');
                     });
 
-                    const dashboardSections = ['liveChartarea', 'fftChartarea', 'gyroFftChartarea', 'vectorAlignArea', 'motionViewportArea', 'settings'];
+                    const dashboardSections = ['liveChartarea', 'fftChartarea', 'gyroFftChartarea', 'waterfallArea', 'gyroWaterfallArea', 'vectorAlignArea', 'motionViewportArea', 'settings'];
 
                     function showDashboardSection(sectionId) {
                       dashboardSections.forEach((id) => {
@@ -1515,12 +1802,12 @@
 
                       const fftChartForm = document.getElementById('fftChartForm');
                       if (fftChartForm) {
-                        fftChartForm.style.display = sectionId === 'fftChartarea' ? 'block' : 'none';
+                        fftChartForm.style.display = sectionId === 'fftChartarea' ? 'flex' : 'none';
                       }
 
                       const gyroFftChartForm = document.getElementById('gyroFftChartForm');
                       if (gyroFftChartForm) {
-                        gyroFftChartForm.style.display = sectionId === 'gyroFftChartarea' ? 'block' : 'none';
+                        gyroFftChartForm.style.display = sectionId === 'gyroFftChartarea' ? 'flex' : 'none';
                       }
 
                       window.dispatchEvent(new CustomEvent('dashboardTabChanged', {
@@ -1540,16 +1827,20 @@
                       showDashboardSection('gyroFftChartarea');
                     });
 
+                    document.getElementById('navWaterfall').addEventListener('click', function () {
+                      showDashboardSection('waterfallArea');
+                    });
+
+                    document.getElementById('navGyroWaterfall').addEventListener('click', function () {
+                      showDashboardSection('gyroWaterfallArea');
+                    });
+
                     document.getElementById('navVectorAlign').addEventListener('click', function () {
                       showDashboardSection('vectorAlignArea');
                     });
 
                     document.getElementById('navMotionViewport').addEventListener('click', function () {
                       showDashboardSection('motionViewportArea');
-                    });
-
-                    document.getElementById('navSettings').addEventListener('click', function () {
-                      showDashboardSection('settings');
                     });
 
 
@@ -1634,43 +1925,36 @@
 
 
                   </script>
-  <div class="euler-tile" style="display:flex; flex-direction: column; align-items: flex-start; padding: 20px;">
-    <div style="margin-bottom: 10px;">
-        <span class="label" style="font-weight: bold;">Roll:</span><br>
-        <span class="value" id="roll">0.00</span><br>
-        <span class="unit">°</span>
+
+
+  <!-- ====== REPLAY UI START ====== -->
+  <input type="file" id="replayCsvInput" accept=".csv" multiple style="display: none;" />
+
+  <div id="replayControlBar" style="display: none; position: fixed; bottom: 0; left: 0; width: 100vw; height: 60px; background: rgba(15, 15, 15, 0.95); border-top: 1px solid #FFD600; z-index: 9999; align-items: center; padding: 0 20px; gap: 15px; box-sizing: border-box; backdrop-filter: blur(10px); box-shadow: 0 -5px 20px rgba(0,0,0,0.5);">
+    <div style="color: #FFD600; font-weight: bold; font-family: 'Courier New', monospace; letter-spacing: 1px; font-size: 14px;">REPLAY MODE</div>
+    <button id="replayBtnTriggerLoad" onclick="document.getElementById('replayCsvInput').click();" style="background: transparent; color: #FFD600; border: 1px solid #FFD600; padding: 6px 12px; border-radius: 4px; cursor: pointer; height: 32px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="1.2em" height="1.2em" style="vertical-align: middle; margin-right: 4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Datei laden</button>
+    <div style="width: 1px; height: 30px; background: #333; margin: 0 5px;"></div>
+    
+    <button id="replayPlayBtn" style="background: #FFD600; color: black; border: none; padding: 6px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; height: 32px; width: 85px; display: flex; align-items: center; justify-content: center; gap: 6px;"><svg viewBox="0 0 24 24" fill="currentColor" width="1.2em" height="1.2em"><path d="M8 5v14l11-7z"/></svg> PLAY</button>
+    
+    <div style="flex-grow: 1; display: flex; align-items: center; gap: 12px; margin-left: 10px;">
+      <span id="replayTimeDisplay" style="color: #ccc; font-family: 'Courier New', monospace; font-size: 14px; min-width: 65px;">00:00.0</span>
+      <input type="range" id="replayTimeSlider" min="0" max="1000" value="0" style="flex-grow: 1; accent-color: #FFD600; cursor: pointer;" />
+      <span id="replayDurationDisplay" style="color: #666; font-family: 'Courier New', monospace; font-size: 14px; min-width: 65px;">00:00.0</span>
     </div>
 
-    <div style="margin-bottom: 10px;">
-        <span class="label" style="font-weight: bold;">Pitch:</span><br>
-        <span class="value" id="pitch">0.00</span><br>
-        <span class="unit">°</span>
-    </div>
-
-    <div style="margin-bottom: 10px;">
-        <span class="label" style="font-weight: bold;">Yaw:</span><br>
-        <span class="value" id="yaw">0.00</span><br>
-        <span class="unit">°</span>
-    </div>
-
-    <div style="margin-bottom: 10px;">
-        <span class="label" style="font-weight: bold;">Posx:</span><br>
-        <span class="value" id="posx">0.00</span><br>
-        <span class="unit">°</span>
-    </div>
-
-    <div style="margin-bottom: 10px;">
-        <span class="label" style="font-weight: bold;">Posy:</span><br>
-        <span class="value" id="posy">0.00</span><br>
-        <span class="unit">°</span>
-    </div>
-
-    <div style="margin-bottom: 10px;">
-        <span class="label" style="font-weight: bold;">PosZ:</span><br>
-        <span class="value" id="posz">0.00</span><br>
-        <span class="unit">°</span>
-    </div>
+    <div style="width: 1px; height: 30px; background: #333; margin: 0 5px;"></div>
+    <select id="replaySpeedSelect" style="background: #222; color: #FFD600; border: 1px solid #444; padding: 6px; border-radius: 4px; font-family: monospace; outline: none;">
+      <option value="0.1">0.1x Speed</option>
+      <option value="0.25">0.25x Speed</option>
+      <option value="0.5">0.5x Speed</option>
+      <option value="1.0" selected>1.0x Speed</option>
+      <option value="2.0">2.0x Speed</option>
+      <option value="4.0">4.0x Speed</option>
+      <option value="10.0">10.0x Speed</option>
+    </select>
   </div>
+  <!-- ====== REPLAY UI END ====== -->
 </body>
 
 </html>

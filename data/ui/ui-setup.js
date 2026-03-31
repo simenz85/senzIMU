@@ -20,7 +20,7 @@ export function setupDropdowns() {
   // Blocksize Dropdown
   new UniDropdown(document.getElementById("dropdown1"), {
     type: "select",
-    label: "Blocksize",
+    label: "Size",
     items: [
       { value: 254, label: "254" },
       { value: 508, label: "508" },
@@ -38,7 +38,7 @@ export function setupDropdowns() {
   // Sample Rate Dropdown
   new UniDropdown(document.getElementById("dropdown2"), {
     type: "select",
-    label: "Samplerate",
+    label: "Rate",
     items: [
       { value: 1000/60, label: "60 fps" },
       { value: 1000/30, label: "30 fps" },
@@ -58,7 +58,7 @@ export function setupDropdowns() {
   // Samples Dropdown (FFT Durchschnittsanzahl)
   new UniDropdown(document.getElementById("dropdown3"), {
     type: "select",
-    label: "Samples",
+    label: "Avg",
     items: [
       5,10,15,20,25,50,100,150,300
     ].map(v => ( { value: v, label: `${v}` } )),
@@ -90,7 +90,7 @@ export function setupDropdowns() {
   // FFT Window Type Dropdown
   new UniDropdown(document.getElementById("dropdown4"), {
     type: "select",
-    label: "WinType",
+    label: "Window",
     items: [
       { value: "BLACKMAN", label: "BLACKMAN" },
       { value: "HANNING", label: "HANNING" },
@@ -110,7 +110,7 @@ export function setupDropdowns() {
   // DC Cutoff Dropdown
   new UniDropdown(document.getElementById("dropdown5"), {
     type: "select",
-    label: "DC Cutoff",
+    label: "DC",
     items: [
       { value: true, label: "YES" },
       { value: false, label: "NO" }
@@ -127,7 +127,7 @@ export function setupDropdowns() {
   // Highpass Log Slider Dropdown
   new UniDropdown(document.getElementById("sliderDropdown"), {
     type: "logslider",
-    label: "HIGHPASS",
+    label: "HPF",
     minValue: 0.001,
     maxValue: 100,
     defaultValue: 0,
@@ -164,6 +164,7 @@ export function setupButtons() {
   const downloadBtn = document.getElementById("downloadBtn");
   const resetZoomBtn = document.getElementById("resetZoomBtn");
   const sidebarToggle = document.getElementById("sidebarToggle");
+
 
   // Record Button
   let isRecording = false;

@@ -149,25 +149,30 @@ static void led_disconnect_blink_task(void *arg) {
     vTaskDelete(NULL);
 }
 
-// Forward declaration
 static int count_active_ws_clients();
+
+static volatile bool g_force_deep_sleep = false;
 
 static void sleep_watchdog_task(void *arg) {
     TickType_t last_active_time = xTaskGetTickCount();
     while (1) {
-        if (count_active_ws_clients() > 0) {
+        if (!g_force_deep_sleep && count_active_ws_clients() > 0) {
             last_active_time = xTaskGetTickCount();
         } else {
-            if ((xTaskGetTickCount() - last_active_time) > pdMS_TO_TICKS(60000)) {
-                ESP_LOGI("Sleep", "60s Timeout ohne Clients. Gehe in Deep Sleep...");
+            if (g_force_deep_sleep || (xTaskGetTickCount() - last_active_time) > pdMS_TO_TICKS(300000)) {
+                if (g_force_deep_sleep) {
+                    ESP_LOGI("Sleep", "Shutdown per WebUI angefordert. Gehe in Deep Sleep...");
+                } else {
+                    ESP_LOGI("Sleep", "5m Timeout ohne Clients. Gehe in Deep Sleep...");
+                }
                 
                 led_blinking_active = true;
                 bool abort_sleep = false;
                 // 3x abwechselnd Grün und Blau
                 for(int i = 0; i < 3; i++) {
-                    if (count_active_ws_clients() > 0) { abort_sleep = true; break; }
+                    if (!g_force_deep_sleep && count_active_ws_clients() > 0) { abort_sleep = true; break; }
                     set_rgb_pins_raw(0, 255, 0); vTaskDelay(pdMS_TO_TICKS(200));
-                    if (count_active_ws_clients() > 0) { abort_sleep = true; break; }
+                    if (!g_force_deep_sleep && count_active_ws_clients() > 0) { abort_sleep = true; break; }
                     set_rgb_pins_raw(0, 0, 255); vTaskDelay(pdMS_TO_TICKS(200));
                 }
                 set_rgb_pins_raw(0, 0, 0);
@@ -1335,6 +1340,12 @@ esp_err_t websocket_handler(httpd_req_t *req)
                             imuConfigChanged = true;
                             imuConfigPersistPending = true;
                             send_config_value(CFG_ID_TEMPSAMPLERATE, range);
+                        }
+                        else if (strcmp(key, "COMMAND") == 0) {
+                            if (cJSON_IsString(item) && strcmp(item->valuestring, "SHUTDOWN") == 0) {
+                                ESP_LOGI("WS", "Shutdown vom Button empfangen");
+                                g_force_deep_sleep = true;
+                            }
                         }
                         else {
                             ESP_LOGW("WS", "Unbekannter Key im JSON: %s", key);

@@ -1,7 +1,7 @@
 :root {
-    --sidemenu-width: 70px;
-    --sidemenu-expanded: 220px;
-  --main-padding: 20px;
+    --sidemenu-width: 90px;
+    --sidemenu-expanded: 250px;
+    --main-padding: 20px;
     --primary-bg: #181c24;
     --darkprimary-bg: #202020;
     --card-bg: #232a36;
@@ -63,9 +63,12 @@ body {
   position: fixed;
   z-index: 1100;
   top: 0; left: 0; height: 100vh;
-  width: 90px;
-  background: #232a36;
-  box-shadow: 2px 0 8px 2px #0006;
+  width: var(--sidemenu-width);
+  background: rgba(22, 27, 34, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 6px 0 30px rgba(0, 0, 0, 0.35);
   overflow: hidden;
   transition: width 0.25s cubic-bezier(.65,.05,.36,1);
   display: flex;
@@ -75,26 +78,23 @@ body {
 }
 
 .sidebar.expanded {
-  width: 250px;
-}
-
-.sidebar-toggle {
-  background: none;
-  border: none;
-  width: 54px;
-  height: 54px;
-  color: #FFD600;
-  font-size: 1.4rem;
-  cursor: pointer;
-  outline: none;
+  width: var(--sidemenu-expanded);
 }
 
 .sidebar-icon svg { color: #FFD600; }
 .sidebar-icon svg path { stroke-width: 2; }
 
-.sidebar.expanded .sidebar-toggle i {
+.sidebar-toggle .sidebar-icon {
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), filter 0.2s ease;
+}
+
+.sidebar.expanded .sidebar-toggle .sidebar-icon {
   transform: rotate(180deg);
-  transition: transform 0.25s;
+}
+
+.sidebar.expanded .sidebar-toggle:hover .sidebar-icon,
+.sidebar.expanded .sidebar-toggle:focus-visible .sidebar-icon {
+  transform: rotate(180deg) scale(1.15);
 }
 
 .sidebar-content {
@@ -108,13 +108,13 @@ body {
 
 .sidebar-item {
   width: 100%;
-  padding: 18px;
+  padding: 12px 18px;
   display: flex;
   align-items: center;
   gap: 10px;
   justify-content: flex-start; /* Icon + Text linksbündig */
   color: #b0b8c1;
-  border-bottom: 1px solid #1a1c22;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   font-size: 1.13rem;
   transition: background .12s, color .2s;
   cursor: pointer;
@@ -123,7 +123,7 @@ body {
 
 .sidebar-item-bottom {
   margin-top: auto;
-  border-top: 1px solid #1a1c22;
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
   border-bottom: none;
 }
 
@@ -133,7 +133,7 @@ body {
 
 .sidebar-action-button {
   width: 100%;
-  padding: 18px;
+  padding: 12px 18px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -145,11 +145,12 @@ body {
   text-align: left;
 }
 
+.sidebar-action-button:focus,
 .sidebar-action-button:hover,
 .sidebar-action-button:focus-visible {
   background: #181c24;
   color: #FFD600;
-  outline: none;
+  outline: none !important;
 }
 
 .sidebar-action-button[aria-pressed="true"] {
@@ -162,8 +163,8 @@ body {
 }
 
 .sidebar-icon {
-  width: 50px;
-  height: 50px;
+  width: 45px;
+  height: 45px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -173,15 +174,26 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;  /* Icon horizontal und vertikal zentrieren */
-  width: 50px; 
-  height: 50px;
+  width: 45px; 
+  height: 45px;
 }
 
 
 .sidebar-icon img, .sidebar-icon svg {
-  max-width: 50px;
-  max-height: 50px;
+  max-width: 42px;
+  max-height: 42px;
   display: block;
+  transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.sidebar-toggle:hover .sidebar-icon,
+.sidebar-item:hover .sidebar-icon,
+.sidebar-action-button:hover .sidebar-icon,
+.sidebar-toggle:focus-visible .sidebar-icon,
+.sidebar-item:focus-within .sidebar-icon,
+.sidebar-action-button:focus-visible .sidebar-icon {
+  filter: drop-shadow(0 0 8px rgba(255, 214, 0, 0.8));
+  transform: scale(1.15);
 }
 
 .sidebar-label {
@@ -263,19 +275,23 @@ body {
 }
 
 .card {
-    background: var(--card-bg);
+    background: rgba(22, 27, 34, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: var(--radius);
-    box-shadow: var(--shadow);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0,0,0,0.3);
     padding: 5px 4px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    transition: transform 0.15s, box-shadow 0.15s;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s;
 }
 
 .card:hover {
-    transform: translateY(-4px) scale(1.025);
-    box-shadow: 0 8px 32px 0 rgba(0,0,0,0.28);
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 12px 36px rgba(0,0,0,0.4);
+    border-color: rgba(255, 214, 0, 0.2);
 }
 
 .card-title {
@@ -341,9 +357,13 @@ body {
 #fftChartForm,
 #gyroFftChartForm {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   min-height: 0;
+  margin-bottom: 8px;
 }
 
 #fftChart,
@@ -364,7 +384,8 @@ body {
 
 #fftRmsChartControls,
 #gyroFftRmsChartControls {
-  margin-top: 10px;
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 #accChart .u-axis-label {
@@ -461,10 +482,26 @@ body {
 
 .chart-controls {
     display: flex;
-  gap: 8px;
+    gap: 8px;
     align-items: center;
-  margin-bottom: 8px;
+    margin-bottom: 8px;
     flex-wrap: wrap;
+}
+
+.chart-controls > label {
+    margin-left: auto; /* Push sliders to the right if there's space */
+    white-space: nowrap;
+    font-size: 0.9rem;
+    color: var(--secondary-text);
+}
+
+.chart-controls > label ~ label {
+    margin-left: 15px; /* Spacing between multiple sliders */
+}
+
+.chart-controls input[type="range"] {
+    width: 120px; /* Force inline width instead of 100% global */
+    flex-shrink: 0;
 }
 
 .filter-toolbar {
@@ -487,14 +524,24 @@ body {
 }
 
 .filter-drawer-toggle {
-  background: var(--card-bg);
-  color: var(--text);
-  border: none;
+  background: rgba(22, 27, 34, 0.6);
+  backdrop-filter: blur(10px);
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0,0,0,0.3);
   border-radius: 8px;
-  padding: 5px 10px;
+  padding: 6px 12px;
   font-size: 0.92rem;
   font-weight: bold;
   cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.filter-drawer-toggle:hover {
+  background: rgba(26, 32, 44, 0.8);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.5);
+  box-shadow: 0 0 12px rgba(255, 214, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px) scale(1.02);
 }
 
 .filter-drawer {
@@ -721,20 +768,35 @@ body {
 }
 
 .chart-controls button {
-    background: var(--card-bg);
-    color: var(--text);
-    border: none;
-    border-radius: 8px;
-    padding: 5px 10px;
-    font-size: 0.92rem;
-    cursor: pointer;
-    font-weight: bold;
-    transition: background 0.2s;
+  background: rgba(22, 27, 34, 0.6);
+  backdrop-filter: blur(10px);
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0,0,0,0.3);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.92rem;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.chart-controls button.active,
-.chart-controls button:hover {
-    background: #353e4e;
+.chart-controls button.active {
+  background: rgba(26, 32, 44, 0.9);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.6);
+  box-shadow: 0 0 16px rgba(255, 214, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px) scale(1.01);
+}
+
+.chart-controls button:hover,
+.chart-controls button:focus-visible {
+  background: rgba(26, 32, 44, 0.8);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.5);
+  box-shadow: 0 0 12px rgba(255, 214, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px) scale(1.02);
+  outline: none;
 }
 
 .zoom-box {
@@ -752,103 +814,122 @@ body {
     }
 
     .dropdown-button {
-     
-    background: var(--card-bg);
-    border-radius: var(--smallradius);
-    box-shadow: var(--shadow);
-     box-shadow: -4px 0 15px rgba(0,0,0,0.5);
-     
-      
+      background: rgba(22, 27, 34, 0.6);
+      backdrop-filter: blur(10px);
+      border-radius: 8px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0,0,0,0.3);
       color: #eee;
-      border: none;
-      padding: 10px ;
-      margin: 10px auto ;
-      
-      transition: 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 6px 10px;
+      margin: 0;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
       cursor: pointer;
-      font-size: 16px;
-    }
-
-    .dropdown-button:focus {
-      outline: none;
-      border: 1px solid #ffd700; /* Fokus-Effekt */
+      font-size: 0.88rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
     }
 
     .dropdown-button:hover,
-    .dropdown-button:focus {
-      background: var(--distinct-hover);
-      color: #ffd700;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-      transform: translateY(-2px) scale(1.025);
+    .dropdown-button:focus-visible {
+      background: rgba(26, 32, 44, 0.8);
+      color: #FFD600;
+      border-color: rgba(255, 214, 0, 0.5);
+      box-shadow: 0 0 12px rgba(255, 214, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      transform: translateY(-2px) scale(1.02);
+      outline: none;
     }
 
     .dropdown-label:hover {
-      color: #ffd700;;
+      color: #FFD600;
     }
 
     .dropdown-content {
       display: none;
       position: absolute;
-      background: var(--primary-bg);
+      background: rgba(16, 21, 28, 0.95);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       left: 0;
       min-width: 100%;
-      border-radius: 4px;
-      box-sizing:border-box;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-      z-index: 1;
+      border-radius: 8px;
+      box-sizing: border-box;
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+      z-index: 10;
+      overflow: hidden;
     }
 
     .dropdown-content a {
       color: #eee;
-      padding: 10px 18px;
+      padding: 12px 18px;
       text-decoration: none;
       display: block;
-      transition: 0.2s, color 0.2s;
-      border-radius: 4px;
-      margin: 2px 0;
-      padding: 3px 35px;
+      transition: background 0.2s, color 0.2s, font-weight 0.2s;
       cursor: pointer;
-      text-align: right; /* <-- Hier die Änderung */
+      text-align: right;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    
+    .dropdown-content a:last-child {
+      border-bottom: none;
     }
 
-    .dropdown-content a:hover {
-      background: var(--distinct-hover);
-      color: #ffd700;
+    .dropdown-content a:hover,
+    .dropdown-content a:focus-visible {
+      background: rgba(255, 214, 0, 0.1);
+      color: #FFD600;
+      outline: none;
     }
 
     /* Dropdown geöffnet */
     .dropdown.open .dropdown-content {
       display: block;
+      animation: dropdownFadeIn 0.2s ease-out forwards;
+    }
+
+    @keyframes dropdownFadeIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
     /* Aktive Option kennzeichnen */
     .dropdown-content a.active {
-      background: var(--distinct-hover);
-      color: #ffd700;
+      background: rgba(255, 214, 0, 0.15);
+      color: #FFD600;
       font-weight: bold;
+      box-shadow: inset 2px 0 0 #FFD600;
     }
 
-    /* Button oben rechts in Topnav für Öffnen */
+/* Button oben rechts in Topnav für Öffnen */
 .right-settings-btn {
     position: fixed;          /* Fixed, damit es immer an gleicher Stelle bleibt */
     top: 30px;                /* Etwas Abstand vom oberen Rand */
     right: 15px;              /* Ganz rechts mit kleinem Abstand */
-    background: none;
-    border: none;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
     padding: 5px;
     cursor: pointer;
     z-index: 9999;
-    border-radius: 25px;            /* Über anderen Elementen */
+    border-radius: 50%;            /* Über anderen Elementen */
+    transition: transform 0.2s ease, filter 0.2s ease;
 }
 
 .settings-icon {
     display: block;
     width: 40px;              /* Icon-Größe */
     height: 40px;
+    transition: filter 0.2s ease;
 }
-.right-settings-btn:hover {
-    background: var(--hoverbg);
-    color: var(--text2);
+
+.right-settings-btn:hover, .right-settings-btn:focus-visible {
+    filter: drop-shadow(0 0 8px rgba(255, 214, 0, 0.8));
+    transform: scale(1.15);
+    outline: none !important;
+    background: transparent !important;
 }
 
 /* Das rechte Panel – Standardposition komplett rechts draußen */
@@ -858,9 +939,12 @@ body {
     right: -300px;        /* komplett außerhalb */
     width: 300px;
     height: 100%;
-    background-color: var(--primary-bg); /* an Sidebar angepasst */
+    background: rgba(22, 27, 34, 0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
     color: #fff;
-    box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+    box-shadow: -6px 0 30px rgba(0, 0, 0, 0.35);
     overflow-y: auto;
     transition: right 0.35s ease;
     z-index: 2000;
@@ -876,28 +960,38 @@ body {
     display: flex;
     height: 75px;
     align-items: center;
-    background: var(--card-bg);
+    background: transparent;
     padding: 10px;
-    border-bottom: 1px solid #444;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05); /* Sanfter Rand im Glass-Style */
 }
 
 /* Pfeil statt Close-Button */
 .close-arrow {
-    background: none;
-    border: none;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
     color: white;
     font-size: 22px;
     margin-right: 10px;
     cursor: pointer;
+    transition: transform 0.2s ease, filter 0.2s ease;
 }
-.close-arrow:hover {
-    color: var(--text2); /* Hoverfarbe, kannst du ändern */
+.close-arrow:hover, .close-arrow:focus-visible {
+    color: #FFD600; /* Hoverfarbe gelb */
+    filter: drop-shadow(0 0 8px rgba(255, 214, 0, 0.8));
+    transform: scale(1.15);
+    outline: none !important;
+    background: transparent !important;
 }
 
 .right-settings-header h2 {
     margin: 0;
-    font-size: 18px;
-    font-weight: normal;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #FFD600; /* Sidebar-Akzentfarbe */
 }
 
 .right-settings-content {
@@ -937,19 +1031,22 @@ body {
   display: flex;
   flex-wrap: wrap; /* Bei wenig Platz umbruch */
   gap: 15px;
+  margin-bottom: 12px; /* Reduzierter Abstand nach unten */
 }
 
 .imu-tile {
   flex: 0 0 auto;
   min-width: 140px;
-  background-color: var(--card-bg);
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  padding: 15px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  background: rgba(22, 27, 34, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 8px 15px; /* Cards niedriger machen = weniger vertikales Padding */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0,0,0,0.25);
   font-family: sans-serif;
   text-align: center;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s;
 }
 
 .label {
@@ -958,10 +1055,10 @@ body {
 }
 
 .value {
-  font-size: 2em;      /* deutlich größere Werte */
+  font-size: 1.8em;      /* Etwas kleinere Zahlen für niedrigere Cards */
   font-weight: bold;
   color: var(--text2);
-  padding: 5px 0; /* Etwas Abstand nach oben und unten */
+  padding: 2px 0; /* Weniger vertikaler Abstand */
 }
 .unit {
   font-size: 1em;        /* kleineres Label */
@@ -969,8 +1066,9 @@ body {
 }
 
 .imu-tile:hover {
-  transform: scale(1.05);
-  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+  transform: scale(1.03);
+  box-shadow: 0 12px 36px rgba(0,0,0,0.4);
+  border-color: rgba(255, 214, 0, 0.4);
 }
 
 .u-x-axis .u-tick { fill: red; }
@@ -1149,28 +1247,30 @@ body {
 
 
 button {
-  background: var(--card-bg);
-  border-radius: var(--smallradius);
-  box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+  background: rgba(22, 27, 34, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0,0,0,0.3);
   color: #eee;
-  border: none;
-  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 10px 16px;
   font-size: 16px;
   cursor: pointer;
-  transition: 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 button:hover,
-button:focus {
-  background: var(--distinct-hover);
-  color: #ffd700;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-  transform: translateY(-2px) scale(1.025);
+button:focus-visible {
+  background: rgba(26, 32, 44, 0.8);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.5);
+  box-shadow: 0 0 12px rgba(255, 214, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px) scale(1.02);
+  outline: none;
 }
 
-button:focus {
-  outline: none;
-  border: 1px solid #ffd700; /* Fokus-Effekt */
+button:active {
+  transform: translateY(0) scale(0.98);
 }
 
   .button-row {
@@ -1282,42 +1382,40 @@ button:focus {
 }
 
 .toggle-button {
-    
   width: 100%;
-  box-sizing: border-box; /* Damit Padding zur Breite dazugehört */
-  
-  background: var(--card-bg);
-  border-radius: var(--smallradius);
-  box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+  box-sizing: border-box;
+  background: rgba(22, 27, 34, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0,0,0,0.3);
   color: #eee;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 10px;
   margin: 10px auto;
-  transition: 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s, background 0.2s;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
   font-size: 16px;
 }
 
-/* Toggle aktiviert */
+/* Toggle aktiviert (An) */
 .toggle-button.toggle-on {
-  background: var(--distinct-hover);
-  color: #ffd700;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  transform: translateY(-2px) scale(1.025);
+  background: rgba(26, 32, 44, 0.9);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.6);
+  box-shadow: 0 0 16px rgba(255, 214, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px) scale(1.01);
   font-weight: bold;
 }
 
-/* Optional Fokus- und Hovereffekte */
-.toggle-button:focus {
-  outline: none;
-  border: 1px solid #ffd700;
-}
+/* Hover & Fokus */
 .toggle-button:hover,
-.toggle-button:focus {
-  background: var(--distinct-hover);
-  color: #ffd700;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  transform: translateY(-2px) scale(1.025);
+.toggle-button:focus-visible {
+  background: rgba(26, 32, 44, 0.8);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.5);
+  box-shadow: 0 0 12px rgba(255, 214, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px) scale(1.02);
+  outline: none;
 }
 
 .vector-align-layout {
@@ -1778,8 +1876,8 @@ button:focus {
 
 .vector-align-slider-input:focus {
   outline: none;
-  border-color: rgba(154, 232, 255, 0.72);
-  box-shadow: 0 0 0 2px rgba(42, 171, 214, 0.18);
+  border-color: rgba(255, 214, 0, 0.72);
+  box-shadow: 0 0 0 2px rgba(255, 214, 0, 0.18);
 }
 
 .vector-align-slider-input::-webkit-outer-spin-button,
@@ -1809,9 +1907,9 @@ button:focus {
 }
 
 .vector-align-stepper-btn:hover {
-  border-color: rgba(154, 232, 255, 0.34);
+  border-color: rgba(255, 214, 0, 0.34);
   background: linear-gradient(180deg, rgba(21, 86, 106, 1), rgba(12, 49, 61, 1));
-  color: #effcff;
+  color: #FFD600;
 }
 
 .vector-align-stepper-btn:active {
@@ -2034,4 +2132,93 @@ button:focus {
   .vector-align-status {
     white-space: normal;
   }
+}
+
+/* Globale Range-Slider Styles (Yellow Aesthetic) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]:focus {
+  outline: none;
+}
+
+/* Track (Hintergrundleine) */
+input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+input[type="range"]::-moz-range-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+/* Thumb (Punktelement) */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: #1d4ed8;
+  box-shadow: 0 0 4px rgba(29, 78, 216, 0.4);
+  margin-top: -6px; /* zentrieren */
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+input[type="range"]::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: #1d4ed8;
+  border: none;
+  box-shadow: 0 0 4px rgba(29, 78, 216, 0.4);
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Active/Hover states for Thumb */
+input[type="range"]:hover::-webkit-slider-thumb,
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  background: #3b82f6;
+  transform: scale(1.2);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.6);
+}
+
+input[type="range"]:hover::-moz-range-thumb,
+input[type="range"]:focus-visible::-moz-range-thumb {
+  background: #3b82f6;
+  transform: scale(1.2);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.6);
+}
+
+/* Globale Text Input Styles (Yellow Aesthetic) */
+input[type="text"],
+input[type="password"],
+input[type="number"] {
+  background: rgba(7, 24, 32, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: #eee;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus {
+  outline: none;
+  border-color: rgba(255, 214, 0, 0.72);
+  box-shadow: 0 0 0 2px rgba(255, 214, 0, 0.18), 0 0 8px rgba(255, 214, 0, 0.3);
 }

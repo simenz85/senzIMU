@@ -161,6 +161,7 @@ function attachDecodePort(port) {
 }
 
 function connectWebSocket(url) {
+    if (!shouldReconnect) return;
     log("Connecting to", url);
     ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
@@ -309,7 +310,7 @@ onmessage = function (event) {
     } else if (type === 'disconnect') {
         log("Disconnect command received");
         shouldReconnect = false;
-        if (ws && ws.readyState === WebSocket.OPEN) {
+        if (ws) {
             ws.close(1000, "Normal closure");
         }
 

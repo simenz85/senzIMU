@@ -164,6 +164,9 @@ if (fftDBoutput) {
     magsType,
     windowType: windowFunction.type,
     sampleRate,
-    fftSize: N
+    fftSize: N,
+    timestamp: event.data.timestamp,
+    timeString: event.data.timeString,
+    clockTimeStr: event.data.clockTimeStr
   }, [freqs.buffer, mags.buffer]);
 };
