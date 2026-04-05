@@ -2222,3 +2222,201 @@ input[type="number"]:focus {
   border-color: rgba(255, 214, 0, 0.72);
   box-shadow: 0 0 0 2px rgba(255, 214, 0, 0.18), 0 0 8px rgba(255, 214, 0, 0.3);
 }
+
+/* =========================================================
+   MOBILE RESPONSIVE REDESIGN (Max-Width 950px -> Covers Landscape)
+   ========================================================= */
+@media (max-width: 950px) {
+  /* 1. Bottom Navigation Bar */
+  .sidebar {
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    height: 70px !important;
+    width: 100% !important;
+    flex-direction: row;
+    border-right: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: env(safe-area-inset-bottom);
+    z-index: 2000; /* Ensure over content */
+  }
+
+  .sidebar-toggle {
+    display: none !important; /* Hide hamburger */
+  }
+
+  .sidebar-content {
+    flex-direction: row;
+    width: 100%;
+    height: 100%;
+    align-items: center;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    padding: 0 10px;
+    gap: 8px; /* space between tabs */
+  }
+  
+  .sidebar-content::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sidebar-item, .sidebar-action-button {
+    padding: 2px;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    border: none !important;
+    height: 100%;
+    min-width: 60px; /* Reduced to fit more */
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    background: transparent;
+  }
+
+  .sidebar-item-bottom {
+    margin: 0;
+  }
+
+  .sidebar-icon {
+    width: 24px; /* Reduced */
+    height: 24px; /* Reduced */
+  }
+
+  .sidebar-icon img, .sidebar-icon svg {
+    max-width: 22px; /* Reduced */
+    max-height: 22px; /* Reduced */
+  }
+
+  .sidebar-label {
+    opacity: 1 !important;
+    max-width: 100% !important;
+    font-size: 0.55rem !important; /* Reduced for space */
+    white-space: normal;
+    text-align: center;
+    line-height: 1.1;
+  }
+
+  /* 2. Main Content Adjustments */
+  .main {
+    margin-left: 0 !important;
+    padding-bottom: 90px !important; /* Leave space for bottom nav */
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  /* 3. Topnav Typography */
+  .topnav h1 {
+    font-size: 1.4rem;
+    letter-spacing: 0.25rem;
+  }
+
+  .right-settings-btn {
+    top: 15px;
+    right: 10px;
+  }
+
+  /* 4. Panels & Popups Flexibility */
+  .right-settings-panel {
+    width: min(260px, 90vw); /* Reduced width to not cover the screen too much */
+  }
+
+  .popup-content {
+    width: 92% !important;
+    max-width: none;
+    padding: 16px;
+  }
+
+  /* 5. Touch Targets & Reordered Grid Layout */
+  .chart-controls button, 
+  .dropdown-button, 
+  .toggle-button,
+  .button-row button {
+    min-height: 44px; /* Touch target size */
+  }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* IMU Tiles as a horizontal scrollable strip */
+  .imu-container {
+    order: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    gap: 6px; /* tighter gap */
+    padding-bottom: 8px;
+    margin-right: -8px; /* bleed out slightly to show it's scrollable */
+    scrollbar-width: none; /* Firefox hide scrollbar */
+  }
+  .imu-container::-webkit-scrollbar { 
+    display: none; 
+  }
+
+  .imu-tile {
+    flex: 0 0 calc(28% - 6px); /* ~3 to 3.5 tiles visible */
+    min-width: 95px; /* smaller tiles */
+    padding: 4px 6px;
+    scroll-snap-align: start;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), 0 4px 12px rgba(0,0,0,0.3); /* slightly flat for mobile */
+  }
+
+  .label {
+    font-size: 0.85em; /* smaller headers */
+  }
+
+  .value {
+    font-size: 1.1em; /* much smaller numbers */
+  }
+  
+  .unit {
+    font-size: 0.8em;
+  }
+
+  /* Emphasize the Charts */
+  #switchable-area {
+    order: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #liveChartForm {
+    /* Ensures order works */
+    display: flex;
+    flex-direction: column;
+  }
+
+  .livecharts-grid {
+    order: 0; /* Render charts BEFORE the controls on mobile */
+    display: flex;
+    flex-direction: column;
+    gap: 15px; /* give charts some breathing room */
+  }
+
+  #livechart2, #gyrochart {
+    flex: none !important;
+    height: 350px !important; 
+    min-height: 350px !important;
+    max-height: 350px !important; /* Lock height completely to prevent uPlot infinite resize */
+    width: 100%;
+    overflow: hidden;
+  }
+
+  /* Compress the controls and render them below charts */
+  .chart-controls {
+    order: 1;
+    margin-top: 15px;
+    padding-bottom: 20px;
+  }
+
+  /* Fix overflowing checkboxes/sliders in filter toolbar */
+  .filter-controls {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+}

@@ -20,25 +20,7 @@ export function toRegularArray(arr) {
 }
 
 export function formatMicroseconds(v) {
-    const us = Number(v);
-    if (!Number.isFinite(us)) return '';
-
-    if (!isReplayFixedTime && (bootTimeOffsetMs === null || (lastUs !== -1 && us < lastUs - 5000000))) {
-        bootTimeOffsetMs = Date.now() - (us / 1000);
-        localTimezoneOffsetMs = new Date().getTimezoneOffset() * 60000;
-    }
-    lastUs = us;
-
-    const localTimeMs = (us / 1000) + bootTimeOffsetMs;
-    let timeOfDayMs = (localTimeMs - localTimezoneOffsetMs) % 86400000;
-    if (timeOfDayMs < 0) timeOfDayMs += 86400000;
-
-    const totalSeconds = timeOfDayMs / 1000;
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toFixed(3).padStart(6, '0')}`;
+    return formatMicrosecondsToHMS(Number(v), 3);
 }
 
 export function formatMicrosecondsToHMS(us, decimalPlaces = 0) {
@@ -46,11 +28,17 @@ export function formatMicrosecondsToHMS(us, decimalPlaces = 0) {
         return '';
     }
 
-    if (!isReplayFixedTime && (bootTimeOffsetMs === null || (lastUs !== -1 && us < lastUs - 5000000))) {
-        bootTimeOffsetMs = Date.now() - (us / 1000);
-        localTimezoneOffsetMs = new Date().getTimezoneOffset() * 60000;
+    if (!isReplayFixedTime) {
+        // Detect ESP32 reboot: time jumped backwards by at least 5s AND is close to 0 (less than 60 seconds).
+        if (bootTimeOffsetMs === null || (lastUs !== -1 && us < lastUs - 5000000 && us < 60000000)) {
+            bootTimeOffsetMs = Date.now() - (us / 1000);
+            localTimezoneOffsetMs = new Date().getTimezoneOffset() * 60000;
+            lastUs = us;
+        } else if (us > lastUs) {
+            // Only update lastUs if time progresses forward (ignores tooltip hover on old chart data)
+            lastUs = us;
+        }
     }
-    lastUs = us;
 
     const localTimeMs = (us / 1000) + bootTimeOffsetMs;
     // subtract timezoneOffsetMs to get local time relative to midnight

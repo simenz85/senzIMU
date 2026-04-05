@@ -5294,6 +5294,8 @@ function initRMSChart() {
         height: Math.max(250, rmsSize.height || 500),
         scales: {
             x: {
+                time: false,
+                auto: false,
                 values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
             },
             y: { auto: true, range: (s, min, max) => [0, Math.max(250, (max == null ? 250 : max * 1.1))] }
@@ -5533,6 +5535,8 @@ function initGyroRMSChart() {
         height: Math.max(250, rmsSize.height || 500),
         scales: {
             x: {
+                time: false,
+                auto: false,
                 values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
             },
             y: { auto: true, range: (s, min, max) => [0, Math.max(1.0, (max == null ? 1 : max * 1.1))] }
@@ -7518,10 +7522,14 @@ function panSharedXAxis(deltaPx, axisPxLength, sourceChart = chart) {
     const sc = getSharedXScale(sourceChart);
     if (!sc) return;
     const range = sc.max - sc.min;
-    const deltaUs = -(deltaPx / axisPxLength) * range;
+    let deltaUs = -(deltaPx / axisPxLength) * range;
 
-    liveChartPanOffset += deltaUs;
-    if (liveChartPanOffset > 0) liveChartPanOffset = 0;
+    let targetOffset = liveChartPanOffset + deltaUs;
+    if (targetOffset > 0) {
+        deltaUs -= targetOffset;
+        targetOffset = 0;
+    }
+    liveChartPanOffset = targetOffset;
     panOffset = liveChartPanOffset;
 
     setSharedXScale(sc.min + deltaUs, sc.max + deltaUs, { preserveY: true, syncUi: false });
@@ -7676,13 +7684,13 @@ function syncRmsTimeRangeUi(rangeUs, isGyro) {
     if (rangeSecs < 1) rangeSecs = 1;
 
     if (isGyro) {
-        gyroRmsDisplayDurationSeconds = rangeSecs;
+        gyroDisplayDurationSecondsRMS = rangeSecs;
         const timeSlider = document.getElementById("gyroRmsTimeSlider");
         const timeValue = document.getElementById("gyroRmsTimeValue");
         if (timeSlider) timeSlider.value = Math.min(300, Math.round(rangeSecs));
         if (timeValue) timeValue.textContent = Math.round(rangeSecs);
     } else {
-        rmsDisplayDurationSeconds = rangeSecs;
+        displayDurationSecondsRMS = rangeSecs;
         const timeSlider = document.getElementById("rmsTimeSlider");
         const timeValue = document.getElementById("rmsTimeValue");
         if (timeSlider) timeSlider.value = Math.min(300, Math.round(rangeSecs));
@@ -7737,12 +7745,14 @@ function bindRmsXAxisOverlay(overlayId, targetChart, isGyro) {
         if (axisPxLength === 0) return;
         const sc = targetChart.scales.x;
         const range = sc.max - sc.min;
-        const deltaUs = -(deltaX / axisPxLength) * range;
+        let deltaUs = -(deltaX / axisPxLength) * range;
 
-        let offset = getOffset();
-        offset += deltaUs;
-        if (offset > 0) offset = 0;
-        setOffset(offset);
+        let targetOffset = getOffset() + deltaUs;
+        if (targetOffset > 0) {
+            deltaUs -= targetOffset;
+            targetOffset = 0;
+        }
+        setOffset(targetOffset);
 
         targetChart.setScale("x", { min: sc.min + deltaUs, max: sc.max + deltaUs });
     });
@@ -7783,7 +7793,7 @@ window.addEventListener("liveDataUpdate", (e) => {
 window.addEventListener("rmsDataUpdate", (e) => {
     const latest2 = e.detail.latestTimestamp;
     const currentVisibleRange = rmsPlot.scales.x.max - rmsPlot.scales.x.min;
-    const desiredVisibleRange = rmsDisplayDurationSeconds * 1000000;
+    const desiredVisibleRange = displayDurationSecondsRMS * 1000000;
     const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
         ? currentVisibleRange
         : desiredVisibleRange;
@@ -7803,7 +7813,7 @@ window.addEventListener("gyroRmsDataUpdate", (e) => {
     const latest2 = e.detail.latestTimestamp;
     if (!gyroRmsPlot) return;
     const currentVisibleRange = gyroRmsPlot.scales.x.max - gyroRmsPlot.scales.x.min;
-    const desiredVisibleRange = gyroRmsDisplayDurationSeconds * 1000000;
+    const desiredVisibleRange = gyroDisplayDurationSecondsRMS * 1000000;
     const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
         ? currentVisibleRange
         : desiredVisibleRange;

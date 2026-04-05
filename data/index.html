@@ -63,26 +63,23 @@
     .boot-progress {
       position: relative;
       overflow: hidden;
-      height: 8px;
-      margin-top: 18px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.08);
+      height: 48px;
+      margin-top: 4px;
     }
 
-    .boot-progress::after {
-      content: "";
+    .sine-wrapper {
       position: absolute;
-      inset: 0;
-      width: 42%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, #ffd600 0%, #ff9d00 100%);
-      box-shadow: 0 0 18px rgba(255, 214, 0, 0.35);
-      animation: boot-progress-slide 1.15s ease-in-out infinite;
+      top: 0;
+      left: 0;
+      width: 960px;
+      height: 48px;
+      animation: sine-progress-slide 0.35s linear infinite;
+      filter: drop-shadow(0 0 6px rgba(255, 214, 0, 0.5));
     }
 
-    @keyframes boot-progress-slide {
-      0% { transform: translateX(-120%); }
-      100% { transform: translateX(320%); }
+    @keyframes sine-progress-slide {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-80px); }
     }
 
     #telemetryPanel {
@@ -312,9 +309,7 @@
       });
     }());
   </script>
-  <!--link rel="stylesheet" href="all.min.css"> -->>
-  <link rel="stylesheet" href="uPlot.min.css">
-  <link rel="stylesheet" href="stylesheet.css">
+  <!--link rel="stylesheet" href="all.min.css"> -->
   <script defer src="uPlot.iife.min.js"></script>
   <script defer src="fft.min.js"></script>
   <script defer src="ui/waterfall.js"></script>
@@ -330,6 +325,21 @@
 
   <!--<script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>-->
 
+  <style>
+    /* Inline Mobile CSS to guarantee cache bypassing */
+    @media (max-width:900px) {
+        .main { margin-left: 0 !important; padding-bottom: 80px !important; }
+        .sidebar { top: auto !important; bottom: 0 !important; left: 0 !important; width: 100vw !important; height: 65px !important; display: flex !important; flex-direction: row !important; box-shadow: 0 -2px 10px rgba(0,0,0,0.5) !important; background: #232a36 !important; z-index: 1000 !important; }
+        .sidebar-toggle, #sidebarToggleWrapper { display: none !important; }
+        .sidebar-content { display: grid !important; grid-auto-flow: column !important; grid-auto-columns: 28vw !important; width: 100vw !important; height: 100% !important; padding: 0 !important; margin: 0 !important; overflow-x: auto !important; overflow-y: hidden !important; scroll-snap-type: x mandatory !important; -webkit-overflow-scrolling: touch !important; }
+        .sidebar-item { display: flex !important; flex-direction: column !important; justify-content: center !important; align-items: center !important; width: 100% !important; height: 100% !important; padding: 0 !important; margin: 0 !important; border: none !important; border-right: 1px solid rgba(255,255,255,0.05) !important; scroll-snap-align: start !important; }
+        .sidebar-action-button { display: flex !important; flex-direction: column !important; justify-content: center !important; align-items: center !important; height: 100% !important; width: 100% !important; padding: 0 !important; margin: 0 !important; background: transparent !important; }
+        .sidebar-item-bottom { border: none !important; border-right: 1px solid rgba(255,255,255,0.05) !important; width: 100% !important; margin: 0 !important; padding: 0 !important; scroll-snap-align: start !important; }
+        .sidebar-icon { display: flex !important; align-items: center !important; justify-content: center !important; width: 40px !important; height: 40px !important; margin: 0 auto !important; }
+        .sidebar-icon img, .sidebar-icon svg { display: block !important; width: 28px !important; height: 28px !important; margin: 0 !important; }
+        .sidebar-label { display: none !important; }
+    }
+  </style>
 </head>
 
 <body>
@@ -338,7 +348,22 @@
     <div class="boot-card">
       <p class="boot-title">senzIMU</p>
       <p id="bootOverlayStatus" class="boot-status">Lade Dashboard-Dateien...</p>
-      <div class="boot-progress"></div>
+      <div class="boot-progress">
+        <div class="sine-wrapper">
+          <svg width="960" height="48" viewBox="0 0 960 48">
+            <defs>
+              <linearGradient id="sineGradient" x1="0" y1="0" x2="80" y2="0" gradientUnits="userSpaceOnUse" spreadMethod="repeat">
+                <stop offset="0%" stop-color="#ffd600" />
+                <stop offset="25%" stop-color="#ff9d00" />
+                <stop offset="50%" stop-color="#ffd600" />
+                <stop offset="75%" stop-color="#ff9d00" />
+                <stop offset="100%" stop-color="#ffd600" />
+              </linearGradient>
+            </defs>
+            <path d="M 0 24 Q 20 -8 40 24 T 80 24 T 120 24 T 160 24 T 200 24 T 240 24 T 280 24 T 320 24 T 360 24 T 400 24 T 440 24 T 480 24 T 520 24 T 560 24 T 600 24 T 640 24 T 680 24 T 720 24 T 760 24 T 800 24 T 840 24 T 880 24 T 920 24 T 960 24" fill="none" stroke="url(#sineGradient)" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </div>
       <div id="bootOverlayHint" class="boot-hint">Der ESP bereitet Weboberfläche und Sensorverbindung vor.</div>
       <button id="btnStartOfflineReplay" onclick="if(window.initOfflineReplay) window.initOfflineReplay()" style="margin-top: 24px; padding: 10px 20px; background: rgba(255, 214, 0, 0.15); border: 1px solid #FFD600; color: #FFD600; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;">
         Offline Replay (CSV)
@@ -564,13 +589,14 @@
         </button>
       </li>
 
-
       <!-- Weitere Einträge -->
+      <div id="hiddenOtaTrigger" style="margin-top: 16px; margin-bottom: 24px; text-align: center; cursor: pointer;">
+        <span style="font-size: 12px; color: rgba(255,255,255,0.3); user-select: none; padding: 4px 8px; border-radius: 4px;" title="Doppelklick für System-Update">v1.0.0</span>
+      </div>
     </ul>
   </div>
 
   <div class="main">
-
 
     <!-- Zahnrad öffnen Button -->
     <button id="rightSettingsBtn" class="right-settings-btn" title="SENSOR">
@@ -676,8 +702,6 @@
             <!-- Optionen werden dynamisch eingefügt -->
           </div>
         </div>
-
-
 
       </div>
 
@@ -1955,6 +1979,124 @@
     </select>
   </div>
   <!-- ====== REPLAY UI END ====== -->
+  <input type="file" id="otaFileInput" accept=".bin" style="position: absolute; width: 1px; height: 1px; opacity: 0; z-index: -1;" tabindex="-1" />
+  <!-- ====== OTA UPDATE UI START ====== -->
+  <div id="otaProgressOverlay" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,0.8);backdrop-filter:blur(10px);color:#f1f4f8;font-family:'Segoe UI',Roboto,Arial,sans-serif;opacity:0;visibility:hidden;transition:opacity 200ms ease,visibility 200ms ease;">
+    <div class="shutdown-card" style="border-color: rgba(255, 214, 0, 0.3);">
+      <div class="shutdown-title" style="color: #ffd600;">Firmware Update</div>
+      <p id="otaStatusText">Warte auf Datei...</p>
+      <div style="width:100%; height:12px; background:#333; border-radius:6px; overflow:hidden; margin-top:24px;">
+         <div id="otaProgressBar" style="width:0%; height:100%; background:linear-gradient(90deg, #ffd600 0%, #ff9d00 100%); transition:width 0.2s ease;"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const fileInput = document.getElementById('otaFileInput');
+      const hiddenOtaBtn = document.getElementById('hiddenOtaTrigger');
+      if (!fileInput) return;
+      
+      if (hiddenOtaBtn) {
+        hiddenOtaBtn.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          if(confirm("WARNUNG: Ein inkorrektes System-Update kann das Gerät unbrauchbar machen.\n\nBist du dir sicher, dass du flashen möchtest?")) {
+            fileInput.value = '';
+            fileInput.click();
+          }
+        });
+      }
+      
+      // Cleanup focus after dialog close
+      window.addEventListener('focus', () => {
+        if(document.activeElement === fileInput) {
+          fileInput.blur();
+        }
+      });
+      
+      let currentUploadType = '';
+      
+      fileInput.addEventListener('change', function() {
+        if (this.files.length === 0) return;
+        
+        const file = this.files[0];
+        
+        if (file.name.includes("littlefs")) {
+          currentUploadType = 'filesystem';
+        } else if (file.name.includes("firmware") || file.name.endsWith(".bin")) {
+          currentUploadType = 'firmware';
+        } else {
+          alert("Unbekannte Datei. Bitte 'firmware.bin' oder 'littlefs.bin' auswählen.");
+          return;
+        }
+
+        const previewHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
+        const hasExplicitDevPort = window.location.port !== '' && !['80', '443'].includes(window.location.port);
+        const defaultEspHost = '192.168.4.1';
+        const isLocalPreview = window.location.protocol === 'file:' || previewHosts.has(window.location.hostname) || (hasExplicitDevPort && window.location.hostname !== defaultEspHost);
+
+        if (isLocalPreview) {
+          alert("Fehler: Updates können nicht aus dem lokalen Entwickler-Modus (Live-Server / Dateisystem) gesendet werden. Das blockiert der lokale Server mit 'Method Not Allowed'.\n\nBitte öffne das Netzwerkkabel-Gerät direkt über http://" + defaultEspHost + " um ein Update durchzuführen.");
+          this.value = '';
+          return;
+        }
+
+        const overlay = document.getElementById('otaProgressOverlay');
+        const progressBar = document.getElementById('otaProgressBar');
+        const statusText = document.getElementById('otaStatusText');
+        const titleText = document.querySelector('#otaProgressOverlay .shutdown-title');
+        
+        titleText.textContent = currentUploadType === 'firmware' ? 'Firmware Update' : 'Filesystem Update';
+        
+        overlay.style.opacity = '1';
+        overlay.style.visibility = 'visible';
+        statusText.textContent = `Übertrage... 0%`;
+        statusText.style.color = '#f1f4f8';
+        progressBar.style.width = '0%';
+        
+        const uploadUrl = currentUploadType === 'firmware' ? '/update' : '/update_fs';
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', uploadUrl, true);
+        
+        xhr.upload.addEventListener('progress', function(event) {
+          if (event.lengthComputable) {
+            const percent = (event.loaded / event.total) * 100;
+            progressBar.style.width = percent + '%';
+            statusText.textContent = `Übertrage... ${Math.round(percent)}%`;
+          }
+        });
+        
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            statusText.textContent = "Update erfolgreich! Reboot...";
+            progressBar.style.width = "100%";
+            setTimeout(() => location.reload(), 3000);
+          } else {
+            statusText.textContent = "Fehler: " + xhr.statusText;
+            statusText.style.color = "#ff6b6b";
+            setTimeout(() => {
+              overlay.style.opacity = '0';
+              overlay.style.visibility = 'hidden';
+            }, 4000);
+          }
+        };
+        
+        xhr.onerror = function() {
+          statusText.textContent = "Netzwerkfehler während Update!";
+          statusText.style.color = "#ff6b6b";
+          setTimeout(() => {
+              overlay.style.opacity = '0';
+              overlay.style.visibility = 'hidden';
+          }, 4000);
+        };
+        
+        xhr.send(file);
+        this.value = ''; // reset file input
+      });
+    });
+  </script>
+  <!-- ====== OTA UPDATE UI END ====== -->
+  <link rel="stylesheet" href="uPlot.min.css">
+  <link rel="stylesheet" href="stylesheet.css">
 </body>
 
 </html>

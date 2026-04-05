@@ -329,7 +329,9 @@ export class AccVectorViewport {
         this.camera.position.set(4.8, -3.2, 5.2);
 
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
+        const isMobile = (typeof window !== 'undefined' && typeof window.matchMedia === 'function') ? window.matchMedia("(max-width: 768px)").matches : false;
+        const maxRatio = isMobile ? 1.25 : 2;
+        this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, maxRatio));
         this.renderer.setClearAlpha(0);
 
         if ('outputColorSpace' in this.renderer && THREE.SRGBColorSpace) {

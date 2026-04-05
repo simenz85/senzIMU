@@ -41,6 +41,7 @@ class LiveChart {
         this.#initYAxisOverlay();
         this.#initXAxisOverlay();
         this.#initZoomBox();
+        this.#initTouchGestures();
     }
 
     /**
@@ -95,7 +96,8 @@ class LiveChart {
     }
 
     #initYAxisOverlay() {
-        const yOverlay = this.container.querySelector("#y-axis-overlay");
+        const yOverlay = this.container.querySelector("#y-axis-overlay") || this.container.querySelector("[id$='y-axis-overlay']");
+        if (!yOverlay) return;
         let isPanning = false;
         let lastY = 0;
 
@@ -132,10 +134,55 @@ class LiveChart {
 
         yOverlay.addEventListener("mouseenter", () => !isPanning && this.#updateCursor(yOverlay, false, true));
         yOverlay.addEventListener("mouseleave", () => !isPanning && this.#updateCursor(yOverlay, false, false));
+
+        // Touch-Unterstützung für Mobilgeräte (nur Y-Achse)
+        let yTouchIsPanning = false;
+        let yTouchLastPinchDist = 0;
+        let yTouchLastY = 0;
+
+        yOverlay.addEventListener("touchstart", e => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                yTouchIsPanning = true;
+                yTouchLastY = e.touches[0].clientY;
+            } else if (e.touches.length === 2) {
+                yTouchIsPanning = false;
+                yTouchLastPinchDist = Math.abs(e.touches[0].clientY - e.touches[1].clientY);
+            }
+        }, { passive: false });
+
+        yOverlay.addEventListener("touchmove", e => {
+            e.preventDefault();
+            if (yTouchIsPanning && e.touches.length === 1) {
+                const deltaY = yTouchLastY - e.touches[0].clientY;
+                yTouchLastY = e.touches[0].clientY;
+                this.#panAxis("y", deltaY, yOverlay.getBoundingClientRect().height);
+            } else if (e.touches.length === 2) {
+                const currentDist = Math.abs(e.touches[0].clientY - e.touches[1].clientY);
+                if (yTouchLastPinchDist > 0 && currentDist > 0) {
+                    const factor = yTouchLastPinchDist / currentDist;
+                    const center = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                    const rect = yOverlay.getBoundingClientRect();
+                    const pointerPos = (center - rect.top) / rect.height;
+                    this.#zoomAxis("y", factor, pointerPos);
+                }
+                yTouchLastPinchDist = currentDist;
+            }
+        }, { passive: false });
+
+        yOverlay.addEventListener("touchend", e => {
+            if (e.touches.length === 1) {
+                yTouchIsPanning = true;
+                yTouchLastY = e.touches[0].clientY;
+            } else if (e.touches.length === 0) {
+                yTouchIsPanning = false;
+            }
+        });
     }
 
     #initXAxisOverlay() {
-        const xOverlay = this.container.querySelector("#x-axis-overlay");
+        const xOverlay = this.container.querySelector("#x-axis-overlay") || this.container.querySelector("[id$='x-axis-overlay']");
+        if (!xOverlay) return;
         let isPanning = false;
         let lastX = 0;
 
@@ -198,6 +245,56 @@ class LiveChart {
                 });
             }
         });
+
+        // Touch-Unterstützung für Mobilgeräte (nur X-Achse)
+        let xTouchIsPanning = false;
+        let xTouchLastPinchDist = 0;
+        let xTouchLastX = 0;
+
+        xOverlay.addEventListener("touchstart", e => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                xTouchIsPanning = true;
+                xTouchLastX = e.touches[0].clientX;
+            } else if (e.touches.length === 2) {
+                xTouchIsPanning = false;
+                xTouchLastPinchDist = Math.abs(e.touches[0].clientX - e.touches[1].clientX);
+            }
+        }, { passive: false });
+
+        xOverlay.addEventListener("touchmove", e => {
+            e.preventDefault();
+            if (xTouchIsPanning && e.touches.length === 1) {
+                const deltaX = e.touches[0].clientX - xTouchLastX;
+                xTouchLastX = e.touches[0].clientX;
+                const scX = this.chart.scales.x;
+                const range = scX.max - scX.min;
+                const widthPx = xOverlay.getBoundingClientRect().width;
+                const deltaSec = -(deltaX / widthPx) * range;
+                this.panOffset += deltaSec;
+                if (this.panOffset > 0) this.panOffset = 0;
+                this.chart.setScale("x", { min: scX.min + deltaSec, max: scX.max + deltaSec });
+            } else if (e.touches.length === 2) {
+                const currentDist = Math.abs(e.touches[0].clientX - e.touches[1].clientX);
+                if (xTouchLastPinchDist > 0 && currentDist > 0) {
+                    const factor = xTouchLastPinchDist / currentDist;
+                    const center = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                    const rect = xOverlay.getBoundingClientRect();
+                    const pointerPos = (center - rect.left) / rect.width;
+                    this.#zoomAxis("x", factor, pointerPos);
+                }
+                xTouchLastPinchDist = currentDist;
+            }
+        }, { passive: false });
+
+        xOverlay.addEventListener("touchend", e => {
+            if (e.touches.length === 1) {
+                xTouchIsPanning = true;
+                xTouchLastX = e.touches[0].clientX;
+            } else if (e.touches.length === 0) {
+                xTouchIsPanning = false;
+            }
+        });
     }
 
     #initZoomBox() {
@@ -231,6 +328,131 @@ class LiveChart {
             this.chart.setScale("x", { auto: true });
             this.chart.setScale("y", { auto: true });
         });
+    }
+
+    #initTouchGestures() {
+        // Touch events für das gesamte Chart-Overlay (freie 2D Translation & Skalierung)
+        const plotEl = this.chart.over;
+        if (!plotEl) return;
+        plotEl.style.touchAction = "none";
+
+        let isPinching = false;
+        let isPanning = false;
+
+        let initialDistance = 0;
+        let lastMidX = 0;
+        let lastMidY = 0;
+        
+        let lastPanX = 0;
+        let lastPanY = 0;
+
+        const handleTouchStart = (e) => {
+            if (e.touches.length === 2) {
+                e.preventDefault(); 
+                isPinching = true;
+                isPanning = false;
+                
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                initialDistance = Math.hypot(dx, dy);
+                lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            } else if (e.touches.length === 1) {
+                e.preventDefault(); // Verhindert normales Browser-Scrollen und uPlot Default Selection
+                isPinching = false;
+                isPanning = true;
+                lastPanX = e.touches[0].clientX;
+                lastPanY = e.touches[0].clientY;
+            }
+        };
+
+        const handleTouchMove = (e) => {
+            if (isPinching && e.touches.length === 2) {
+                e.preventDefault();
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const currentDistance = Math.hypot(dx, dy);
+                
+                const currentMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const currentMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+
+                if (initialDistance > 0 && currentDistance > 0) {
+                    const factor = initialDistance / currentDistance;
+                    const rect = plotEl.getBoundingClientRect();
+                    const pointerPosX = (currentMidX - rect.left) / rect.width;
+                    const pointerPosY = (currentMidY - rect.top) / rect.height;
+
+                    this.chart.batch(() => {
+                        this.#zoomAxis("x", factor, pointerPosX);
+                        this.#zoomAxis("y", factor, pointerPosY);
+                        
+                        // Pan while pinch
+                        const deltaX = currentMidX - lastMidX;
+                        const deltaY = lastMidY - currentMidY; 
+                        
+                        // X Pan
+                        const scX = this.chart.scales.x;
+                        const rangeX = scX.max - scX.min;
+                        const deltaSecX = -(deltaX / rect.width) * rangeX;
+                        this.panOffset += deltaSecX;
+                        if (this.panOffset > 0) this.panOffset = 0;
+                        this.chart.setScale("x", { min: scX.min + deltaSecX, max: scX.max + deltaSecX });
+
+                        // Y Pan
+                        this.#panAxis("y", deltaY, rect.height);
+                    });
+                }
+                
+                initialDistance = currentDistance;
+                lastMidX = currentMidX;
+                lastMidY = currentMidY;
+                
+            } else if (isPanning && e.touches.length === 1) {
+                e.preventDefault();
+                const currentX = e.touches[0].clientX;
+                const currentY = e.touches[0].clientY;
+                
+                const deltaX = currentX - lastPanX;
+                const deltaY = lastPanY - currentY;
+                
+                const rect = plotEl.getBoundingClientRect();
+                
+                this.chart.batch(() => {
+                    // X Pan
+                    const scX = this.chart.scales.x;
+                    const rangeX = scX.max - scX.min;
+                    const deltaSecX = -(deltaX / rect.width) * rangeX;
+                    this.panOffset += deltaSecX;
+                    if (this.panOffset > 0) this.panOffset = 0;
+                    this.chart.setScale("x", { min: scX.min + deltaSecX, max: scX.max + deltaSecX });
+
+                    // Y Pan
+                    this.#panAxis("y", deltaY, rect.height);
+                });
+                
+                lastPanX = currentX;
+                lastPanY = currentY;
+            }
+        };
+
+        const handleTouchEnd = (e) => {
+            if (e.touches.length < 2) {
+                isPinching = false;
+            }
+            if (e.touches.length === 0) {
+                isPanning = false;
+            } else if (e.touches.length === 1 && !isPanning) {
+                // Wenn von Pinch zu Pan gewechselt wird
+                isPanning = true;
+                lastPanX = e.touches[0].clientX;
+                lastPanY = e.touches[0].clientY;
+            }
+        };
+
+        plotEl.addEventListener("touchstart", handleTouchStart, { passive: false });
+        plotEl.addEventListener("touchmove", handleTouchMove, { passive: false });
+        plotEl.addEventListener("touchend", handleTouchEnd, { passive: false });
+        plotEl.addEventListener("touchcancel", handleTouchEnd, { passive: false });
     }
 }
 

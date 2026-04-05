@@ -168,42 +168,51 @@ export function setupButtons() {
 
   // Record Button
   let isRecording = false;
-  recordBtn.addEventListener("click", () => {
-    isRecording = !isRecording;
-    recordBtn.classList.toggle("active");
-    recordBtn.innerHTML = isRecording ? 'Stop' : 'Record';
-    if (!isRecording && recordedRows.length > 0) {
-      downloadBtn.style.display = "";
-    } else {
-      downloadBtn.style.display = "none";
-    }
-    // ... ggf. Start/Stop Recording Logik
-  });
+  if (recordBtn) {
+    recordBtn.addEventListener("click", () => {
+      isRecording = !isRecording;
+      recordBtn.classList.toggle("active");
+      recordBtn.innerHTML = isRecording ? 'Stop' : 'Record';
+      if (!isRecording && typeof recordedRows !== 'undefined' && recordedRows.length > 0) {
+        if (downloadBtn) downloadBtn.style.display = "";
+      } else {
+        if (downloadBtn) downloadBtn.style.display = "none";
+      }
+    });
+  }
 
   // Pause Button
   let paused = false;
-  pauseBtn.addEventListener("click", () => {
-    paused = !paused;
-    pauseBtn.classList.toggle("active");
-    pauseBtn.innerHTML = paused ? "Play" : "Pause";
-  });
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => {
+      paused = !paused;
+      pauseBtn.classList.toggle("active");
+      pauseBtn.innerHTML = paused ? "Play" : "Pause";
+    });
+  }
 
   // Download Button
-  downloadBtn.addEventListener("click", () => {
-    if (recordedRows.length === 0) return;
-    // CSV Datei Erzeugen und Download starten
-  });
+  if (downloadBtn) {
+    downloadBtn.addEventListener("click", () => {
+      if (typeof recordedRows !== 'undefined' && recordedRows.length === 0) return;
+      // CSV Datei Erzeugen und Download starten
+    });
+  }
 
   // Reset Zoom Button
-  resetZoomBtn.addEventListener("click", () => {
-    // Reset Zoom Logik
-  });
+  if (resetZoomBtn) {
+    resetZoomBtn.addEventListener("click", () => {
+      // Reset Zoom Logik
+    });
+  }
 
   // Sidebar Toggle
-  sidebarToggle.addEventListener("click", () => {
-    const sidebar = document.getElementById("sidebar");
-    sidebar.classList.toggle("expanded");
-  });
+  if (sidebarToggle) {
+    sidebarToggle.addEventListener("click", () => {
+      const sidebar = document.getElementById("sidebar");
+      if (sidebar) sidebar.classList.toggle("expanded");
+    });
+  }
 }
 
 export function setupSideSettingsDropdowns() {

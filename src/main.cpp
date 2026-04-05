@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <math.h>
@@ -40,6 +41,8 @@
 #include "esp_flash.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h" // Required for spi_flash_get_chip_size()
+#include "esp_ota_ops.h"
+#include "esp_flash_partitions.h"
 #include "esp_heap_caps.h"
 #include "esp_psram.h"
 #include "esp_log.h"
@@ -150,6 +153,22 @@ static void led_disconnect_blink_task(void *arg) {
 }
 
 static int count_active_ws_clients();
+
+static void wifi_watchdog_task(void *arg) {
+    while (1) {
+        wifi_mode_t mode;
+        if (esp_wifi_get_mode(&mode) == ESP_OK && mode != WIFI_MODE_NULL) {
+            if (count_active_ws_clients() > 0) {
+                set_rgb_state(LED_STATE_BLUE);
+            } else {
+                set_rgb_state(LED_STATE_GREEN);
+            }
+        } else {
+            set_rgb_state(LED_STATE_RED);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
 
 static volatile bool g_force_deep_sleep = false;
 
@@ -939,18 +958,11 @@ bool read_wifi_config(const char* filepath, my_wifi_config_t* config) {
 static void wifi_init_ap(const my_wifi_config_t *config) {
     esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
 
-    wifi_config_t wifi_config = {
-        .ap = {
-            .ssid = {0},
-            .password = {0},
-            .ssid_len = 0,
-            .channel = 1,
-            .authmode = WIFI_AUTH_OPEN,
-            .ssid_hidden = 0,
-            .max_connection = 4,
-            .beacon_interval = 50,
-        }
-    };
+    wifi_config_t wifi_config = {};
+    wifi_config.ap.channel = 1;
+    wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    wifi_config.ap.max_connection = 4;
+    wifi_config.ap.beacon_interval = 50;
 
     wifi_config.ap.max_connection = 4; // Auf 4 erhöhen (Maximum)
     esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G); // Nur 2.4GHz
@@ -1027,11 +1039,27 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
     char filepath[1024];
     const char* base_path = "/littlefs";
 
+    // URI ohne Query-Parameter extrahieren
+    char req_uri[512];
+    strncpy(req_uri, req->uri, sizeof(req_uri) - 1);
+    req_uri[sizeof(req_uri) - 1] = '\0';
+    char *query_ptr = strchr(req_uri, '?');
+    if (query_ptr) {
+        *query_ptr = '\0';
+    }
+
     // Pfad zusammensetzen
-    if (strcmp(req->uri, "/") == 0) {
+    if (strcmp(req_uri, "/") == 0) {
         snprintf(filepath, sizeof(filepath), "%s/index.html", base_path);
     } else {
-        snprintf(filepath, sizeof(filepath), "%s%s", base_path, req->uri);
+        snprintf(filepath, sizeof(filepath), "%s%s", base_path, req_uri);
+    }
+
+    struct stat file_stat;
+    if (stat(filepath, &file_stat) == -1) {
+        ESP_LOGE("HTTP", "File stat failed: %s", filepath);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
+        return ESP_FAIL;
     }
 
     FILE *f = fopen(filepath, "rb");
@@ -1071,12 +1099,11 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
     if (is_html) {
         httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
     } else if (is_static_asset) {
-        httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=300");
+        httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000"); // Lange Cachen erlauben!
     }
 
-    // Viele Browser laden zahlreiche Assets parallel. Fuer statische Antworten
-    // erzwingen wir Connection: close, damit HTTP-Sockets schnell wieder frei werden.
-    httpd_resp_set_hdr(req, "Connection", "close");
+    // ACHTUNG: 'Connection: close' absichtlich entfernt,
+    // damit der Browser Keep-Alive nutzt und superschnell parallel laedt!
 
     // Chunk-Puffer im PSRAM allokieren, wenn vorhanden
     char *chunk = (char *) heap_caps_malloc(FILE_CHUNK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -1093,10 +1120,9 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
 
     size_t read_bytes;
     while ((read_bytes = fread(chunk, 1, FILE_CHUNK_SIZE, f)) > 0) {
+        // httpd_resp_send_chunk fomatisiert die Daten zu HTTP-Chunks (dies ist fuer Keep-Alive auch bei beliebigen Groessen zulaessig!)
         if (httpd_resp_send_chunk(req, chunk, read_bytes) != ESP_OK) {
-            free(chunk);
-            fclose(f);
-            return ESP_FAIL;
+            break;
         }
     }
 
@@ -1110,6 +1136,122 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
 }
 
 
+////////////////////////////////////////////////////////////////////////////////
+// HTTP(S) OTA UPDATE HANDLER
+esp_err_t http_ota_update_handler(httpd_req_t *req) {
+    ESP_LOGI("OTA", "Starte OTA Update...");
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+    if (update_partition == NULL) {
+        ESP_LOGE("OTA", "Keine OTA Partition gefunden!");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+        return ESP_FAIL;
+    }
+
+    esp_ota_handle_t update_handle = 0;
+    esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("OTA", "esp_ota_begin fehlgeschlagen: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return err;
+    }
+
+    int remaining = req->content_len;
+    char buf[1024];
+
+    while (remaining > 0) {
+        int recv_len = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)));
+        if (recv_len <= 0) {
+            if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            ESP_LOGE("OTA", "Verbindungsabbruch während OTA");
+            esp_ota_abort(update_handle);
+            return ESP_FAIL;
+        }
+
+        err = esp_ota_write(update_handle, buf, recv_len);
+        if (err != ESP_OK) {
+            ESP_LOGE("OTA", "esp_ota_write fehlgeschlagen: %s", esp_err_to_name(err));
+            esp_ota_abort(update_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+            return err;
+        }
+
+        remaining -= recv_len;
+    }
+
+    err = esp_ota_end(update_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("OTA", "esp_ota_end fehlgeschlagen: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA end failed");
+        return err;
+    }
+
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE("OTA", "esp_ota_set_boot_partition fehlgeschlagen: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA boot set failed");
+        return err;
+    }
+
+    ESP_LOGI("OTA", "OTA Update erfolgreich. Reboot in 2s...");
+    httpd_resp_sendstr(req, "OK");
+
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
+    return ESP_OK;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// HTTP(S) FILESYSTEM UPDATE HANDLER
+esp_err_t http_fs_update_handler(httpd_req_t *req) {
+    ESP_LOGI("OTA", "Starte FS Update...");
+    const esp_partition_t *fs_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "littlefs");
+    if (fs_partition == NULL) {
+        ESP_LOGE("OTA", "Keine LittleFS Partition gefunden!");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No FS partition");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = esp_partition_erase_range(fs_partition, 0, fs_partition->size);
+    if (err != ESP_OK) {
+        ESP_LOGE("OTA", "FS erase fehlgeschlagen: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "FS erase failed");
+        return err;
+    }
+
+    int remaining = req->content_len;
+    char buf[1024];
+    uint32_t offset = 0;
+
+    while (remaining > 0) {
+        int recv_len = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)));
+        if (recv_len <= 0) {
+            if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            ESP_LOGE("OTA", "Verbindungsabbruch während FS OTA");
+            return ESP_FAIL;
+        }
+
+        err = esp_partition_write(fs_partition, offset, buf, recv_len);
+        if (err != ESP_OK) {
+            ESP_LOGE("OTA", "FS write fehlgeschlagen: %s", esp_err_to_name(err));
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "FS write failed");
+            return err;
+        }
+
+        offset += recv_len;
+        remaining -= recv_len;
+    }
+
+    ESP_LOGI("OTA", "FS Update erfolgreich. Reboot in 2s...");
+    httpd_resp_sendstr(req, "OK");
+
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
+    return ESP_OK;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // HTTP(S) SERVER START
@@ -1153,6 +1295,36 @@ void start_http_server() {
         esp_err_t root_err = httpd_register_uri_handler(server, &root);
         if (root_err != ESP_OK) {
             ESP_LOGE("HTTP", "Root-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(root_err));
+        }
+
+        // OTA Handler
+        httpd_uri_t ota_uri = {
+            .uri = "/update",
+            .method = HTTP_POST,
+            .handler = http_ota_update_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        esp_err_t ota_err = httpd_register_uri_handler(server, &ota_uri);
+        if (ota_err != ESP_OK) {
+            ESP_LOGE("HTTP", "OTA-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(ota_err));
+        }
+
+        // FS OTA Handler
+        httpd_uri_t fs_ota_uri = {
+            .uri = "/update_fs",
+            .method = HTTP_POST,
+            .handler = http_fs_update_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        esp_err_t fs_ota_err = httpd_register_uri_handler(server, &fs_ota_uri);
+        if (fs_ota_err != ESP_OK) {
+            ESP_LOGE("HTTP", "FS-OTA-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(fs_ota_err));
         }
 
         // WebSocket Handler
@@ -2006,8 +2178,7 @@ extern "C" void app_main() {
     initIMU();
 
     ESP_LOGI(TAG, "ALL LOADED - READY");
-    set_rgb_state(LED_STATE_GREEN);
-
+    // LED State wird nun vom wifi_watchdog_task kontinuierlich gesteuert!
 
     // FreeRTOS Timer Tick Rate Workaround: 
     // Löschen des Main-Task-Watchdogs VOR dem Erstellen der anderen Tasks, 
@@ -2017,6 +2188,7 @@ extern "C" void app_main() {
 
     xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 15, NULL, 1); // Sensorlast auf Core 1, damit WiFi/HTTP auf Core 0 Luft behalten
     xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 5, NULL, 0); // WS-Transport nahe am WiFi/HTTP-Stack auf Core 0
+    xTaskCreate(wifi_watchdog_task, "wifi_wd_task", 2048, NULL, 2, NULL);
                             
     return; // app_main Task sauber beenden
 }
