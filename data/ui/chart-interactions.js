@@ -615,13 +615,15 @@ export function createChartInteractionRuntime(config) {
             setSharedXScale(
                 latest - visibleRange + config.getLivePanOffset(),
                 latest + config.getLivePanOffset(),
-                { preserveY: true, syncUi: false },
+                { preserveY: true, syncUi: false }
             );
         });
 
         window.addEventListener('rmsDataUpdate', (event) => {
             const latest = event.detail.latestTimestamp;
             const rmsPlot = config.getRmsPlot();
+            if (!rmsPlot) return;
+
             const currentVisibleRange = rmsPlot.scales.x.max - rmsPlot.scales.x.min;
             const desiredVisibleRange = config.getRmsDurationSeconds() * 1000000;
             const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
@@ -644,6 +646,7 @@ export function createChartInteractionRuntime(config) {
             const latest = event.detail.latestTimestamp;
             const gyroRmsPlot = config.getGyroRmsPlot();
             if (!gyroRmsPlot) return;
+
             const currentVisibleRange = gyroRmsPlot.scales.x.max - gyroRmsPlot.scales.x.min;
             const desiredVisibleRange = config.getGyroRmsDurationSeconds() * 1000000;
             const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
