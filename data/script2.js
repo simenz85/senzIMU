@@ -1,8 +1,63 @@
-import { calibrateWithZPlusXYFixed, calibrateWithZPlusXYSuperSimple, simpleZCalibration, calibrateWithZPlusXYSimple, calibrateWithIdleDataOnly, calibrateWithZPlusXY, calibrateWithZPlusXY2, calibrateTwoAxesFlexible, applyCalibrationToAccel, calibrateWithZPlusXYStrict } from './imuCalibration.js';
-import { MultiRingBuffer2, UniDropdown } from './helperclasses.js';
-import { AccVectorViewport } from './ui/acc-vector-viewport.js';
-import { MotionViewport } from './ui/motion-viewport.js';
-import { formatMicrosecondsToHMS, toRegularArray } from './utils/format-utils.js';
+import { calibrateWithZPlusXYFixed, calibrateWithZPlusXYSuperSimple, simpleZCalibration, calibrateWithZPlusXYSimple, calibrateWithIdleDataOnly, calibrateWithZPlusXY, calibrateWithZPlusXY2, calibrateTwoAxesFlexible, applyCalibrationToAccel, calibrateWithZPlusXYStrict } from './imuCalibration.js?v=20';
+import { MultiRingBuffer2, UniDropdown } from './helperclasses.js?v=20';
+import { AccVectorViewport } from './ui/acc-vector-viewport.js?v=20';
+import {
+    createFftChartOptions,
+    createLegendMount,
+    createLiveChartOptions,
+    createRmsChartOptions,
+    installManualLegendToggle,
+    preserveScalesOnSeriesToggle,
+} from './ui/chart-factories.js?v=21';
+import { createChartInteractionRuntime } from './ui/chart-interactions.js?v=20';
+import { syncWaterfallRenderer, updateSharedFftPlot, updateSharedMultiFftData, updateSingleFftPlot } from './ui/fft-runtime.js?v=23';
+import { getFftChartSize, getGyroChartSize, getGyroFftChartSize, getGyroRmsChartSize, getRmsChartSize, getSize, getViewportMetrics, updateFftRmsPanelHeights, updateGyroFftRmsPanelHeights, updateLiveChartPanelHeights } from './ui/chart-layout.js?v=20';
+import { applyPlotDataWithLockedY, startMultiSensorRmsUpdatesRuntime, startGyroRmsUpdatesRuntime, alignPlotDataToSeriesCount, bindRmsControlsRuntime, createRmsWorkerRuntime } from './ui/rms-runtime.js?v=27';
+import { applyStaticReplayData as applyStaticReplayDataHelper, updateReplayDashboard as updateReplayDashboardHelper } from './ui/replay-sync.js?v=20';
+import { buildSettingsColumnForNode, setupButtons } from './ui/ui-setup.js?v=21';
+import { MotionViewport } from './ui/motion-viewport.js?v=21';
+import { initRelativeAnalysisUI, updateRelativeAnalysisNodeSelector, initRelativeDiffRmsChart, initRelativeTranslationChart, startRelativeDiffRmsRuntime, initRelativeKinematicViewport, initRelativeLissajousChart } from './ui/relative-analysis.js';
+import { createRecordingRow, downloadRecordedCsv as downloadRecordedCsvPure, formatMicrosecondsToHMS, formatRuntimeMicroseconds, toRegularArray } from './utils/format-utils.js';
+import {
+    buildCurrentAppSettingsState,
+    buildCurrentCalibrationCookieState,
+    clearLegacyAppSettingsStorage as clearLegacyAppSettingsStoragePure,
+    getLocalStorageValue,
+    persistAppSettingsCookie as persistAppSettingsCookiePure,
+    persistCalibrationCookieState,
+    readAppSettingsCookieState as readAppSettingsCookieStatePure,
+    readCalibrationCookieState as readCalibrationCookieStatePure,
+    restoreAppSettingsFromPersistence,
+    restoreCalibrationFromPersistence,
+    sanitizeCustomWsHost,
+} from './app/orientation/calibration-store.js';
+import {
+    applyAccelCalibrationScale as applyAccelCalibrationScalePure,
+    applyGravityCutToSample as applyGravityCutToSamplePure,
+    buildCalibrationStatsTableHtml as buildCalibrationStatsTableHtmlPure,
+    buildLiveAccelerationSample as buildLiveAccelerationSamplePure,
+    buildLiveGyroSample as buildLiveGyroSamplePure,
+    buildMotionAccelerationSample as buildMotionAccelerationSamplePure,
+    buildSingleSensorStatsTableHtml as buildSingleSensorStatsTableHtmlPure,
+    buildViewportAccelerationSamples as buildViewportAccelerationSamplesPure,
+    buildViewportBaseAccelerationSample as buildViewportBaseAccelerationSamplePure,
+    buildViewportGyroSamples as buildViewportGyroSamplesPure,
+    calculateStats as calculateStatsPure,
+    getBufferAxisStats as getBufferAxisStatsPure,
+    getViewportAdjustmentQuaternionXYZW as getViewportAdjustmentQuaternionXYZWPure,
+    getViewportBaseQuaternionXYZW as getViewportBaseQuaternionXYZWPure,
+    getViewportEffectiveQuaternionXYZW as getViewportEffectiveQuaternionXYZWPure,
+    getViewportGravityMagnitude as getViewportGravityMagnitudePure,
+    resolveGravityCutVectorSample,
+    resolveOrientationMode,
+    setOrientationCalibrationQuaternion as setOrientationCalibrationQuaternionPure,
+    syncMotionWorkerTransform as syncMotionWorkerTransformPure,
+    syncViewportBaseQuaternion as syncViewportBaseQuaternionPure,
+    syncViewportPostTransformQuaternion as syncViewportPostTransformQuaternionPure,
+    updateAccelCalibrationScale,
+    updateWorldSimpleGyroState,
+} from './app/orientation/orientation-runtime.js';
+import { getIdentityQuaternionXYZW } from './app/orientation/orientation-math.js';
 
 const FiliLib = globalThis.Fili;
 const liveIirCalculator = FiliLib ? new FiliLib.CalcCascades() : null;
@@ -20,13 +75,42 @@ const liveDesignMapMatchedZ = {
     tschebyscheff3: 'tschebyscheff3',
 };
 
-
 let tempgravity = 0;
 let quater = null;
 let calibrating1 = false;
 let calibrating2 = false;
 let calibrationMemory = [null, null];
 let calibrationFlow = 'worldSimple';
+let FFT_UPDATE_INTERVAL = 1000 / 20;
+let RMS_UPDATE_INTERVAL = 50;
+let FFT_WINDOW_SIZE = 2048;
+let fftUpdateTimerId = null;
+let rmsUpdateTimerId = null;
+const fftMaxBuffer = [];
+let N_AVG = 10;
+let avgFFTBuffer = [];
+let RMS_WINDOW_SIZE = 100;
+let GYRO_FFT_UPDATE_INTERVAL = 1000 / 20;
+let GYRO_FFT_WINDOW_SIZE = 2048;
+let gyroFftUpdateTimerId = null;
+let gyroRmsUpdateTimerId = null;
+const gyroFftMaxBuffer = [];
+let gyroN_AVG = 10;
+let gyroAvgFFTBuffer = [];
+const GYRO_FFT_RING_SIZE = 2 * 1000 / GYRO_FFT_UPDATE_INTERVAL;
+let GYRO_FFT_WINDOW_TYPE = 'RECTANGULAR';
+let GYRO_DC_CUTOFF = true;
+let GYRO_FFT_AXIS_MODE = 'COMBI';
+let gyroFftHighPass = 0;
+const FFT_RING_SIZE = 2 * 1000 / FFT_UPDATE_INTERVAL;
+let FFT_WINDOW_TYPE = 'RECTANGULAR';
+let DC_CUTOFF = true;
+let FFT_AXIS_MODE = 'COMBI';
+let fftHighPass = 0;
+let FFT_WINDOW_TIME_S = 2;
+let GYRO_FFT_WINDOW_TIME_S = 2;
+let fftWorkerBusy = false;
+let gyroFftWorkerBusy = false;
 const CALIBRATION_CAPTURE_STEP_MS = 30;
 const CALIBRATION_CAPTURE_STEPS = 100;
 const REFERENCE_CAPTURE_MIN_SAMPLES = 8;
@@ -52,9 +136,7 @@ let appSettingsBindingsInitialized = false;
 let chart = null;
 let gyroChart = null;
 
-let ausrichtung = [0,0,0,0];
-
-// RINGPUFFER INITIALISIEREN
+let ausrichtung = [0, 0, 0, 0];
 
 const ACC_BUFFER_SIZE = 300000;
 const GYRO_BUFFER_SIZE = 300000;
@@ -129,8 +211,6 @@ const tempBuffer = new MultiRingBuffer2(
     ['time', 'temperature']
 );
 
-
-
 let dark = true;
 let currentSampleRate = 0;
 
@@ -147,14 +227,28 @@ window.resetDashboardBuffers = function() {
     gyroBuffer.clear();
 
     if (window.chartData) {
-        for(let i=0; i<4; i++) {
+        for (let i = 0; i < 4; i++) {
             if (window.chartData[i]) window.chartData[i].length = 0;
-            if (window.gyroChartData && window.gyroChartData[i]) window.gyroChartData[i].length = 0;
+            if (window.gyroChartData && typeof window.gyroChartData[i] !== "undefined") window.gyroChartData[i].length = 0;
         }
     }
+    
+    if (window.multiChartData) window.multiChartData.forEach(arr => arr.length = 0);
+    if (window.multiGyroChartData) window.multiGyroChartData.forEach(arr => arr.length = 0);
+    if (window.multiFftData) window.multiFftData.forEach(arr => arr.length = 0);
+    if (window.multiGyroFftData) window.multiGyroFftData.forEach(arr => arr.length = 0);
 
     if (window.waterfallRenderer) window.waterfallRenderer.clear();
     if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.clear();
+    if (typeof window.syncMotionWorkerTransform === 'function') window.syncMotionWorkerTransform({ reset: true });
+    if (typeof window.resetRelativeAnalysisBuffers === 'function') window.resetRelativeAnalysisBuffers();
+
+    if (typeof chart !== 'undefined' && chart) {
+        chart.setScale("x", { auto: true });
+    }
+    if (typeof gyroChart !== 'undefined' && gyroChart) {
+        gyroChart.setScale("x", { auto: true });
+    }
 
     window.samplecount = 0;
 };
@@ -162,22 +256,21 @@ window.resetDashboardBuffers = function() {
 let initialisiert = false;
 let displayDurationSeconds = 5;
 
-
 let filePartIndex = 0;
 const MAX_RECORDED_ROWS = 500000;
 const ACC_CSV_HEADERS = [
-    "time_local_hms",
-    "timestamp_us",
-    "acc_x_mg",
-    "acc_y_mg",
-    "acc_z_mg",
+    'time_local_hms',
+    'timestamp_us',
+    'acc_x_mg',
+    'acc_y_mg',
+    'acc_z_mg',
 ];
 const GYRO_CSV_HEADERS = [
-    "time_local_hms",
-    "timestamp_us",
-    "gyro_x_m°/s",
-    "gyro_y_m°/s",
-    "gyro_z_m°/s",
+    'time_local_hms',
+    'timestamp_us',
+    'gyro_x_mdeg/s',
+    'gyro_y_mdeg/s',
+    'gyro_z_mdeg/s',
 ];
 
 let fftDBoutput = false;
@@ -210,7 +303,7 @@ const FILTER_ZERO_PHASE_PAD_MIN_SAMPLES = 96;
 const FILTER_ZERO_PHASE_PAD_MAX_SAMPLES = 1024;
 const lastAppliedFilterSettings = { acc: null, gyro: null };
 const ENABLE_MOTION_VIEW = true;
-const ENABLE_FUSION_PIPELINE = false;
+const ENABLE_FUSION_PIPELINE = true;
 
 function createNoopWorker() {
     return {
@@ -237,625 +330,44 @@ function createNoopMotionViewport() {
 const accVectorViewport = new AccVectorViewport();
 const motionViewport = ENABLE_MOTION_VIEW ? new MotionViewport() : createNoopMotionViewport();
 const motionWorker = ENABLE_MOTION_VIEW ? new Worker('motion-worker.js') : createNoopWorker();
-const motionModeMotionBtn = document.getElementById('motionModeMotionBtn');
-const motionModeVibrationBtn = document.getElementById('motionModeVibrationBtn');
-const motionResetBtn = document.getElementById('motionResetBtn');
-const motionTrailSecondsSlider = document.getElementById('motionTrailSeconds');
-const motionTrailSecondsInput = document.getElementById('motionTrailSecondsInput');
-const motionTrailSecondsValue = document.getElementById('motionTrailSecondsValue');
-const motionDisplayScaleSlider = document.getElementById('motionDisplayScale');
-const motionDisplayScaleInput = document.getElementById('motionDisplayScaleInput');
-const motionDisplayScaleValue = document.getElementById('motionDisplayScaleValue');
-const motionDeadbandSlider = document.getElementById('motionDeadband');
-const motionDeadbandInput = document.getElementById('motionDeadbandInput');
-const motionDeadbandValue = document.getElementById('motionDeadbandValue');
-const motionStationarySlider = document.getElementById('motionStationary');
-const motionStationaryInput = document.getElementById('motionStationaryInput');
-const motionStationaryValue = document.getElementById('motionStationaryValue');
-const motionVibrationLeakSlider = document.getElementById('motionVibrationLeak');
-const motionVibrationLeakInput = document.getElementById('motionVibrationLeakInput');
-const motionVibrationLeakValue = document.getElementById('motionVibrationLeakValue');
-const motionModeReadout = document.getElementById('motionModeReadout');
-const motionOrientationReadout = document.getElementById('motionOrientationReadout');
-const motionTrailCountReadout = document.getElementById('motionTrailCountReadout');
-const motionTrailWindowReadout = document.getElementById('motionTrailWindowReadout');
-const motionAccX = document.getElementById('motionAccX');
-const motionAccY = document.getElementById('motionAccY');
-const motionAccZ = document.getElementById('motionAccZ');
-const motionAccMagnitude = document.getElementById('motionAccMagnitude');
-const motionVelocityX = document.getElementById('motionVelocityX');
-const motionVelocityY = document.getElementById('motionVelocityY');
-const motionVelocityZ = document.getElementById('motionVelocityZ');
-const motionVelocityMagnitude = document.getElementById('motionVelocityMagnitude');
-const motionPositionX = document.getElementById('motionPositionX');
-const motionPositionY = document.getElementById('motionPositionY');
-const motionPositionZ = document.getElementById('motionPositionZ');
-const motionPositionMagnitude = document.getElementById('motionPositionMagnitude');
-const motionUiState = {
-    mode: 'vibration',
-    trailSeconds: 5,
-    displayScale: 3,
-    deadbandMg: 10,
-    stationaryAccelThresholdMs2: 0.12,
-    stationaryGyroThresholdMdps: 8000,
-    motionVelocityLeak: 0.99998,
-    vibrationVelocityLeak: 0.94,
-    vibrationPositionLeak: 0.985,
-    vibrationHighPassAlpha: 0.92,
-};
 
-function setMotionSliderState(slider, input, label, value, suffix = '') {
-    const normalized = Number(value);
-    if (slider) {
-        slider.value = String(normalized);
-    }
-    if (input) {
-        input.value = String(normalized);
-    }
-    if (label) {
-        label.textContent = `${normalized}${suffix}`;
-    }
-}
-
-function updateMotionControlLabels() {
-    setMotionSliderState(motionTrailSecondsSlider, motionTrailSecondsInput, motionTrailSecondsValue, motionUiState.trailSeconds, ' s');
-    setMotionSliderState(motionDisplayScaleSlider, motionDisplayScaleInput, motionDisplayScaleValue, motionUiState.displayScale, 'x');
-    setMotionSliderState(motionDeadbandSlider, motionDeadbandInput, motionDeadbandValue, motionUiState.deadbandMg, ' mg');
-
-    const stationaryBasisPoints = Math.round(motionUiState.stationaryAccelThresholdMs2 * 100);
-    if (motionStationarySlider) {
-        motionStationarySlider.value = String(stationaryBasisPoints);
-    }
-    if (motionStationaryInput) {
-        motionStationaryInput.value = String(stationaryBasisPoints);
-    }
-    if (motionStationaryValue) {
-        motionStationaryValue.textContent = motionUiState.stationaryAccelThresholdMs2.toFixed(2);
-    }
-
-    const leakPercent = Math.round(motionUiState.vibrationVelocityLeak * 100);
-    if (motionVibrationLeakSlider) {
-        motionVibrationLeakSlider.value = String(leakPercent);
-    }
-    if (motionVibrationLeakInput) {
-        motionVibrationLeakInput.value = String(leakPercent);
-    }
-    if (motionVibrationLeakValue) {
-        motionVibrationLeakValue.textContent = `${leakPercent}%`;
-    }
-
-    if (motionTrailWindowReadout) {
-        motionTrailWindowReadout.textContent = `${motionUiState.trailSeconds.toFixed(1)} s`;
-    }
-}
-
-function updateMotionModeButtons() {
-    motionModeMotionBtn?.classList.toggle('active', motionUiState.mode === 'motion');
-    motionModeVibrationBtn?.classList.toggle('active', motionUiState.mode === 'vibration');
-    if (motionModeReadout) {
-        motionModeReadout.textContent = motionUiState.mode === 'vibration' ? 'Vibration' : 'Bewegung';
-    }
-}
-
-function updateMotionReadouts(payload = {}) {
-    const acc = payload.linearAcc || {};
-    const velocity = payload.velocity || {};
-    const position = payload.position || {};
-    const accNorm = Math.hypot(Number(acc.x || 0), Number(acc.y || 0), Number(acc.z || 0));
-    const velocityNorm = Math.hypot(Number(velocity.x || 0), Number(velocity.y || 0), Number(velocity.z || 0));
-    const positionNorm = Math.hypot(Number(position.x || 0), Number(position.y || 0), Number(position.z || 0));
-    if (motionAccX) motionAccX.textContent = Number(acc.x || 0).toFixed(3);
-    if (motionAccY) motionAccY.textContent = Number(acc.y || 0).toFixed(3);
-    if (motionAccZ) motionAccZ.textContent = Number(acc.z || 0).toFixed(3);
-    if (motionAccMagnitude) motionAccMagnitude.textContent = accNorm.toFixed(3);
-    if (motionVelocityX) motionVelocityX.textContent = Number(velocity.x || 0).toFixed(3);
-    if (motionVelocityY) motionVelocityY.textContent = Number(velocity.y || 0).toFixed(3);
-    if (motionVelocityZ) motionVelocityZ.textContent = Number(velocity.z || 0).toFixed(3);
-    if (motionVelocityMagnitude) motionVelocityMagnitude.textContent = velocityNorm.toFixed(3);
-    if (motionPositionX) motionPositionX.textContent = Number(position.x || 0).toFixed(3);
-    if (motionPositionY) motionPositionY.textContent = Number(position.y || 0).toFixed(3);
-    if (motionPositionZ) motionPositionZ.textContent = Number(position.z || 0).toFixed(3);
-    if (motionPositionMagnitude) motionPositionMagnitude.textContent = positionNorm.toFixed(3);
-    if (motionOrientationReadout) motionOrientationReadout.textContent = payload.orientationActive ? 'aktiv' : 'inaktiv';
-    if (motionTrailCountReadout) {
-        const trailCount = Number.isFinite(Number(payload.trailCount))
-            ? Number(payload.trailCount)
-            : (Array.isArray(payload.trail) ? payload.trail.length : 0);
-        motionTrailCountReadout.textContent = String(trailCount);
-    }
-}
-
-function syncMotionWorkerConfig({ reset = false } = {}) {
-    motionWorker.postMessage({
-        type: 'config',
-        payload: {
-            ...motionUiState,
-            reset,
-        },
-    });
-    motionViewport.setDisplayScale(motionUiState.displayScale);
-    updateMotionControlLabels();
-    updateMotionModeButtons();
-}
-
-accVectorViewport.options.onDisplaySettingsChange = () => {
-    persistCalibrationCookie();
-};
-motionViewport.options.onDisplaySettingsChange = () => {
-    persistCalibrationCookie();
-};
-accVectorViewport.options.onQuaternionChange = (payload) => {
-    syncViewportPostTransformQuaternion({
-        persistState: true,
-        resetLiveBuffers: Boolean(payload?.commit),
-    });
-    syncMotionWorkerTransform({ reset: Boolean(payload?.commit) });
-};
-const alignLoadQuatBtn = document.getElementById('alignLoadQuatBtn');
-const alignApplyQuatBtn = document.getElementById('alignApplyQuatBtn');
-
-motionWorker.onmessage = (event) => {
-    if (event.data?.type !== 'state') {
-        return;
-    }
-
-    motionViewport.setState(event.data);
-    updateMotionReadouts(event.data);
-    motionViewport.setStatus(
-        event.data.orientationActive
-            ? (motionUiState.mode === 'vibration' ? 'Vibrationsspur aktiv' : 'Bewegungsspur aktiv')
-            : 'Orientation erforderlich für Weltintegration'
-    );
-};
-
-window.addEventListener('dashboardTabChanged', (event) => {
-    console.log('[ACC-3D] dashboardTabChanged', event.detail);
-    accVectorViewport.setVisible(event.detail?.sectionId === 'vectorAlignArea');
-    motionViewport.setVisible(event.detail?.sectionId === 'motionViewportArea');
-});
-
-console.log('[ACC-3D] initial visibility', {
-    vectorAlignAreaDisplay: document.getElementById('vectorAlignArea')?.style.display,
-    motionViewportAreaDisplay: document.getElementById('motionViewportArea')?.style.display,
-});
-accVectorViewport.setVisible(document.getElementById('vectorAlignArea')?.style.display !== 'none');
-motionViewport.setVisible(document.getElementById('motionViewportArea')?.style.display !== 'none');
-updateMotionControlLabels();
-updateMotionModeButtons();
-motionViewport.setDisplayScale(motionUiState.displayScale);
-
-motionModeMotionBtn?.addEventListener('click', () => {
-    motionUiState.mode = 'motion';
-    syncMotionWorkerConfig({ reset: true });
-});
-
-motionModeVibrationBtn?.addEventListener('click', () => {
-    motionUiState.mode = 'vibration';
-    syncMotionWorkerConfig({ reset: true });
-});
-
-motionResetBtn?.addEventListener('click', () => {
-    motionWorker.postMessage({ type: 'reset' });
-    motionViewport.setStatus('Spur zurückgesetzt');
-});
-
-const bindMotionNumericControl = (slider, input, onCommit) => {
-    slider?.addEventListener('input', () => onCommit(slider.value, false));
-    slider?.addEventListener('change', () => onCommit(slider.value, true));
-    input?.addEventListener('input', () => onCommit(input.value, false));
-    input?.addEventListener('change', () => onCommit(input.value, true));
-    input?.addEventListener('blur', () => onCommit(input.value, true));
-};
-
-bindMotionNumericControl(motionTrailSecondsSlider, motionTrailSecondsInput, (value, commit) => {
-    const nextValue = Math.max(1, Math.min(20, Math.round(Number(value) || motionUiState.trailSeconds)));
-    motionUiState.trailSeconds = nextValue;
-    updateMotionControlLabels();
-    if (commit) {
-        syncMotionWorkerConfig({ reset: false });
-    }
-});
-
-bindMotionNumericControl(motionDisplayScaleSlider, motionDisplayScaleInput, (value) => {
-    const nextValue = Math.max(1, Math.min(40, Math.round(Number(value) || motionUiState.displayScale)));
-    motionUiState.displayScale = nextValue;
-    updateMotionControlLabels();
-    motionViewport.setDisplayScale(nextValue);
-});
-
-bindMotionNumericControl(motionDeadbandSlider, motionDeadbandInput, (value, commit) => {
-    const nextValue = Math.max(0, Math.min(120, Math.round(Number(value) || motionUiState.deadbandMg)));
-    motionUiState.deadbandMg = nextValue;
-    updateMotionControlLabels();
-    if (commit) {
-        syncMotionWorkerConfig({ reset: true });
-    }
-});
-
-bindMotionNumericControl(motionStationarySlider, motionStationaryInput, (value, commit) => {
-    const nextValue = Math.max(5, Math.min(150, Math.round(Number(value) || 22)));
-    motionUiState.stationaryAccelThresholdMs2 = nextValue / 100;
-    updateMotionControlLabels();
-    if (commit) {
-        syncMotionWorkerConfig({ reset: false });
-    }
-});
-
-bindMotionNumericControl(motionVibrationLeakSlider, motionVibrationLeakInput, (value, commit) => {
-    const nextValue = Math.max(70, Math.min(99, Math.round(Number(value) || 94)));
-    motionUiState.vibrationVelocityLeak = nextValue / 100;
-    updateMotionControlLabels();
-    if (commit) {
-        syncMotionWorkerConfig({ reset: true });
-    }
-});
-
+window.globalMotionState = null;
 if (ENABLE_MOTION_VIEW) {
-    syncMotionWorkerConfig({ reset: true });
+    motionWorker.onmessage = (event) => {
+        if (event.data && event.data.type === 'state') {
+            window.globalMotionState = event.data;
+        }
+    };
 }
 
-// Regelmäßiges Update, Standard: 20 fps
-let FFT_UPDATE_INTERVAL = 1000 / 20;
-let RMS_UPDATE_INTERVAL = 50;
-let FFT_WINDOW_SIZE = 2048; // Größte Zweierpotenz, ggf. auch 2048
-let fftUpdateTimerId = null;
-let rmsUpdateTimerId = null;
-const fftMaxBuffer = [];
-
-// FFT AVERAGE PUFFER
-let N_AVG = 10;            // Anfangswert kann beliebig gewählt sein
-let avgFFTBuffer = [];
-let fftWorker = null;
-let rmsWorker = null;
-let RMS_WINDOW_SIZE = 100;
-
-let GYRO_FFT_UPDATE_INTERVAL = 1000 / 20;
-let GYRO_FFT_WINDOW_SIZE = 2048;
-let gyroFftUpdateTimerId = null;
-let gyroRmsUpdateTimerId = null;
-const gyroFftMaxBuffer = [];
-let gyroN_AVG = 10;
-let gyroAvgFFTBuffer = [];
-let gyroFftWorker = null;
-let gyroRmsWorker = null;
-const GYRO_FFT_RING_SIZE = 2 * 1000 / GYRO_FFT_UPDATE_INTERVAL;
-let GYRO_FFT_WINDOW_TYPE = "BLACKMAN";
-let GYRO_DC_CUTOFF = true;
-let GYRO_FFT_AXIS_MODE = "COMBI";
-let gyroFftHighPass = 0;
-let gyroDisplayDurationSecondsRMS = 20;
-let gyroRmsPaused = false;
-
-const FFT_RING_SIZE = 2 * 1000 / FFT_UPDATE_INTERVAL; // z.B. 50
-const dropdown1 = new UniDropdown(document.getElementById('dropdown1'), {
-    type: 'select',
-    label: 'Size',
-    items: [
-        { value: 256, label: 256 },
-        { value: 512, label: 512 },
-        { value: 1024, label: 1024 },
-        { value: 2048, label: 2048 },
-        { value: 4096, label: 4096 }
-    ],
-    defaultValue: FFT_WINDOW_SIZE,
-    onChange: (value, label) => {
-        FFT_WINDOW_SIZE = value;
-        console.log('Ausgewählt:', value, label);
-    }
-});
-dropdown1.button.title = "Wähle die Fenstergröße für FFT";
-
-const dropdown2 = new UniDropdown(document.getElementById('dropdown2'), {
-    type: 'select',
-    label: 'Rate',
-    items: [
-        { value: 1000 / 60, label: "60 fps" },
-        { value: 1000 / 30, label: "30 fps" },
-        { value: 1000 / 20, label: "20 fps" },
-        { value: 1000 / 10, label: "10fps" },
-        { value: 1000 / 5, label: "5 fps" },
-        { value: 1000 / 1, label: "1 fps" }
-    ],
-    defaultValue: FFT_UPDATE_INTERVAL,
-    onChange: (value, label) => {
-        FFT_UPDATE_INTERVAL = value;
-        // Starte das Update mit dem neuen Intervall neu
-        startFFTUpdates();
-
-        console.log('Ausgewählt:', value, label);
-    }
-});
-dropdown2.button.title = "Wähle die Samplerate für FFT";
-
-const dropdown3 = new UniDropdown(document.getElementById('dropdown3'), {
-    type: 'select',
-    label: 'Avg',
-    items: [
-        { value: 5, label: "5" },
-        { value: 10, label: "10" },
-        { value: 15, label: "15" },
-        { value: 20, label: "20" },
-        { value: 25, label: "25" },
-        { value: 50, label: "50" },
-        { value: 100, label: "100" },
-        { value: 150, label: "150" },
-        { value: 300, label: "300" }
-    ],
-    defaultValue: N_AVG,
-    onChange: (value, label) => {
-        N_AVG = value;
-        setAverageCount(value);
-        // Starte das Update mit dem neuen Intervall neu
-        //startFFTUpdates();
-
-        console.log('Ausgewählt:', value, label);
-    }
-});
-dropdown3.button.title = "Wähle die Anzahl der Samples für den FFT Mittelwert";
-
-
-let FFT_WINDOW_TYPE = "BLACKMAN";
-const dropdown4 = new UniDropdown(document.getElementById('dropdown4'), {
-    type: 'select',
-    label: 'Window',
-    items: [
-        { value: "BLACKMAN", label: "BLACKMAN" },
-        { value: "HANNING", label: "HANNING" },
-        { value: "HAMMING", label: "HAMMING" },
-        { value: "RECTANGULAR", label: "RECTANGULAR" },
-    ],
-    defaultValue: FFT_WINDOW_TYPE,
-    onChange: (value, label) => {
-        FFT_WINDOW_TYPE = value;
-        console.log('Ausgewählt:', value, label);
-    }
-});
-dropdown4.button.title = "Wähle den Fenstertyp für FFT";
-
-let DC_CUTOFF = true;
-const dropdown5 = new UniDropdown(document.getElementById('dropdown5'), {
-    type: 'select',
-    label: 'DC',
-    items: [
-        { value: true, label: "YES" },
-        { value: false, label: "NO" },
-
-    ],
-    defaultValue: true,
-    onChange: (value, label) => {
-        DC_CUTOFF = (value === "true");
-        console.log('Ausgewählt:', DC_CUTOFF, label);
-    }
-});
-dropdown5.button.title = "Wähle den DC Cutoff für FFT";
-
-
-let FFT_AXIS_MODE = "COMBI";
-const dropdown6 = new UniDropdown(document.getElementById('dropdown6'), {
-    type: 'select',
-    label: 'Axis',
-    items: [
-        { value: "COMBI", label: "KOMBINIERT" },
-        { value: "ONLYX", label: "X" },
-        { value: "ONLYY", label: "Y" },
-        { value: "ONLYZ", label: "Z" },
-    ],
-    defaultValue: FFT_AXIS_MODE,
-    onChange: (value, label) => {
-        FFT_AXIS_MODE = value;
-        console.log('Ausgewählt:', value, label);
-    }
-});
-dropdown6.button.title = "Wähle die Achse für FFT";
-
-let fftHighPass = 0;
-
-const gyroDropdown1 = new UniDropdown(document.getElementById('gyroDropdown1'), {
-    type: 'select',
-    label: 'Size',
-    items: [
-        { value: 256, label: 256 },
-        { value: 512, label: 512 },
-        { value: 1024, label: 1024 },
-        { value: 2048, label: 2048 },
-        { value: 4096, label: 4096 }
-    ],
-    defaultValue: GYRO_FFT_WINDOW_SIZE,
-    onChange: (value, label) => {
-        GYRO_FFT_WINDOW_SIZE = value;
-        console.log('Gyro FFT Blocksize:', value, label);
-    }
-});
-gyroDropdown1.button.title = 'Wähle die Fenstergröße für Gyro FFT';
-
-const gyroDropdown2 = new UniDropdown(document.getElementById('gyroDropdown2'), {
-    type: 'select',
-    label: 'Rate',
-    items: [
-        { value: 1000 / 60, label: '60 fps' },
-        { value: 1000 / 30, label: '30 fps' },
-        { value: 1000 / 20, label: '20 fps' },
-        { value: 1000 / 10, label: '10 fps' },
-        { value: 1000 / 5, label: '5 fps' },
-        { value: 1000 / 1, label: '1 fps' }
-    ],
-    defaultValue: GYRO_FFT_UPDATE_INTERVAL,
-    onChange: (value, label) => {
-        GYRO_FFT_UPDATE_INTERVAL = value;
-        startGyroFFTUpdates();
-        console.log('Gyro FFT Samplerate:', value, label);
-    }
-});
-gyroDropdown2.button.title = 'Wähle die Aktualisierungsrate für Gyro FFT';
-
-const gyroDropdown3 = new UniDropdown(document.getElementById('gyroDropdown3'), {
-    type: 'select',
-    label: 'Avg',
-    items: [
-        { value: 5, label: '5' },
-        { value: 10, label: '10' },
-        { value: 15, label: '15' },
-        { value: 20, label: '20' },
-        { value: 25, label: '25' },
-        { value: 50, label: '50' },
-        { value: 100, label: '100' },
-        { value: 150, label: '150' },
-        { value: 300, label: '300' }
-    ],
-    defaultValue: gyroN_AVG,
-    onChange: (value, label) => {
-        gyroN_AVG = value;
-        setAverageCount(value, gyroAvgFFTBuffer);
-        console.log('Gyro FFT Mittelung:', value, label);
-    }
-});
-gyroDropdown3.button.title = 'Wähle die Anzahl der Samples für den Gyro FFT Mittelwert';
-
-const gyroDropdown4 = new UniDropdown(document.getElementById('gyroDropdown4'), {
-    type: 'select',
-    label: 'Window',
-    items: [
-        { value: 'BLACKMAN', label: 'BLACKMAN' },
-        { value: 'HANNING', label: 'HANNING' },
-        { value: 'HAMMING', label: 'HAMMING' },
-        { value: 'RECTANGULAR', label: 'RECTANGULAR' },
-    ],
-    defaultValue: GYRO_FFT_WINDOW_TYPE,
-    onChange: (value, label) => {
-        GYRO_FFT_WINDOW_TYPE = value;
-        console.log('Gyro FFT Fenstertyp:', value, label);
-    }
-});
-gyroDropdown4.button.title = 'Wähle den Fenstertyp für Gyro FFT';
-
-const gyroDropdown5 = new UniDropdown(document.getElementById('gyroDropdown5'), {
-    type: 'select',
-    label: 'DC',
-    items: [
-        { value: true, label: 'YES' },
-        { value: false, label: 'NO' },
-    ],
-    defaultValue: true,
-    onChange: (value, label) => {
-        GYRO_DC_CUTOFF = (value === 'true');
-        console.log('Gyro FFT DC Cutoff:', GYRO_DC_CUTOFF, label);
-    }
-});
-gyroDropdown5.button.title = 'Wähle den DC Cutoff für Gyro FFT';
-
-const gyroDropdown6 = new UniDropdown(document.getElementById('gyroDropdown6'), {
-    type: 'select',
-    label: 'Axis',
-    items: [
-        { value: 'COMBI', label: 'KOMBINIERT' },
-        { value: 'ONLYX', label: 'X' },
-        { value: 'ONLYY', label: 'Y' },
-        { value: 'ONLYZ', label: 'Z' },
-    ],
-    defaultValue: GYRO_FFT_AXIS_MODE,
-    onChange: (value, label) => {
-        GYRO_FFT_AXIS_MODE = value;
-        console.log('Gyro FFT Achse:', value, label);
-    }
-});
-gyroDropdown6.button.title = 'Wähle die Achse für Gyro FFT';
-
-
-// Welche Filtertypen gibt es mit welchen Designs & Transforms?
-const filterTypeMap = {
-    lowpass: [
-        { value: 'butterworth', label: 'Butterworth', transforms: ['bilinear', 'matchedz'] },
-        { value: 'bessel', label: 'Bessel', transforms: ['bilinear', 'matchedz'] },
-        { value: 'allpass', label: 'Allpass', transforms: ['matchedz'] },
-        { value: 'tschebyscheff05', label: 'Chebyshev 0.5dB', transforms: ['matchedz'] },
-        { value: 'tschebyscheff1', label: 'Chebyshev 1dB', transforms: ['matchedz'] },
-        { value: 'tschebyscheff2', label: 'Chebyshev 2dB', transforms: ['matchedz'] },
-        { value: 'tschebyscheff3', label: 'Chebyshev 3dB', transforms: ['matchedz'] }
-    ],
-    highpass: [
-        { value: 'butterworth', label: 'Butterworth', transforms: ['bilinear'] },
-        { value: 'bessel', label: 'Bessel', transforms: ['bilinear'] }
-    ],
-    bandpass: [
-        { value: 'butterworth', label: 'Butterworth', transforms: ['bilinear'] },
-        { value: 'bessel', label: 'Bessel', transforms: ['bilinear'] }
-    ],
-    bandstop: [
-        { value: 'butterworth', label: 'Butterworth', transforms: ['bilinear'] },
-        { value: 'bessel', label: 'Bessel', transforms: ['bilinear'] }
-    ],
-    peak: [
-        { value: 'butterworth', label: 'Butterworth', transforms: ['bilinear'] },
-        { value: 'bessel', label: 'Bessel', transforms: ['bilinear'] }
-    ],
-    lowshelf: [
-        { value: 'butterworth', label: 'Butterworth', transforms: ['bilinear'] },
-        { value: 'bessel', label: 'Bessel', transforms: ['bilinear'] }
-    ],
-    highshelf: [
-        { value: 'butterworth', label: 'Butterworth', transforms: ['bilinear'] },
-        { value: 'bessel', label: 'Bessel', transforms: ['bilinear'] }
-    ]
-    // usw. ggf. nach Fili.js-API ergänzen
-};
-const filterParamVisibility = {
-    // Syntax: filterType: { designValue: [paramNames...] }
-    peak: {
-        butterworth: ['gain'],
-        bessel: ['gain']
-    },
-    lowshelf: {
-        butterworth: ['gain'],
-        bessel: ['gain']
-    },
-    highshelf: {
-        butterworth: ['gain'],
-        bessel: ['gain']
-    },
-    bandpass: {
-        butterworth: ['bandwidth'],
-        bessel: ['bandwidth']
-    },
-    bandstop: {
-        butterworth: ['bandwidth'],
-        bessel: ['bandwidth']
-    },
-    lowpass: {
-        tschebyscheff1: ['ripple'],
-        tschebyscheff2: ['ripple'],
-        tschebyscheff05: ['ripple'],
-        tschebyscheff3: ['ripple'],
-        elliptic: ['ripple', 'attenuation']
-    }
-    // ggf. weitere Filter/Design-Kombis
-};
-
-
-
-
-
-//const filterController = setupFilterWorker();
 function setupFilterWorker() {
     const chartVisibilityCheckboxes = {
         acc: document.getElementById('showAccChartToggle'),
-        gyro: document.getElementById('showGyroChartToggle')
+        gyro: document.getElementById('showGyroChartToggle'),
     };
-    const syncToggle = document.getElementById('syncFilterToggle');
+    const syncToggle = document.getElementById('syncFiltersToggle');
 
     function setChartVisibility(key, visible) {
         if (key === 'acc') {
             accChartVisible = visible;
-            document.getElementById('livechart2').style.display = visible ? '' : 'none';
-        } else {
-            gyroChartVisible = visible;
-            document.getElementById('gyrochart').style.display = visible ? '' : 'none';
+            const liveChartPanel = document.getElementById('livechart2');
+            if (liveChartPanel) {
+                liveChartPanel.style.display = visible ? '' : 'none';
+            }
+            if (chart) {
+                chart.root.style.display = visible ? '' : 'none';
+            }
+            return;
         }
 
-        requestAnimationFrame(() => {
-            updateLiveChartPanelHeights();
-            chart?.setSize(getSize());
-            gyroChart?.setSize(getGyroChartSize());
-        });
+        gyroChartVisible = visible;
+        const gyroChartPanel = document.getElementById('gyrochart');
+        if (gyroChartPanel) {
+            gyroChartPanel.style.display = visible ? '' : 'none';
+        }
+        if (gyroChart) {
+            gyroChart.root.style.display = visible ? '' : 'none';
+        }
     }
 
     function applyFilterPanelEnabledState(panel, enabled) {
@@ -865,6 +377,24 @@ function setupFilterWorker() {
 
     function buildTransformOptions(transforms) {
         return transforms.map(t => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }));
+    }
+
+    function populateSelectDropdown(dropdown, items, onSelect) {
+        dropdown.options.items = items;
+        dropdown.dropdownContent.innerHTML = '';
+        items.forEach(item => {
+            const option = document.createElement('a');
+            option.href = '#';
+            option.dataset.value = item.value;
+            option.textContent = item.label;
+            dropdown.dropdownContent.appendChild(option);
+            option.addEventListener('click', event => {
+                event.preventDefault();
+                dropdown.setActiveOption(option);
+                dropdown.close();
+                onSelect(item.value);
+            });
+        });
     }
 
     function createFilterPanel(key, prefix, worker) {
@@ -884,7 +414,11 @@ function setupFilterWorker() {
             }
         };
 
-        panel.typeDropdown = new UniDropdown(document.getElementById(`${prefix}TypeDropdown`), {
+        const createPanelDropdown = (property, suffix, options) => {
+            panel[property] = new UniDropdown(document.getElementById(`${prefix}${suffix}`), options);
+        };
+
+        createPanelDropdown('typeDropdown', 'TypeDropdown', {
             type: 'select',
             label: 'Filter',
             items: [
@@ -901,7 +435,7 @@ function setupFilterWorker() {
             onChange: value => panel.onTypeChange(value)
         });
 
-        panel.designDropdown = new UniDropdown(document.getElementById(`${prefix}DesignDropdown`), {
+        createPanelDropdown('designDropdown', 'DesignDropdown', {
             type: 'select',
             label: 'DS',
             items: [{ value: 'butterworth', label: 'Butterworth' }],
@@ -909,7 +443,7 @@ function setupFilterWorker() {
             onChange: value => panel.onDesignChange(panel.typeDropdown.getValue()?.value || 'none', value)
         });
 
-        panel.transformDropdown = new UniDropdown(document.getElementById(`${prefix}TransformDropdown`), {
+        createPanelDropdown('transformDropdown', 'TransformDropdown', {
             type: 'select',
             label: 'Transform',
             items: buildTransformOptions(['bilinear', 'matchedz']),
@@ -920,7 +454,7 @@ function setupFilterWorker() {
             }
         });
 
-        panel.orderDropdown = new UniDropdown(document.getElementById(`${prefix}OrderDropdown`), {
+        createPanelDropdown('orderDropdown', 'OrderDropdown', {
             type: 'slider',
             label: 'N',
             min: 1,
@@ -930,7 +464,7 @@ function setupFilterWorker() {
             onChange: onPanelChanged,
         });
 
-        panel.cutoffDropdown = new UniDropdown(document.getElementById(`${prefix}CutoffDropdown`), {
+        createPanelDropdown('cutoffDropdown', 'CutoffDropdown', {
             type: 'logslider',
             label: 'Cutoff (Hz)',
             minValue: 0.001,
@@ -940,7 +474,7 @@ function setupFilterWorker() {
             onChange: onPanelChanged,
         });
 
-        panel.gainDropdown = new UniDropdown(document.getElementById(`${prefix}GainDropdown`), {
+        createPanelDropdown('gainDropdown', 'GainDropdown', {
             type: 'slider',
             label: 'Gain (dB)',
             min: -30,
@@ -950,7 +484,7 @@ function setupFilterWorker() {
             onChange: onPanelChanged,
         });
 
-        panel.rippleDropdown = new UniDropdown(document.getElementById(`${prefix}RippleDropdown`), {
+        createPanelDropdown('rippleDropdown', 'RippleDropdown', {
             type: 'slider',
             label: 'Ripple (dB)',
             min: 0,
@@ -960,7 +494,7 @@ function setupFilterWorker() {
             onChange: onPanelChanged,
         });
 
-        panel.attenuationDropdown = new UniDropdown(document.getElementById(`${prefix}AttenuationDropdown`), {
+        createPanelDropdown('attenuationDropdown', 'AttenuationDropdown', {
             type: 'slider',
             label: 'Attenuation (dB)',
             min: 10,
@@ -970,7 +504,7 @@ function setupFilterWorker() {
             onChange: onPanelChanged,
         });
 
-        panel.bandwidthDropdown = new UniDropdown(document.getElementById(`${prefix}BandwidthDropdown`), {
+        createPanelDropdown('bandwidthDropdown', 'BandwidthDropdown', {
             type: 'logslider',
             label: 'Bandwidth',
             minValue: 0.001,
@@ -1001,20 +535,8 @@ function setupFilterWorker() {
             };
 
             const options = designOptions[transformVal] || designOptions.bilinear;
-            panel.designDropdown.options.items = options;
-            panel.designDropdown.dropdownContent.innerHTML = '';
-            options.forEach(item => {
-                const a = document.createElement('a');
-                a.href = '#';
-                a.dataset.value = item.value;
-                a.textContent = item.label;
-                panel.designDropdown.dropdownContent.appendChild(a);
-                a.addEventListener('click', e => {
-                    e.preventDefault();
-                    panel.designDropdown.setActiveOption(a);
-                    panel.designDropdown.close();
-                    panel.onDesignChange(panel.typeDropdown.getValue()?.value || 'none', item.value);
-                });
+            populateSelectDropdown(panel.designDropdown, options, value => {
+                panel.onDesignChange(panel.typeDropdown.getValue()?.value || 'none', value);
             });
 
             if (options.length > 0) {
@@ -1085,20 +607,8 @@ function setupFilterWorker() {
                 return;
             }
 
-            panel.designDropdown.options.items = designsForType;
-            panel.designDropdown.dropdownContent.innerHTML = '';
-            designsForType.forEach(item => {
-                const a = document.createElement('a');
-                a.href = '#';
-                a.dataset.value = item.value;
-                a.textContent = item.label;
-                panel.designDropdown.dropdownContent.appendChild(a);
-                a.addEventListener('click', e => {
-                    e.preventDefault();
-                    panel.designDropdown.setActiveOption(a);
-                    panel.designDropdown.close();
-                    panel.onDesignChange(selectedType, item.value);
-                });
+            populateSelectDropdown(panel.designDropdown, designsForType, value => {
+                panel.onDesignChange(selectedType, value);
             });
 
             panel.designDropdown.container.style.display = 'block';
@@ -1107,50 +617,41 @@ function setupFilterWorker() {
         };
 
         panel.onDesignChange = (selectedType, selectedDesign) => {
-            panel.cutoffDropdown.container.style.display = 'block';
-            panel.orderDropdown.container.style.display = 'block';
-            panel.designDropdown.container.style.display = 'block';
-            panel.gainDropdown.container.style.display = 'none';
-            panel.rippleDropdown.container.style.display = 'none';
-            panel.attenuationDropdown.container.style.display = 'none';
-            panel.bandwidthDropdown.container.style.display = 'none';
-            panel.oneDbCheckboxContainer.style.display = 'none';
-            panel.transformDropdown.container.style.display = 'none';
+            const paramControlMap = {
+                gain: panel.gainDropdown.container,
+                ripple: panel.rippleDropdown.container,
+                attenuation: panel.attenuationDropdown.container,
+                bandwidth: panel.bandwidthDropdown.container,
+                oneDb: panel.oneDbCheckboxContainer,
+            };
+
+            [
+                panel.cutoffDropdown.container,
+                panel.orderDropdown.container,
+                panel.designDropdown.container
+            ].forEach(container => {
+                container.style.display = 'block';
+            });
+
+            [...Object.values(paramControlMap), panel.transformDropdown.container].forEach(container => {
+                container.style.display = 'none';
+            });
 
             const paramList = (filterParamVisibility[selectedType] && filterParamVisibility[selectedType][selectedDesign]) || [];
             paramList.forEach(param => {
-                if (param === 'gain') panel.gainDropdown.container.style.display = 'block';
-                if (param === 'ripple') panel.rippleDropdown.container.style.display = 'block';
-                if (param === 'attenuation') panel.attenuationDropdown.container.style.display = 'block';
-                if (param === 'bandwidth') panel.bandwidthDropdown.container.style.display = 'block';
-                if (param === 'oneDb') panel.oneDbCheckboxContainer.style.display = 'block';
+                paramControlMap[param] && (paramControlMap[param].style.display = 'block');
             });
 
             const designsForType = filterTypeMap[selectedType] || [];
             const selectedDesignObj = designsForType.find(d => d.value === selectedDesign);
             if (selectedDesignObj) {
-                if (selectedDesignObj.transforms.length > 1) {
-                    panel.transformDropdown.options.items = buildTransformOptions(selectedDesignObj.transforms);
-                    panel.transformDropdown.dropdownContent.innerHTML = '';
-                    selectedDesignObj.transforms.forEach(transform => {
-                        const a = document.createElement('a');
-                        a.href = '#';
-                        a.dataset.value = transform;
-                        a.textContent = transform.charAt(0).toUpperCase() + transform.slice(1);
-                        panel.transformDropdown.dropdownContent.appendChild(a);
-                        a.addEventListener('click', e => {
-                            e.preventDefault();
-                            panel.transformDropdown.setActiveOption(a);
-                            panel.transformDropdown.close();
-                            panel.updateDesignOptions(transform);
-                            onPanelChanged();
-                        });
-                    });
-                    panel.transformDropdown.setValue(selectedDesignObj.transforms[0], true);
-                    panel.transformDropdown.container.style.display = 'block';
-                } else {
-                    panel.transformDropdown.setValue(selectedDesignObj.transforms[0], true);
-                }
+                const transformItems = buildTransformOptions(selectedDesignObj.transforms);
+                populateSelectDropdown(panel.transformDropdown, transformItems, transform => {
+                    panel.updateDesignOptions(transform);
+                    onPanelChanged();
+                });
+                panel.transformDropdown.setValue(selectedDesignObj.transforms[0], true);
+                panel.transformDropdown.container.style.display = selectedDesignObj.transforms.length > 1 ? 'block' : 'none';
             }
 
             onPanelChanged();
@@ -1161,13 +662,17 @@ function setupFilterWorker() {
             panel.onTypeChange(sourcePanel.typeDropdown.getValue()?.value || 'none');
             panel.designDropdown.setValue(sourcePanel.designDropdown.getValue()?.value || 'butterworth', true);
             panel.onDesignChange(sourcePanel.typeDropdown.getValue()?.value || 'none', sourcePanel.designDropdown.getValue()?.value || 'butterworth');
-            panel.transformDropdown.setValue(sourcePanel.transformDropdown.getValue()?.value || 'bilinear', true);
-            panel.orderDropdown.setValue(sourcePanel.orderDropdown.getValue(), true);
-            panel.cutoffDropdown.setValue(sourcePanel.cutoffDropdown.getValue(), true);
-            panel.gainDropdown.setValue(sourcePanel.gainDropdown.getValue(), true);
-            panel.rippleDropdown.setValue(sourcePanel.rippleDropdown.getValue(), true);
-            panel.attenuationDropdown.setValue(sourcePanel.attenuationDropdown.getValue(), true);
-            panel.bandwidthDropdown.setValue(sourcePanel.bandwidthDropdown.getValue(), true);
+            [
+                'transformDropdown',
+                'orderDropdown',
+                'cutoffDropdown',
+                'gainDropdown',
+                'rippleDropdown',
+                'attenuationDropdown',
+                'bandwidthDropdown'
+            ].forEach(property => {
+                panel[property].setValue(sourcePanel[property].getValue(), true);
+            });
             panel.preGainCheckbox.checked = sourcePanel.preGainCheckbox.checked;
             panel.oneDbCheckbox.checked = sourcePanel.oneDbCheckbox.checked;
             panel.sendSettings(false);
@@ -1192,9 +697,10 @@ function setupFilterWorker() {
     accFilterUi = createFilterPanel('acc', 'acc', accFilterWorker);
     gyroFilterUi = createFilterPanel('gyro', 'gyro', gyroFilterWorker);
 
-    chartVisibilityCheckboxes.acc.addEventListener('change', () => setChartVisibility('acc', chartVisibilityCheckboxes.acc.checked));
-    chartVisibilityCheckboxes.gyro.addEventListener('change', () => setChartVisibility('gyro', chartVisibilityCheckboxes.gyro.checked));
-    syncToggle.addEventListener('change', () => {
+    Object.entries(chartVisibilityCheckboxes).forEach(([key, checkbox]) => {
+        checkbox?.addEventListener('change', () => setChartVisibility(key, checkbox.checked));
+    });
+    syncToggle?.addEventListener('change', () => {
         filterSyncEnabled = syncToggle.checked;
         if (filterSyncEnabled) {
             syncFilterPanel('gyro', accFilterUi);
@@ -1205,9 +711,11 @@ function setupFilterWorker() {
     accFilterWorker.onmessage = e => handleFilterWorkerMessage('acc', e.data);
     gyroFilterWorker.onmessage = e => handleFilterWorkerMessage('gyro', e.data);
 
+    filterSyncEnabled = syncToggle?.checked ?? false;
+
     setChartVisibility('acc', true);
     setChartVisibility('gyro', true);
-    applyFilterPanelEnabledState(gyroFilterUi, true);
+    applyFilterPanelEnabledState(gyroFilterUi, !filterSyncEnabled);
 }
 
 function handleFilterWorkerMessage(sensorKey, payload) {
@@ -1267,7 +775,7 @@ function handleFilterWorkerMessage(sensorKey, payload) {
     const yMaxBefore = chartRef.scales.y.max;
 
     if (isAcc) {
-        chartRef.setData([times, x, y, z, total]);
+        chartRef.setData(alignPlotDataToSeriesCount(chartRef, [times, x, y, z, total]));
     } else {
         chartRef.setData([times, x, y, z]);
     }
@@ -1296,7 +804,8 @@ function appendFilteredSamples(sensorKey, payload) {
 
     if (sensorKey === 'acc') {
         for (let index = 0; index < times.length; index++) {
-            accBufferFiltered.push([times[index], x[index], y[index], z[index], total ? total[index] : Math.hypot(x[index], y[index], z[index])]);
+            let tx = x[index], ty = y[index], tz = z[index];
+            accBufferFiltered.push([times[index], tx, ty, tz, total ? total[index] : Math.sqrt(tx*tx + ty*ty + tz*tz)]);
         }
         return;
     }
@@ -1973,108 +1482,109 @@ const gyroLogSliderDropdown = new UniDropdown(document.getElementById('gyroSlide
 
 // IMU SETTINGS
 
-const accelRangeDD = new UniDropdown(document.getElementById('accelRangeDD'), {
-    type: 'select',
-    label: 'Acc Range',
-    items: [
-        { value: 2, label: "±2g" },
-        { value: 4, label: "±4g" },
-        { value: 8, label: "±8g" },
-        { value: 16, label: "±16g" },
-    ],
-    onChange: (value, label) => {
-        //FFT_AXIS_MODE = value;
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const accelSampleRateDD = new UniDropdown(document.getElementById('accelSampleRateDD'), {
-    type: 'select',
-    label: 'Sample Rate',
-    items: [
-        { value: 0, label: "OFF" },
-        { value: 125, label: "12.5 Hz" },
-        { value: 26, label: "26 Hz" },
-        { value: 52, label: "52 Hz" },
-        { value: 104, label: "104 Hz" },
-        { value: 208, label: "208 Hz" },
-        { value: 416, label: "416 Hz" },
-        { value: 833, label: "833 Hz" },
-        { value: 1660, label: "1660 Hz" },
-        { value: 3330, label: "3330 Hz" },
-        { value: 6660, label: "6660 Hz" }
-    ],
-    onChange: (value, label) => {
-        //FFT_AXIS_MODE = value;
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const acelFFilterDD = new UniDropdown(document.getElementById('accelFilterDD'), {
-    type: 'select',
-    label: 'Accel Filter',
-    items: [
-        { value: "OFF", label: "OFF" },
-        { value: "LOWPASS", label: "LOWPASS" },
-        { value: "HIGHPASS1", label: "HIGHPASS 1" },
-        { value: "HIGHPASS2", label: "HIGHPASS 2" },
+const accelRangeItems = [
+    { value: 2, label: "±2g" },
+    { value: 4, label: "±4g" },
+    { value: 8, label: "±8g" },
+    { value: 16, label: "±16g" },
+];
+const sampleRateItems = [
+    { value: 0, label: "OFF" },
+    { value: 125, label: "12.5 Hz" },
+    { value: 26, label: "26 Hz" },
+    { value: 52, label: "52 Hz" },
+    { value: 104, label: "104 Hz" },
+    { value: 208, label: "208 Hz" },
+    { value: 416, label: "416 Hz" },
+    { value: 833, label: "833 Hz" },
+    { value: 1660, label: "1660 Hz" },
+    { value: 3330, label: "3330 Hz" },
+    { value: 6660, label: "6660 Hz" },
+];
+const filterItems = [
+    { value: 0, label: "OFF" },
+    { value: 1, label: "LOWPASS" },
+    { value: 2, label: "HIGHPASS 1" },
+    { value: 3, label: "HIGHPASS 2" },
+];
+const gyroRangeItems = [
+    { value: 125, label: "±125°/s" },
+    { value: 250, label: "±250°/s" },
+    { value: 500, label: "±500°/s" },
+    { value: 1000, label: "±1000°/s" },
+    { value: 2000, label: "±2000°/s" },
+];
+const tempSampleRateItems = [
+    { value: 0, label: "OFF" },
+    { value: 1, label: "1.6 Hz" },
+    { value: 2, label: "12.5 Hz" },
+    { value: 3, label: "52 Hz" },
+];
 
-    ],
-    onChange: (value, label) => {
-        //FFT_AXIS_MODE = value;
-        console.log('Ausgewählt:', value, label);
-    }
-});
+function createLoggedDropdown(elementId, label, items) {
+    return new UniDropdown(document.getElementById(elementId), {
+        type: 'select',
+        label,
+        items,
+        onChange: (value, selectedLabel) => {
+            console.log('Ausgewählt:', value, selectedLabel);
+        }
+    });
+}
 
-
-const gyroSampleRateDD = new UniDropdown(document.getElementById('gyroSampleRateDD'), {
-    type: 'select',
-    label: 'Gyro Sample Rate',
-    items: [
-        { value: 0, label: "OFF" },
-        { value: 125, label: "12.5 Hz" },
-        { value: 26, label: "26 Hz" },
-        { value: 52, label: "52 Hz" },
-        { value: 104, label: "104 Hz" },
-        { value: 208, label: "208 Hz" },
-        { value: 416, label: "416 Hz" },
-        { value: 833, label: "833 Hz" },
-        { value: 1660, label: "1660 Hz" },
-        { value: 3330, label: "3330 Hz" },
-        { value: 6660, label: "6660 Hz" }
-    ],
-    onChange: (value, label) => {
-        //FFT_AXIS_MODE = value;
-        console.log('Ausgewählt:', value, label);
+function createOptionalUniDropdown(elementId, options) {
+    const container = document.getElementById(elementId);
+    if (container) {
+        return new UniDropdown(container, options);
     }
-});
-const gyroFilterDD = new UniDropdown(document.getElementById('gyroFilterDD'), {
-    type: 'select',
-    label: 'Gyro Filter',
-    items: [
-        { value: "OFF", label: "OFF" },
-        { value: "LOWPASS", label: "LOWPASS" },
-        { value: "HIGHPASS1", label: "HIGHPASS 1" },
-        { value: "HIGHPASS2", label: "HIGHPASS 2" },
 
-    ],
-    onChange: (value, label) => {
-        //FFT_AXIS_MODE = value;
-        console.log('Ausgewählt:', value, label);
-    }
-});
+    return {
+        options,
+        dropdownContent: { innerHTML: '' },
+        setValue() {},
+        getValue() { return null; },
+        setActiveOption() {},
+        setValueSelect() {},
+        setDisplayMultiplier() {},
+        close() {},
+        open() {},
+    };
+}
+
+function createWsBackedOptionalDropdown(elementId, label, items, settingKey) {
+    return createOptionalUniDropdown(elementId, {
+        type: 'select',
+        label,
+        items,
+        onChange: (value, selectedLabel) => {
+            const settingsJSON = JSON.stringify({ [settingKey]: value });
+            wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
+            console.log('Ausgewählt:', value, selectedLabel);
+        }
+    });
+}
+
+const accelRangeDD = createWsBackedOptionalDropdown('accelRangeDD', 'Acc Range', accelRangeItems, 'ACCELRANGE');
+const accelSampleRateDD = createWsBackedOptionalDropdown('accelSampleRateDD', 'Sample Rate', sampleRateItems, 'ACCELSAMPLERATE');
+const accelFilterDD = createWsBackedOptionalDropdown('accelFilterDD', 'Accel Filter', filterItems, 'ACCELFILTER');
+const gyroRangeDD = createWsBackedOptionalDropdown('gyroRangeDD', 'Gyro Range', gyroRangeItems, 'GYRORANGE');
+const gyroSampleRateDD = createWsBackedOptionalDropdown('gyroSampleRateDD', 'Gyro Sample Rate', sampleRateItems, 'GYROSAMPLERATE');
+const gyroFilterDD = createWsBackedOptionalDropdown('gyroFilterDD', 'Gyro Filter', filterItems, 'GYROFILTER');
+const accelRangeDD2 = createWsBackedOptionalDropdown('accelRangeDD2', 'Acc Range', accelRangeItems, 'ACCELRANGE');
+const accelSampleRateDD2 = createWsBackedOptionalDropdown('accelSampleRateDD2', 'Sample Rate', sampleRateItems, 'ACCELSAMPLERATE');
+const accelFilterDD2 = createWsBackedOptionalDropdown('accelFilterDD2', 'Accel Filter', filterItems, 'ACCELFILTER');
+const gyroRangeDD2 = createWsBackedOptionalDropdown('gyroRangeDD2', 'Gyro Range', gyroRangeItems, 'GYRORANGE');
+const gyroSampleRateDD2 = createWsBackedOptionalDropdown('gyroSampleRateDD2', 'Gyro Sample Rate', sampleRateItems, 'GYROSAMPLERATE');
+const gyroFilterDD2 = createWsBackedOptionalDropdown('gyroFilterDD2', 'Gyro Filter', filterItems, 'GYROFILTER');
+const tempSampleRateDD2 = createWsBackedOptionalDropdown('tempSampleRateDD2', 'Temp Samplerate', tempSampleRateItems, 'TEMPSAMPLERATE');
 
 // SIDEPANEL SETTINGS
 
-const CSDD2 = new UniDropdown(document.getElementById('CSDD2'), {
-    type: 'select',
-    label: 'Orientation',
-    items: [
-        { value: 0, label: " - " },
-    ],
-    onChange: (value, label) => {
-        applyOrientationMode(value);
-        console.log('Ausgewählt:', value, label);
-    }
-});
+const CSDD2 = {
+    items: [],
+    addSelectItem: () => {},
+    setValue: () => {}
+};
 
 function ensureOrientationOption(label, value, preferredIndex = 2) {
     const exists = CSDD2.items && CSDD2.items.some(item => Number(item.value) === Number(value));
@@ -2096,7 +1606,7 @@ function resetOrientationLiveBuffers() {
     lastTimestamp = 0;
 
     if (typeof chart !== 'undefined' && chart) {
-        chart.setData([[], [], [], [], []]);
+        chart.setData(alignPlotDataToSeriesCount(chart, [[], [], [], [], []]));
         chart.setScale('y', { min: -1100, max: 1100 });
         chart.setScale('x', { auto: true });
     }
@@ -2108,344 +1618,56 @@ function resetOrientationLiveBuffers() {
     }
 }
 
-function setCookieValue(name, value, maxAgeSeconds) {
-    document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAgeSeconds}; path=/; samesite=lax`;
-}
-
-function setLocalStorageValue(name, value) {
-    try {
-        globalThis.localStorage?.setItem(name, value);
-    } catch (error) {
-        console.warn('Lokaler Persistenzspeicher konnte nicht geschrieben werden:', error);
-    }
-}
-
-function getCookieValue(name) {
-    const prefix = `${name}=`;
-    const cookies = document.cookie ? document.cookie.split('; ') : [];
-
-    for (const cookie of cookies) {
-        if (cookie.startsWith(prefix)) {
-            return decodeURIComponent(cookie.slice(prefix.length));
-        }
-    }
-
-    return null;
-}
-
-function getLocalStorageValue(name) {
-    try {
-        return globalThis.localStorage?.getItem(name) ?? null;
-    } catch (error) {
-        console.warn('Lokaler Persistenzspeicher konnte nicht gelesen werden:', error);
-        return null;
-    }
-}
-
-function clearCookieValue(name) {
-    document.cookie = `${name}=; max-age=0; path=/; samesite=lax`;
-}
-
-function clearLocalStorageValue(name) {
-    try {
-        globalThis.localStorage?.removeItem(name);
-    } catch (error) {
-        console.warn('Lokaler Persistenzspeicher konnte nicht gelöscht werden:', error);
-    }
-}
-
-function sanitizeAppSettingsBoolean(value, fallback = false) {
-    if (typeof value === 'boolean') {
-        return value;
-    }
-
-    if (typeof value === 'number') {
-        return value !== 0;
-    }
-
-    if (typeof value === 'string') {
-        const normalizedValue = value.trim().toLowerCase();
-        if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) {
-            return true;
-        }
-        if (['0', 'false', 'no', 'off'].includes(normalizedValue)) {
-            return false;
-        }
-    }
-
-    return fallback;
-}
-
-function sanitizeCustomWsHost(value) {
-    if (typeof value !== 'string') {
-        return null;
-    }
-
-    const normalizedHost = value
-        .trim()
-        .replace(/^wss?:\/\//i, '')
-        .replace(/\/ws\/?$/i, '')
-        .replace(/\/+$/g, '');
-
-    if (!normalizedHost || /\s/.test(normalizedHost) || normalizedHost.includes('/')) {
-        return null;
-    }
-
-    return normalizedHost;
-}
-
 function getCurrentAppSettingsState() {
-    return {
-        version: APP_SETTINGS_COOKIE_VERSION,
-        savedAt: Date.now(),
+    return buildCurrentAppSettingsState({
+        appSettingsCookieVersion: APP_SETTINGS_COOKIE_VERSION,
         telemetryPanelHidden: telemetryElements.panel?.classList.contains('is-hidden') ?? true,
-        gravityCutEnabled: Boolean(gravityCutEnabled),
-        customWsHost: sanitizeCustomWsHost(persistedCustomWsHost),
-    };
-}
-
-function parseAppSettingsPersistedState(rawState) {
-    const parsed = JSON.parse(rawState);
-    const version = Number(parsed?.version);
-
-    if (version !== APP_SETTINGS_COOKIE_VERSION) {
-        return null;
-    }
-
-    return {
-        version,
-        telemetryPanelHidden: sanitizeAppSettingsBoolean(parsed?.telemetryPanelHidden, true),
-        gravityCutEnabled: sanitizeAppSettingsBoolean(parsed?.gravityCutEnabled, false),
-        customWsHost: sanitizeCustomWsHost(parsed?.customWsHost),
-    };
-}
-
-function buildLegacyAppSettingsState() {
-    const legacyTelemetryHidden = getLocalStorageValue(TELEMETRY_PANEL_HIDDEN_KEY);
-    const legacyWsHost = getLocalStorageValue(LEGACY_WS_HOST_STORAGE_KEY);
-
-    if (legacyTelemetryHidden === null && !legacyWsHost) {
-        return null;
-    }
-
-    return {
-        version: APP_SETTINGS_COOKIE_VERSION,
-        telemetryPanelHidden: sanitizeAppSettingsBoolean(legacyTelemetryHidden, true),
-        gravityCutEnabled: false,
-        customWsHost: sanitizeCustomWsHost(legacyWsHost),
-    };
-}
-
-function clearLegacyAppSettingsStorage() {
-    clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
-    clearLocalStorageValue(TELEMETRY_PANEL_HIDDEN_KEY);
-    clearLocalStorageValue(LEGACY_WS_HOST_STORAGE_KEY);
+        gravityCutEnabled,
+        customWsHost: persistedCustomWsHost,
+    });
 }
 
 function persistAppSettingsCookie() {
-    const serializedState = JSON.stringify(getCurrentAppSettingsState());
-    setCookieValue(APP_SETTINGS_COOKIE_NAME, serializedState, APP_SETTINGS_COOKIE_MAX_AGE_SECONDS);
+    persistAppSettingsCookiePure({
+        appSettingsCookieName: APP_SETTINGS_COOKIE_NAME,
+        appSettingsStorageKey: APP_SETTINGS_STORAGE_KEY,
+        appSettingsCookieMaxAgeSeconds: APP_SETTINGS_COOKIE_MAX_AGE_SECONDS,
+        state: getCurrentAppSettingsState(),
+    });
 }
 
 function readAppSettingsCookieState() {
-    const rawCookie = getCookieValue(APP_SETTINGS_COOKIE_NAME);
-    if (rawCookie) {
-        try {
-            const state = parseAppSettingsPersistedState(rawCookie);
-            if (!state) {
-                clearCookieValue(APP_SETTINGS_COOKIE_NAME);
-                return null;
-            }
-
-            return { state, source: 'cookie' };
-        } catch (error) {
-            console.warn('App-Settings-Cookie konnte nicht gelesen werden:', error);
-            clearCookieValue(APP_SETTINGS_COOKIE_NAME);
-        }
-    }
-
-    const rawStorage = getLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
-    if (rawStorage) {
-        try {
-            const state = parseAppSettingsPersistedState(rawStorage);
-            if (!state) {
-                clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
-            } else {
-                return { state, source: 'localStorage' };
-            }
-        } catch (error) {
-            console.warn('App-Settings-Backup konnte nicht gelesen werden:', error);
-            clearLocalStorageValue(APP_SETTINGS_STORAGE_KEY);
-        }
-    }
-
-    const legacyState = buildLegacyAppSettingsState();
-    if (legacyState) {
-        return { state: legacyState, source: 'legacy' };
-    }
-
-    return null;
+    return readAppSettingsCookieStatePure({
+        appSettingsCookieName: APP_SETTINGS_COOKIE_NAME,
+        appSettingsStorageKey: APP_SETTINGS_STORAGE_KEY,
+        appSettingsCookieVersion: APP_SETTINGS_COOKIE_VERSION,
+        legacyTelemetryHidden: getLocalStorageValue(TELEMETRY_PANEL_HIDDEN_KEY),
+        legacyWsHost: getLocalStorageValue(LEGACY_WS_HOST_STORAGE_KEY),
+    });
 }
 
 function restoreAppSettingsFromCookie() {
-    const persisted = readAppSettingsCookieState();
-    const state = persisted?.state || {
-        telemetryPanelHidden: true,
-        gravityCutEnabled: false,
-        customWsHost: null,
-    };
-
-    persistedCustomWsHost = sanitizeCustomWsHost(state.customWsHost);
-    applyTelemetryPanelHidden(state.telemetryPanelHidden, { persistState: false });
-    setGravityCutEnabled(state.gravityCutEnabled, { persistState: false, notifyWorker: true });
-
-    if (persisted && persisted.source !== 'cookie') {
-        persistAppSettingsCookie();
-        clearLegacyAppSettingsStorage();
-    }
-}
-
-function sanitizeReferenceState(referenceState) {
-    if (!referenceState || typeof referenceState !== 'object') {
-        return null;
-    }
-
-    const sanitized = {
-        x: Number(referenceState.x),
-        y: Number(referenceState.y),
-        z: Number(referenceState.z),
-        gx: Number(referenceState.gx ?? 0),
-        gy: Number(referenceState.gy ?? 0),
-        gz: Number(referenceState.gz ?? 0),
-    };
-
-    if (![sanitized.x, sanitized.y, sanitized.z, sanitized.gx, sanitized.gy, sanitized.gz].every(Number.isFinite)) {
-        return null;
-    }
-
-    return sanitized;
-}
-
-function sanitizeGyroZeroState(gyroState) {
-    if (!gyroState || typeof gyroState !== 'object') {
-        return null;
-    }
-
-    const sanitized = {
-        x: Number(gyroState.x),
-        y: Number(gyroState.y),
-        z: Number(gyroState.z),
-    };
-
-    if (![sanitized.x, sanitized.y, sanitized.z].every(Number.isFinite)) {
-        return null;
-    }
-
-    return sanitized;
-}
-
-function sanitizeAccelCalibrationScale(scale) {
-    const normalizedScale = Number(scale);
-    if (!Number.isFinite(normalizedScale) || normalizedScale <= 0) {
-        return 1;
-    }
-
-    return normalizedScale;
-}
-
-function sanitizeViewportDisplaySettings(settings) {
-    if (!settings || typeof settings !== 'object') {
-        return null;
-    }
-
-    const rawArrowOpacity = settings.arrowOpacity;
-    const rawAxisColors = settings.axisColors;
-
-    const arrowOpacity = {
-        raw: sanitizeArrowOpacity(rawArrowOpacity?.raw, 0.82),
-        result: sanitizeArrowOpacity(rawArrowOpacity?.result, 0.88),
-        world: sanitizeArrowOpacity(rawArrowOpacity?.world, 0.42),
-        frame: sanitizeArrowOpacity(rawArrowOpacity?.frame, 0.58),
-    };
-
-    const axisColors = {
-        x: sanitizeAxisColor(rawAxisColors?.x, '#ff0000'),
-        y: sanitizeAxisColor(rawAxisColors?.y, '#00ff00'),
-        z: sanitizeAxisColor(rawAxisColors?.z, '#0000ff'),
-    };
-
-    const rawVectorColors = settings.vectorColors;
-    const vectorColors = {
-        raw: sanitizeAxisColor(rawVectorColors?.raw, '#ffa000'),
-        result: sanitizeAxisColor(rawVectorColors?.result, '#00e5ff'),
-    };
-
-    const allowedBackgroundPresets = new Set(['steel', 'steel-soft', 'steel-light', 'aurora', 'dusk', 'ember', 'polar', 'mint', 'sunrise', 'noir', 'lab']);
-    const backgroundPreset = typeof settings.backgroundPreset === 'string'
-        && allowedBackgroundPresets.has(settings.backgroundPreset.trim().toLowerCase())
-        ? settings.backgroundPreset.trim().toLowerCase()
-        : 'steel';
-
-    return { arrowOpacity, axisColors, vectorColors, backgroundPreset };
-}
-
-function sanitizeMotionViewportDisplaySettings(settings) {
-    if (!settings || typeof settings !== 'object') {
-        return null;
-    }
-
-    const rawArrowOpacity = settings.arrowOpacity;
-    const rawAxisColors = settings.axisColors;
-
-    const arrowOpacity = {
-        world: sanitizeArrowOpacity(rawArrowOpacity?.world, 0.42),
-        trail: sanitizeArrowOpacity(rawArrowOpacity?.trail, 0.9),
-        velocity: sanitizeArrowOpacity(rawArrowOpacity?.velocity, 0.86),
-        acceleration: sanitizeArrowOpacity(rawArrowOpacity?.acceleration, 0.82),
-    };
-
-    const axisColors = {
-        x: sanitizeAxisColor(rawAxisColors?.x, '#ff0000'),
-        y: sanitizeAxisColor(rawAxisColors?.y, '#00ff00'),
-        z: sanitizeAxisColor(rawAxisColors?.z, '#0000ff'),
-    };
-
-    const rawVectorColors = settings.vectorColors;
-    const vectorColors = {
-        trail: sanitizeAxisColor(rawVectorColors?.trail, '#00e5ff'),
-        velocity: sanitizeAxisColor(rawVectorColors?.velocity, '#ffa000'),
-        acceleration: sanitizeAxisColor(rawVectorColors?.acceleration, '#ffd400'),
-    };
-
-    const allowedBackgroundPresets = new Set(['steel', 'steel-soft', 'steel-light', 'aurora', 'dusk', 'ember', 'polar', 'mint', 'sunrise', 'noir', 'lab']);
-    const backgroundPreset = typeof settings.backgroundPreset === 'string'
-        && allowedBackgroundPresets.has(settings.backgroundPreset.trim().toLowerCase())
-        ? settings.backgroundPreset.trim().toLowerCase()
-        : 'steel';
-
-    return { arrowOpacity, axisColors, vectorColors, backgroundPreset };
-}
-
-function sanitizeArrowOpacity(value, fallback) {
-    const normalizedValue = Number(value);
-    if (!Number.isFinite(normalizedValue)) {
-        return fallback;
-    }
-
-    return Math.min(1, Math.max(0.15, normalizedValue));
-}
-
-function sanitizeAxisColor(value, fallback) {
-    if (typeof value !== 'string') {
-        return fallback;
-    }
-
-    const trimmedValue = value.trim().toLowerCase();
-    if (/^#[0-9a-f]{6}$/i.test(trimmedValue)) {
-        return trimmedValue;
-    }
-
-    return fallback;
+    restoreAppSettingsFromPersistence({
+        persisted: readAppSettingsCookieState(),
+        fallbackState: {
+            telemetryPanelHidden: true,
+            gravityCutEnabled: false,
+            customWsHost: null,
+        },
+        onCustomWsHost: (value) => {
+            persistedCustomWsHost = value;
+        },
+        applyTelemetryPanelHidden,
+        setGravityCutEnabled,
+        onLegacyStateMigrated: () => {
+            persistAppSettingsCookie();
+            clearLegacyAppSettingsStoragePure({
+                appSettingsStorageKey: APP_SETTINGS_STORAGE_KEY,
+                telemetryPanelHiddenKey: TELEMETRY_PANEL_HIDDEN_KEY,
+                legacyWsHostStorageKey: LEGACY_WS_HOST_STORAGE_KEY,
+            });
+        },
+    });
 }
 
 function getOrientationLabelForMode(mode) {
@@ -2467,215 +1689,84 @@ function getOrientationLabelForMode(mode) {
 }
 
 function getCurrentCalibrationCookieState() {
-    const state = {
-        version: CALIBRATION_COOKIE_VERSION,
-        mode: Number.isFinite(currentOrientationMode) ? Number(currentOrientationMode) : 0,
-        savedAt: Date.now(),
-    };
-
-    const normalizedQuaternion = normalizeQuaternionXYZW(calibrationMemory[1]);
-    if (normalizedQuaternion) {
-        state.worldSimpleQuaternion = normalizedQuaternion;
-    }
-
-    const viewportAdjustmentQuaternion = getViewportAdjustmentQuaternionXYZW();
-    if (viewportAdjustmentQuaternion && !isIdentityQuaternionXYZW(viewportAdjustmentQuaternion)) {
-        state.viewportAdjustmentQuaternion = viewportAdjustmentQuaternion;
-    }
-
-    const referenceState = sanitizeReferenceState(currentReferenceState);
-    if (referenceState) {
-        state.referenceState = referenceState;
-    }
-
-    const worldSimpleGyroState = sanitizeGyroZeroState(currentWorldSimpleGyroState);
-    if (worldSimpleGyroState) {
-        state.worldSimpleGyroState = worldSimpleGyroState;
-    }
-
-    const accelCalibrationScale = sanitizeAccelCalibrationScale(currentAccelCalibrationScale);
-    if (Math.abs(accelCalibrationScale - 1) > 1e-6) {
-        state.accelCalibrationScale = accelCalibrationScale;
-    }
-
-    if (Number.isFinite(tempgravity) && tempgravity > 0) {
-        state.gravityMagnitude = Number(tempgravity);
-    }
-
-    const viewportDisplaySettings = sanitizeViewportDisplaySettings(accVectorViewport.getDisplaySettings?.());
-    if (viewportDisplaySettings) {
-        state.viewportDisplaySettings = viewportDisplaySettings;
-    }
-
-    const motionViewportDisplaySettings = sanitizeMotionViewportDisplaySettings(motionViewport.getDisplaySettings?.());
-    if (motionViewportDisplaySettings) {
-        state.motionViewportDisplaySettings = motionViewportDisplaySettings;
-    }
-
-    const orientationLabel = getOrientationLabelForMode(state.mode);
-    if (orientationLabel) {
-        state.orientationLabel = orientationLabel;
-    }
-
-    return state;
+    return buildCurrentCalibrationCookieState({
+        calibrationCookieVersion: CALIBRATION_COOKIE_VERSION,
+        mode: currentOrientationMode,
+        worldSimpleQuaternion: calibrationMemory[1],
+        viewportAdjustmentQuaternion: getViewportAdjustmentQuaternionXYZW(),
+        referenceState: currentReferenceState,
+        worldSimpleGyroState: currentWorldSimpleGyroState,
+        accelCalibrationScale: currentAccelCalibrationScale,
+        gravityMagnitude: tempgravity,
+        viewportDisplaySettings: accVectorViewport.getDisplaySettings?.(),
+        motionViewportDisplaySettings: motionViewport.getDisplaySettings?.(),
+        orientationLabel: getOrientationLabelForMode(Number.isFinite(currentOrientationMode) ? Number(currentOrientationMode) : 0),
+    });
 }
 
 function persistCalibrationCookie() {
-    const state = getCurrentCalibrationCookieState();
-    const hasCalibrationPayload = Boolean(
-        state.worldSimpleQuaternion
-        || state.referenceState
-        || state.worldSimpleGyroState
-        || (Number.isFinite(state.accelCalibrationScale) && Math.abs(state.accelCalibrationScale - 1) > 1e-6)
-        || state.gravityMagnitude
-        || state.viewportAdjustmentQuaternion
-        || state.viewportDisplaySettings
-        || state.motionViewportDisplaySettings
-    );
-
-    if (!hasCalibrationPayload && state.mode === 0) {
-        clearCookieValue(CALIBRATION_COOKIE_NAME);
-        clearLocalStorageValue(CALIBRATION_STORAGE_KEY);
-        return;
-    }
-
-    const serializedState = JSON.stringify(state);
-    setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
-    setLocalStorageValue(CALIBRATION_STORAGE_KEY, serializedState);
-}
-
-function parseCalibrationPersistedState(rawState) {
-    const parsed = JSON.parse(rawState);
-    const state = {
-        version: Number(parsed?.version),
-        mode: Number.isFinite(Number(parsed?.mode)) ? Number(parsed.mode) : 0,
-        orientationLabel: typeof parsed?.orientationLabel === 'string' ? parsed.orientationLabel : null,
-        worldSimpleQuaternion: normalizeQuaternionXYZW(parsed?.worldSimpleQuaternion),
-        viewportAdjustmentQuaternion: normalizeQuaternionXYZW(parsed?.viewportAdjustmentQuaternion),
-        referenceState: sanitizeReferenceState(parsed?.referenceState),
-        worldSimpleGyroState: sanitizeGyroZeroState(parsed?.worldSimpleGyroState),
-        accelCalibrationScale: sanitizeAccelCalibrationScale(parsed?.accelCalibrationScale),
-        gravityMagnitude: Number(parsed?.gravityMagnitude),
-        viewportDisplaySettings: sanitizeViewportDisplaySettings(parsed?.viewportDisplaySettings),
-        motionViewportDisplaySettings: sanitizeMotionViewportDisplaySettings(parsed?.motionViewportDisplaySettings),
-    };
-
-    if (state.version !== CALIBRATION_COOKIE_VERSION) {
-        return null;
-    }
-
-    if (!Number.isFinite(state.gravityMagnitude) || state.gravityMagnitude <= 0) {
-        state.gravityMagnitude = null;
-    }
-
-    return state;
+    persistCalibrationCookieState({
+        calibrationCookieName: CALIBRATION_COOKIE_NAME,
+        calibrationStorageKey: CALIBRATION_STORAGE_KEY,
+        calibrationCookieMaxAgeSeconds: CALIBRATION_COOKIE_MAX_AGE_SECONDS,
+        state: getCurrentCalibrationCookieState(),
+    });
 }
 
 function readCalibrationCookieState() {
-    const rawCookie = getCookieValue(CALIBRATION_COOKIE_NAME);
-    if (rawCookie) {
-        try {
-            const state = parseCalibrationPersistedState(rawCookie);
-            if (!state) {
-                clearCookieValue(CALIBRATION_COOKIE_NAME);
-                return null;
-            }
-
-            return { state, source: 'cookie' };
-        } catch (error) {
-            console.warn('Kalibrierungs-Cookie konnte nicht gelesen werden:', error);
-            clearCookieValue(CALIBRATION_COOKIE_NAME);
-        }
-    }
-
-    const rawStorage = getLocalStorageValue(CALIBRATION_STORAGE_KEY);
-    if (!rawStorage) {
-        return null;
-    }
-
-    try {
-        const state = parseCalibrationPersistedState(rawStorage);
-        if (!state) {
-            clearLocalStorageValue(CALIBRATION_STORAGE_KEY);
-            return null;
-        }
-
-        return { state, source: 'localStorage' };
-    } catch (error) {
-        console.warn('Kalibrierungs-Backup konnte nicht gelesen werden:', error);
-        clearLocalStorageValue(CALIBRATION_STORAGE_KEY);
-        return null;
-    }
+    return readCalibrationCookieStatePure({
+        calibrationCookieName: CALIBRATION_COOKIE_NAME,
+        calibrationStorageKey: CALIBRATION_STORAGE_KEY,
+        calibrationCookieVersion: CALIBRATION_COOKIE_VERSION,
+    });
 }
 
 function restoreCalibrationFromCookie() {
-    const persisted = readCalibrationCookieState();
-    if (!persisted?.state) {
-        return;
-    }
-
-    const { state, source } = persisted;
-
-    if (state.worldSimpleQuaternion) {
-        setOrientationCalibrationQuaternion(state.worldSimpleQuaternion, { persistState: false });
-    }
-
-    if (state.referenceState) {
-        currentReferenceState = state.referenceState;
-        decodeWorker.postMessage({
-            type: 'referenceState',
-            payload: state.referenceState,
-        });
-    }
-
-    if (state.worldSimpleGyroState) {
-        setWorldSimpleGyroState(state.worldSimpleGyroState, { persistState: false });
-    }
-
-    setAccelCalibrationScale(state.accelCalibrationScale, { persistState: false });
-
-    if (state.gravityMagnitude) {
-        tempgravity = state.gravityMagnitude;
-        decodeWorker.postMessage({
-            type: 'gravity',
-            payload: {
-                gravity: state.gravityMagnitude,
-            }
-        });
-    }
-
-    applyOrientationMode(state.mode, {
-        syncDropdown: true,
-        optionLabel: state.orientationLabel,
-        persistState: false,
+    restoreCalibrationFromPersistence({
+        persisted: readCalibrationCookieState(),
+        setOrientationCalibrationQuaternion,
+        applyReferenceState: (referenceState) => {
+            currentReferenceState = referenceState;
+            decodeWorker.postMessage({
+                type: 'referenceState',
+                payload: referenceState,
+            });
+        },
+        setWorldSimpleGyroState,
+        setAccelCalibrationScale,
+        applyGravityMagnitude: (gravityMagnitude) => {
+            tempgravity = gravityMagnitude;
+            decodeWorker.postMessage({
+                type: 'gravity',
+                payload: {
+                    gravity: gravityMagnitude,
+                }
+            });
+        },
+        applyOrientationMode,
+        applyViewportAdjustmentQuaternion: (viewportAdjustmentQuaternion) => {
+            accVectorViewport.setAdjustmentQuaternion(viewportAdjustmentQuaternion || getIdentityQuaternionXYZW(), {
+                silent: true,
+                commit: false,
+            });
+        },
+        syncViewportPostTransformQuaternion,
+        applyViewportDisplaySettings: (viewportDisplaySettings) => {
+            accVectorViewport.applyDisplaySettings(viewportDisplaySettings, { silent: true });
+        },
+        applyMotionViewportDisplaySettings: (motionViewportDisplaySettings) => {
+            motionViewport.applyDisplaySettings(motionViewportDisplaySettings, { silent: true });
+        },
+        onLocalStorageStateMigrated: () => {
+            const serializedState = JSON.stringify(getCurrentCalibrationCookieState());
+            setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
+        },
+        persistCalibrationCookie,
     });
-
-    accVectorViewport.setAdjustmentQuaternion(state.viewportAdjustmentQuaternion || getIdentityQuaternionXYZW(), {
-        silent: true,
-        commit: false,
-    });
-    syncViewportPostTransformQuaternion({ persistState: false, resetLiveBuffers: false });
-
-    if (state.viewportDisplaySettings) {
-        accVectorViewport.applyDisplaySettings(state.viewportDisplaySettings, { silent: true });
-    }
-
-    if (state.motionViewportDisplaySettings) {
-        motionViewport.applyDisplaySettings(state.motionViewportDisplaySettings, { silent: true });
-    }
-
-    if (source === 'localStorage') {
-        const serializedState = JSON.stringify(getCurrentCalibrationCookieState());
-        setCookieValue(CALIBRATION_COOKIE_NAME, serializedState, CALIBRATION_COOKIE_MAX_AGE_SECONDS);
-    }
-
-    persistCalibrationCookie();
-
-    console.log('Kalibrierung aus Cookie wiederhergestellt:', state);
 }
 
 function setWorldSimpleGyroState(gyroState, { persistState = true } = {}) {
-    currentWorldSimpleGyroState = sanitizeGyroZeroState(gyroState);
+    currentWorldSimpleGyroState = updateWorldSimpleGyroState(gyroState);
 
     decodeWorker.postMessage({
         type: 'worldSimpleGyroState',
@@ -2688,7 +1779,7 @@ function setWorldSimpleGyroState(gyroState, { persistState = true } = {}) {
 }
 
 function setAccelCalibrationScale(scale, { persistState = true } = {}) {
-    currentAccelCalibrationScale = sanitizeAccelCalibrationScale(scale);
+    currentAccelCalibrationScale = updateAccelCalibrationScale(scale);
 
     decodeWorker.postMessage({
         type: 'accelCalibrationScale',
@@ -2703,18 +1794,21 @@ function setAccelCalibrationScale(scale, { persistState = true } = {}) {
 }
 
 function applyOrientationMode(mode, { syncDropdown = false, optionLabel = null, persistState = true } = {}) {
-    let normalizedMode = Number(mode);
-    if (!Number.isFinite(normalizedMode)) {
+    const resolvedMode = resolveOrientationMode(
+        mode,
+        ENABLE_FUSION_PIPELINE,
+        optionLabel,
+        getOrientationLabelForMode,
+    );
+    if (!resolvedMode) {
         return;
     }
 
-    if (!ENABLE_FUSION_PIPELINE && normalizedMode === 1) {
-        normalizedMode = 0;
-    }
+    const normalizedMode = resolvedMode.mode;
+    const resolvedLabel = resolvedMode.label;
 
     currentOrientationMode = normalizedMode;
 
-    const resolvedLabel = optionLabel || getOrientationLabelForMode(normalizedMode);
     if (resolvedLabel) {
         currentOrientationLabel = resolvedLabel;
         ensureOrientationOption(resolvedLabel, normalizedMode, 2);
@@ -2741,487 +1835,170 @@ function applyOrientationMode(mode, { syncDropdown = false, optionLabel = null, 
     }
 }
 
-function normalizeQuaternionXYZW(quaternion) {
-    const source = Array.isArray(quaternion)
-        ? quaternion
-        : (ArrayBuffer.isView(quaternion) || (typeof quaternion?.length === 'number' && quaternion.length >= 4))
-            ? Array.from(quaternion).slice(0, 4)
-            : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w];
-
-    if (!source || source.length < 4) {
-        return null;
-    }
-
-    const values = source.slice(0, 4).map((value) => Number(value));
-    if (values.some((value) => !Number.isFinite(value))) {
-        return null;
-    }
-
-    const length = Math.hypot(values[0], values[1], values[2], values[3]);
-    if (length < 1e-12) {
-        return null;
-    }
-
-    return values.map((value) => value / length);
-}
-
-function getIdentityQuaternionXYZW() {
-    return [0, 0, 0, 1];
-}
-
-function isIdentityQuaternionXYZW(quaternion) {
-    const normalizedQuaternion = normalizeQuaternionXYZW(quaternion);
-    if (!normalizedQuaternion) {
-        return false;
-    }
-
-    return Math.abs(normalizedQuaternion[0]) <= 1e-6
-        && Math.abs(normalizedQuaternion[1]) <= 1e-6
-        && Math.abs(normalizedQuaternion[2]) <= 1e-6
-        && Math.abs(normalizedQuaternion[3] - 1) <= 1e-6;
-}
-
-function convertQuaternionWXYZtoXYZW(quaternion) {
-    if (!Array.isArray(quaternion) || quaternion.length < 4) {
-        return null;
-    }
-
-    return normalizeQuaternionXYZW([quaternion[1], quaternion[2], quaternion[3], quaternion[0]]);
-}
-
-function applyQuaternionXYZWToSample(sample, quaternion) {
-    const normalizedQuaternion = normalizeQuaternionXYZW(quaternion);
-    if (!sample || !normalizedQuaternion) {
-        return null;
-    }
-
-    const [qx, qy, qz, qw] = normalizedQuaternion;
-    const qConjX = -qx;
-    const qConjY = -qy;
-    const qConjZ = -qz;
-    const qConjW = qw;
-    const vx = Number(sample.x || 0);
-    const vy = Number(sample.y || 0);
-    const vz = Number(sample.z || 0);
-    const tx = qw * vx + qy * vz - qz * vy;
-    const ty = qw * vy + qz * vx - qx * vz;
-    const tz = qw * vz + qx * vy - qy * vx;
-    const tw = -qx * vx - qy * vy - qz * vz;
-    const rx = tw * qConjX + tx * qConjW + ty * qConjZ - tz * qConjY;
-    const ry = tw * qConjY + ty * qConjW + tz * qConjX - tx * qConjZ;
-    const rz = tw * qConjZ + tz * qConjW + tx * qConjY - ty * qConjX;
-
-    return {
-        time: Number(sample.time || 0),
-        x: rx,
-        y: ry,
-        z: rz,
-        total: Math.hypot(rx, ry, rz),
-    };
-}
-
-function multiplyQuaternionsXYZW(leftQuaternion, rightQuaternion) {
-    const left = normalizeQuaternionXYZW(leftQuaternion);
-    const right = normalizeQuaternionXYZW(rightQuaternion);
-    if (!left && !right) {
-        return null;
-    }
-    if (!left) {
-        return right;
-    }
-    if (!right) {
-        return left;
-    }
-
-    const [lx, ly, lz, lw] = left;
-    const [rx, ry, rz, rw] = right;
-
-    return normalizeQuaternionXYZW([
-        lw * rx + lx * rw + ly * rz - lz * ry,
-        lw * ry - lx * rz + ly * rw + lz * rx,
-        lw * rz + lx * ry - ly * rx + lz * rw,
-        lw * rw - lx * rx - ly * ry - lz * rz,
-    ]);
-}
-
-function applyQuaternionWXYZToSample(sample, quaternion) {
-    if (!sample || !Array.isArray(quaternion) || quaternion.length < 4) {
-        return null;
-    }
-
-    const w = Number(quaternion[0]);
-    const x = Number(quaternion[1]);
-    const y = Number(quaternion[2]);
-    const z = Number(quaternion[3]);
-    if (![w, x, y, z].every(Number.isFinite)) {
-        return null;
-    }
-
-    const magnitude = Math.hypot(w, x, y, z);
-    if (magnitude < 1e-12) {
-        return null;
-    }
-
-    const nw = w / magnitude;
-    const nx = x / magnitude;
-    const ny = y / magnitude;
-    const nz = z / magnitude;
-    const vx = Number(sample.x || 0);
-    const vy = Number(sample.y || 0);
-    const vz = Number(sample.z || 0);
-    const tx = 2 * (ny * vz - nz * vy);
-    const ty = 2 * (nz * vx - nx * vz);
-    const tz = 2 * (nx * vy - ny * vx);
-    const rx = vx + nw * tx + (ny * tz - nz * ty);
-    const ry = vy + nw * ty + (nz * tx - nx * tz);
-    const rz = vz + nw * tz + (nx * ty - ny * tx);
-
-    return {
-        time: Number(sample.time || 0),
-        x: rx,
-        y: ry,
-        z: rz,
-        total: Math.hypot(rx, ry, rz),
-    };
-}
-
     function getGravityCutVectorSample(gravityMagnitude) {
-        const normalizedGravity = Number.isFinite(gravityMagnitude) && gravityMagnitude > 0 ? gravityMagnitude : 1000;
-
-        if (currentOrientationMode === 3) {
-            return {
-                time: 0,
-                x: 0,
-                y: 0,
-                z: 0,
-                total: 0,
-            };
-        }
-
-        const gravityVector = {
-            time: 0,
-            x: 0,
-            y: 0,
-            z: -normalizedGravity,
-            total: normalizedGravity,
-        };
-
-        if (currentOrientationMode === 0) {
-            return gravityVector;
-        }
-
-        const adjustmentQuaternion = getViewportAdjustmentQuaternionXYZW();
-        if (!adjustmentQuaternion || isIdentityQuaternionXYZW(adjustmentQuaternion)) {
-            return gravityVector;
-        }
-
-        return applyQuaternionXYZWToSample(gravityVector, adjustmentQuaternion) || gravityVector;
+        return resolveGravityCutVectorSample(
+            gravityMagnitude,
+            currentOrientationMode,
+            getViewportAdjustmentQuaternionXYZW(),
+        );
     }
 
     function applyGravityCutToSample(sample, gravityMagnitude, gravityVector = null) {
-    if (!sample) {
-        return null;
+        return applyGravityCutToSamplePure(sample, gravityMagnitude, gravityVector || getGravityCutVectorSample(gravityMagnitude));
     }
-
-    const normalizedGravity = Number.isFinite(gravityMagnitude) && gravityMagnitude > 0 ? gravityMagnitude : 1000;
-        const resolvedGravityVector = gravityVector || getGravityCutVectorSample(normalizedGravity);
-        const gravityX = Number(resolvedGravityVector?.x || 0);
-        const gravityY = Number(resolvedGravityVector?.y || 0);
-        const gravityZ = Number(resolvedGravityVector?.z ?? -normalizedGravity);
-        const x = Number(sample.x || 0) - gravityX;
-        const y = Number(sample.y || 0) - gravityY;
-        const z = Number(sample.z || 0) - gravityZ;
-
-    return {
-        time: Number(sample.time || 0),
-        x,
-        y,
-        z,
-        total: Math.hypot(x, y, z),
-    };
-}
 
 function applyAccelCalibrationScale(sample, scale = currentAccelCalibrationScale) {
-    if (!sample) {
-        return null;
-    }
-
-    const normalizedScale = sanitizeAccelCalibrationScale(scale);
-    if (Math.abs(normalizedScale - 1) <= 1e-6) {
-        return sample;
-    }
-
-    const x = Number(sample.x || 0) * normalizedScale;
-    const y = Number(sample.y || 0) * normalizedScale;
-    const z = Number(sample.z || 0) * normalizedScale;
-
-    return {
-        time: Number(sample.time || 0),
-        x,
-        y,
-        z,
-        total: Math.hypot(x, y, z),
-    };
-}
-
-function applyReferenceToSample(sample, referenceState) {
-    if (!sample || !referenceState) {
-        return null;
-    }
-
-    const x = Number(sample.x || 0) - Number(referenceState.x || 0);
-    const y = Number(sample.y || 0) - Number(referenceState.y || 0);
-    const z = Number(sample.z || 0) - Number(referenceState.z || 0);
-
-    return {
-        time: Number(sample.time || 0),
-        x,
-        y,
-        z,
-        total: Math.hypot(x, y, z),
-    };
+    return applyAccelCalibrationScalePure(sample, scale);
 }
 
 function getViewportGravityMagnitude() {
-    if (Number.isFinite(tempgravity) && tempgravity > 0) {
-        return tempgravity;
-    }
-
-    return 1000;
+    return getViewportGravityMagnitudePure(tempgravity);
 }
 
 function getViewportBaseQuaternionXYZW() {
-    if (currentOrientationMode === 2) {
-        return normalizeQuaternionXYZW(calibrationMemory[1]) || convertQuaternionWXYZtoXYZW(ausrichtung);
+    if (accVectorViewport && accVectorViewport.activeNodeIp && accVectorViewport.activeNodeIp !== 'master') {
+        const node = window.getNodeByIp(accVectorViewport.activeNodeIp);
+        if (node && node.calibrationState && node.calibrationState.quat) {
+             return Array.from(node.calibrationState.quat);
+        }
+        return getIdentityQuaternionXYZW();
     }
-
-    if (currentOrientationMode === 1) {
-        return convertQuaternionWXYZtoXYZW(ausrichtung) || normalizeQuaternionXYZW(calibrationMemory[1]);
-    }
-
-    return normalizeQuaternionXYZW(calibrationMemory[1]) || convertQuaternionWXYZtoXYZW(ausrichtung);
+    return getViewportBaseQuaternionXYZWPure(
+        currentOrientationMode,
+        calibrationMemory[1],
+        ausrichtung,
+    );
 }
 
 function getViewportAdjustmentQuaternionXYZW() {
-    return normalizeQuaternionXYZW(accVectorViewport.getAdjustmentQuaternion?.()) || getIdentityQuaternionXYZW();
+    return getViewportAdjustmentQuaternionXYZWPure(accVectorViewport.getAdjustmentQuaternion?.());
 }
 
 function getViewportEffectiveQuaternionXYZW() {
-    if (currentOrientationMode === 0) {
-        return null;
-    }
-
-    return multiplyQuaternionsXYZW(
+    return getViewportEffectiveQuaternionXYZWPure(
+        currentOrientationMode,
         getViewportAdjustmentQuaternionXYZW(),
         getViewportBaseQuaternionXYZW(),
-    ) || getViewportAdjustmentQuaternionXYZW();
+    );
 }
 
 function syncMotionWorkerTransform({ reset = false } = {}) {
-    if (!ENABLE_MOTION_VIEW) {
-        return;
+    syncMotionWorkerTransformPure({
+        enableMotionView: ENABLE_MOTION_VIEW,
+        motionWorker,
+        effectiveQuaternion: getViewportEffectiveQuaternionXYZW(),
+        currentOrientationMode,
+        gravityMagnitude: getViewportGravityMagnitude(),
+        reset,
+    });
+}
+
+
+
+function syncViewportBaseQuaternion({ silent = true } = {}) {
+    syncViewportBaseQuaternionPure({
+        accVectorViewport,
+        baseQuaternion: getViewportBaseQuaternionXYZW(),
+        silent,
+    });
+}
+
+function syncViewportPostTransformQuaternion({ persistState = false, resetLiveBuffers = false } = {}) {
+    let targetWorker = decodeWorker;
+    let targetNode = null;
+    
+    if (accVectorViewport && accVectorViewport.activeNodeIp && accVectorViewport.activeNodeIp !== 'master') {
+        const nodeInfo = window.getNodeByIp(accVectorViewport.activeNodeIp);
+        if (nodeInfo && nodeInfo.decodeWorker) {
+            targetWorker = nodeInfo.decodeWorker;
+            targetNode = nodeInfo;
+        }
     }
 
-    motionWorker.postMessage({
-        type: 'transform',
-        payload: {
-            quaternion: getViewportEffectiveQuaternionXYZW(),
-            active: currentOrientationMode !== 0,
-            gravityMagnitudeMg: getViewportGravityMagnitude(),
-            reset,
+    syncViewportPostTransformQuaternionPure({
+        decodeWorker: targetWorker,
+        persistState,
+        resetLiveBuffers,
+        onResetLiveBuffers: resetOrientationLiveBuffers,
+        onPersistState: () => {
+             if (targetNode) {
+                 window.persistNodeCalibration(targetNode);
+             } else {
+                 persistCalibrationCookie();
+             }
         },
     });
 }
 
-function syncViewportBaseQuaternion({ silent = true } = {}) {
-    const baseQuaternion = getViewportBaseQuaternionXYZW() || getIdentityQuaternionXYZW();
-    accVectorViewport.setBaseQuaternion(baseQuaternion, { silent, commit: false });
+window.onAccVectorNodeChanged = function(ip) {
+    if (!accVectorViewport) return;
+    
+    if (typeof accVectorViewport.resetRotation === 'function') {
+        accVectorViewport.resetRotation();
+    }
+    
+    syncViewportBaseQuaternion({ silent: true });
+    accVectorViewport.setStatus(`Kanal gewechselt auf ${ip === 'master' ? 'Master (CH1)' : ip}`);
+};
+
+function getOrientationRuntimeContext() {
+    return {
+        currentOrientationMode,
+        currentReferenceState,
+        currentWorldSimpleGyroState,
+        currentAccelCalibrationScale,
+        gravityCutEnabled,
+        gravityMagnitude: tempgravity,
+        adjustmentQuaternion: getViewportAdjustmentQuaternionXYZW(),
+        effectiveQuaternion: getViewportEffectiveQuaternionXYZW(),
+        ausrichtungQuaternion: ausrichtung,
+    };
 }
 
-function syncViewportPostTransformQuaternion({ persistState = false, resetLiveBuffers = false } = {}) {
-    decodeWorker.postMessage({
-        type: 'postTransformQuaternion',
-        payload: {
-            quaternion: getIdentityQuaternionXYZW(),
-        }
-    });
-
-    if (resetLiveBuffers) {
-        resetOrientationLiveBuffers();
-    }
-
-    if (persistState) {
-        persistCalibrationCookie();
-    }
-}
-
-function buildLiveAccelerationSample(rawSample, processedSample) {
-    const raw = rawSample || processedSample || null;
-    if (!raw) {
-        return null;
-    }
-
-    if (currentOrientationMode === 0) {
-        return processedSample || raw;
-    }
-
-    const calibratedSample = buildViewportBaseAccelerationSample(raw) || processedSample || raw;
-    if (gravityCutEnabled) {
-        const gravityMagnitude = getViewportGravityMagnitude();
-        const gravityVector = getGravityCutVectorSample(gravityMagnitude);
-        return applyGravityCutToSample(calibratedSample, gravityMagnitude, gravityVector) || calibratedSample;
-    }
-
-    return calibratedSample;
+window.buildLiveAccelerationSample = function(rawSample, processedSample) {
+    return buildLiveAccelerationSamplePure(rawSample, processedSample, getOrientationRuntimeContext());
 }
 
 function buildMotionAccelerationSample(rawSample, processedSample) {
-    const raw = rawSample || processedSample || null;
-    if (!raw) {
-        return null;
-    }
-
-    const gravityMagnitude = getViewportGravityMagnitude();
-    const gravityVector = getGravityCutVectorSample(gravityMagnitude);
-    const calibratedSample = buildViewportBaseAccelerationSample(raw) || processedSample || raw;
-    return applyGravityCutToSample(calibratedSample, gravityMagnitude, gravityVector) || calibratedSample;
+    return buildMotionAccelerationSamplePure(rawSample, processedSample, getOrientationRuntimeContext());
 }
 
-function buildLiveGyroSample(rawSample, processedSample) {
-    const raw = rawSample || processedSample || null;
-    if (!raw) {
-        return null;
-    }
-
-    if (currentOrientationMode === 0) {
-        return processedSample || raw;
-    }
-
-    const samples = buildViewportGyroSamples(raw, processedSample);
-    return samples.calibrated || processedSample || raw;
+window.buildLiveGyroSample = function(rawSample, processedSample) {
+    return buildLiveGyroSamplePure(rawSample, processedSample, getOrientationRuntimeContext());
 }
 
 function setOrientationCalibrationQuaternion(quaternion, { persistState = true } = {}) {
-    const normalizedQuaternion = normalizeQuaternionXYZW(quaternion);
-    calibrationMemory[1] = normalizedQuaternion ? normalizedQuaternion.slice() : null;
-    decodeWorker.postMessage({
-        type: 'calibdata',
-        payload: {
-            type: 2,
-            quaternion: normalizedQuaternion,
-        }
+    setOrientationCalibrationQuaternionPure({
+        quaternion,
+        decodeWorker,
+        onQuaternionStored: (normalizedQuaternion) => {
+            calibrationMemory[1] = normalizedQuaternion;
+            if (window.activeSensors && window.activeSensors[0]) {
+                window.activeSensors[0].calibrationState = window.activeSensors[0].calibrationState || {};
+                window.activeSensors[0].calibrationState.quat = normalizedQuaternion;
+            }
+        },
+        onSyncViewportBaseQuaternion: () => {
+            syncViewportBaseQuaternion({ silent: true });
+        },
+        onSyncMotionWorkerTransform: () => {
+            syncMotionWorkerTransform({ reset: true });
+        },
+        persistState,
+        onPersistState: persistCalibrationCookie,
     });
-    syncViewportBaseQuaternion({ silent: true });
-    syncMotionWorkerTransform({ reset: true });
-
-    if (persistState) {
-        persistCalibrationCookie();
-    }
 }
 
 function buildViewportBaseAccelerationSample(rawSample) {
-    if (!rawSample) {
-        return null;
-    }
-
-    if (currentOrientationMode === 3 && currentReferenceState) {
-        const referenceSample = applyReferenceToSample(rawSample, currentReferenceState);
-        const effectiveQuaternion = getViewportAdjustmentQuaternionXYZW();
-        if (!referenceSample || isIdentityQuaternionXYZW(effectiveQuaternion)) {
-            return referenceSample;
-        }
-
-        return applyQuaternionXYZWToSample(referenceSample, effectiveQuaternion) || referenceSample;
-    }
-
-    if (currentOrientationMode !== 0) {
-        const effectiveQuaternion = getViewportEffectiveQuaternionXYZW();
-        if (currentOrientationMode === 1) {
-            if (effectiveQuaternion) {
-                return applyQuaternionXYZWToSample(rawSample, effectiveQuaternion) || rawSample;
-            }
-
-            return applyQuaternionWXYZToSample(rawSample, ausrichtung) || rawSample;
-        }
-
-        if (effectiveQuaternion) {
-            return applyAccelCalibrationScale(applyQuaternionXYZWToSample(rawSample, effectiveQuaternion)) || rawSample;
-        }
-    }
-
-    return rawSample;
+    return buildViewportBaseAccelerationSamplePure(rawSample, getOrientationRuntimeContext());
 }
 
 function buildViewportAccelerationSamples(rawSample, processedSample) {
-    const raw = rawSample || processedSample || null;
-    let calibrated = processedSample || raw;
-    let calibratedCut = null;
-    const gravityMagnitude = getViewportGravityMagnitude();
-    const gravityVector = getGravityCutVectorSample(gravityMagnitude);
-
-    if (raw) {
-        calibrated = buildViewportBaseAccelerationSample(raw) || calibrated;
-        calibratedCut = applyGravityCutToSample(calibrated, gravityMagnitude, gravityVector) || calibrated;
-    }
-
-    if (!calibratedCut) {
-        calibratedCut = applyGravityCutToSample(processedSample || calibrated || raw, gravityMagnitude, gravityVector) || calibrated || raw;
-    }
-
-    return {
-        raw,
-        calibrated,
-        calibratedCut,
-    };
+    return buildViewportAccelerationSamplesPure(rawSample, processedSample, getOrientationRuntimeContext());
 }
 
 function buildViewportGyroSamples(rawSample, processedSample) {
-    const raw = rawSample || processedSample || null;
-    let calibrated = processedSample || raw;
-    let calibratedCut = processedSample || raw;
-
-    if (raw) {
-        if (currentOrientationMode === 3 && currentReferenceState) {
-            const referenceGyro = {
-                time: Number(raw.time || 0),
-                x: Number(raw.x || 0) - Number(currentReferenceState.gx || 0),
-                y: Number(raw.y || 0) - Number(currentReferenceState.gy || 0),
-                z: Number(raw.z || 0) - Number(currentReferenceState.gz || 0),
-            };
-            const adjustmentQuaternion = getViewportAdjustmentQuaternionXYZW();
-            calibrated = isIdentityQuaternionXYZW(adjustmentQuaternion)
-                ? referenceGyro
-                : (applyQuaternionXYZWToSample(referenceGyro, adjustmentQuaternion) || referenceGyro);
-            calibrated.total = Math.hypot(calibrated.x, calibrated.y, calibrated.z);
-            calibratedCut = calibrated;
-        } else if (currentOrientationMode === 1) {
-            const effectiveQuaternion = getViewportEffectiveQuaternionXYZW();
-            calibrated = effectiveQuaternion
-                ? (applyQuaternionXYZWToSample(raw, effectiveQuaternion) || calibrated)
-                : (applyQuaternionWXYZToSample(raw, ausrichtung) || calibrated);
-            calibratedCut = calibrated;
-        } else {
-            const calibrationQuaternion = getViewportEffectiveQuaternionXYZW();
-            if (calibrationQuaternion) {
-                const worldSimpleGyroRaw = currentOrientationMode === 2 && currentWorldSimpleGyroState
-                    ? {
-                        time: Number(raw.time || 0),
-                        x: Number(raw.x || 0) - Number(currentWorldSimpleGyroState.x || 0),
-                        y: Number(raw.y || 0) - Number(currentWorldSimpleGyroState.y || 0),
-                        z: Number(raw.z || 0) - Number(currentWorldSimpleGyroState.z || 0),
-                    }
-                    : raw;
-                calibrated = applyQuaternionXYZWToSample(worldSimpleGyroRaw, calibrationQuaternion) || calibrated;
-                calibratedCut = calibrated;
-            }
-        }
-    }
-
-    return {
-        raw,
-        calibrated,
-        calibratedCut,
-    };
+    return buildViewportGyroSamplesPure(rawSample, processedSample, getOrientationRuntimeContext());
 }
 
 if (alignLoadQuatBtn) {
@@ -3233,6 +2010,26 @@ if (alignLoadQuatBtn) {
 
 if (alignApplyQuatBtn) {
     alignApplyQuatBtn.addEventListener('click', () => {
+        let qArray = null;
+        if (typeof accVectorViewport.getAppliedQuaternionObject === 'function') {
+            const obj = accVectorViewport.getAppliedQuaternionObject();
+            if (obj) qArray = [obj.x, obj.y, obj.z, obj.w];
+        }
+
+        if (accVectorViewport && accVectorViewport.activeNodeIp && accVectorViewport.activeNodeIp !== 'master') {
+             const node = window.getNodeByIp(accVectorViewport.activeNodeIp);
+             if (node && qArray) {
+                 node.calibrationState = node.calibrationState || {};
+                 node.calibrationState.quat = qArray;
+                 if (node.decodeWorker) {
+                      node.decodeWorker.postMessage({ type: 'calibdata', payload: { type: 2, quaternion: qArray }});
+                 }
+                 window.persistNodeCalibration(node);
+             }
+        } else {
+             if (qArray) setOrientationCalibrationQuaternion(qArray, { persistState: true });
+        }
+        
         syncViewportBaseQuaternion({ silent: true });
         syncViewportPostTransformQuaternion({ persistState: true, resetLiveBuffers: true });
         accVectorViewport.setStatus('Live-Pipeline mit Zusatzrotation synchronisiert');
@@ -3240,273 +2037,24 @@ if (alignApplyQuatBtn) {
 }
 
 function calculateStats(values) {
-    if (!values || values.length === 0) {
-        return { mean: 0, stdDev: 0, delta: 0 };
-    }
-
-    let sum = 0;
-    let min = values[0];
-    let max = values[0];
-
-    for (let index = 0; index < values.length; index++) {
-        const value = values[index];
-        sum += value;
-        if (value < min) min = value;
-        if (value > max) max = value;
-    }
-
-    const mean = sum / values.length;
-    let squaredDiffSum = 0;
-
-    for (let index = 0; index < values.length; index++) {
-        const diff = values[index] - mean;
-        squaredDiffSum += diff * diff;
-    }
-
-    return {
-        mean,
-        stdDev: Math.sqrt(squaredDiffSum / values.length),
-        delta: max - min,
-    };
+    return calculateStatsPure(values);
 }
 
 function getBufferAxisStats(buffer, fieldName) {
-    return calculateStats(buffer.getFieldTypedArray(fieldName, buffer.length));
+    return getBufferAxisStatsPure(buffer, fieldName);
 }
 
 function buildCalibrationStatsTableHtml(accSampleCount, gyroSampleCount, accStats, gyroStats) {
-    const rows = [
-        { sensor: 'ACC', axis: 'X', stats: accStats.x, unit: 'mg' },
-        { sensor: 'ACC', axis: 'Y', stats: accStats.y, unit: 'mg' },
-        { sensor: 'ACC', axis: 'Z', stats: accStats.z, unit: 'mg' },
-        { sensor: 'Gyro', axis: 'X', stats: gyroStats.x, unit: 'mdps' },
-        { sensor: 'Gyro', axis: 'Y', stats: gyroStats.y, unit: 'mdps' },
-        { sensor: 'Gyro', axis: 'Z', stats: gyroStats.z, unit: 'mdps' },
-    ];
-
-    const bodyRows = rows.map(row => `
-        <tr>
-            <td>${row.sensor}</td>
-            <td>${row.axis}</td>
-            <td>${row.stats.mean.toFixed(2)} ${row.unit}</td>
-            <td>${row.stats.stdDev.toFixed(2)} ${row.unit}</td>
-            <td>${row.stats.delta.toFixed(2)} ${row.unit}</td>
-        </tr>
-    `).join('');
-
-    return `
-        <div class="calibration-summary">
-            <div class="calibration-summary-meta">
-                <span>ACC Samples: ${accSampleCount}</span>
-                <span>Gyro Samples: ${gyroSampleCount}</span>
-            </div>
-            <table class="calibration-summary-table">
-                <thead>
-                    <tr>
-                        <th>Sensor</th>
-                        <th>Achse</th>
-                        <th>Mittel</th>
-                        <th>StdAbw</th>
-                        <th>Delta</th>
-                    </tr>
-                </thead>
-                <tbody>${bodyRows}</tbody>
-            </table>
-        </div>
-    `;
+    return buildCalibrationStatsTableHtmlPure(accSampleCount, gyroSampleCount, accStats, gyroStats);
 }
 
 function buildSingleSensorStatsTableHtml(sensorLabel, sampleCount, stats, unit) {
-    const rows = [
-        { axis: 'X', stats: stats.x },
-        { axis: 'Y', stats: stats.y },
-        { axis: 'Z', stats: stats.z },
-    ];
-
-    const bodyRows = rows.map(row => `
-        <tr>
-            <td>${sensorLabel}</td>
-            <td>${row.axis}</td>
-            <td>${row.stats.mean.toFixed(2)} ${unit}</td>
-            <td>${row.stats.stdDev.toFixed(2)} ${unit}</td>
-            <td>${row.stats.delta.toFixed(2)} ${unit}</td>
-        </tr>
-    `).join('');
-
-    return `
-        <div class="calibration-summary">
-            <div class="calibration-summary-meta">
-                <span>${sensorLabel} Samples: ${sampleCount}</span>
-            </div>
-            <table class="calibration-summary-table">
-                <thead>
-                    <tr>
-                        <th>Sensor</th>
-                        <th>Achse</th>
-                        <th>Mittel</th>
-                        <th>StdAbw</th>
-                        <th>Delta</th>
-                    </tr>
-                </thead>
-                <tbody>${bodyRows}</tbody>
-            </table>
-        </div>
-    `;
+    return buildSingleSensorStatsTableHtmlPure(sensorLabel, sampleCount, stats, unit);
 }
 
 
 
-const accelRangeDD2 = new UniDropdown(document.getElementById('accelRangeDD2'), {
-    type: 'select',
-    label: 'Acc Range',
-    items: [
-        { value: 2, label: "±2g" },
-        { value: 4, label: "±4g" },
-        { value: 8, label: "±8g" },
-        { value: 16, label: "±16g" },
-    ],
-    onChange: (value, label) => {
-        // Aktuelle Einstellungen in ein JSON-Objekt umwandeln
-        const settingsJSON = JSON.stringify({
-            ACCELRANGE: value
-        });
-        // Nachricht an den WebSocket-Worker senden
-        wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const accelSampleRateDD2 = new UniDropdown(document.getElementById('accelSampleRateDD2'), {
-    type: 'select',
-    label: 'Sample Rate',
-    items: [
-        { value: 0, label: "OFF" },
-        { value: 125, label: "12.5 Hz" },
-        { value: 26, label: "26 Hz" },
-        { value: 52, label: "52 Hz" },
-        { value: 104, label: "104 Hz" },
-        { value: 208, label: "208 Hz" },
-        { value: 416, label: "416 Hz" },
-        { value: 833, label: "833 Hz" },
-        { value: 1660, label: "1660 Hz" },
-        { value: 3330, label: "3330 Hz" },
-        { value: 6660, label: "6660 Hz" }
-    ],
-    onChange: (value, label) => {
-        // Aktuelle Einstellungen in ein JSON-Objekt umwandeln
-        const settingsJSON = JSON.stringify({
-            ACCELSAMPLERATE: value
-        });
-        // Nachricht an den WebSocket-Worker senden
-        wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const accelFilterDD2 = new UniDropdown(document.getElementById('accelFilterDD2'), {
-    type: 'select',
-    label: 'Accel Filter',
-    items: [
-        { value: "OFF", label: "OFF" },
-        { value: "LOWPASS", label: "LOWPASS" },
-        { value: "HIGHPASS1", label: "HIGHPASS 1" },
-        { value: "HIGHPASS2", label: "HIGHPASS 2" },
 
-    ],
-    onChange: (value, label) => {
-        // Aktuelle Einstellungen in ein JSON-Objekt umwandeln
-        const settingsJSON = JSON.stringify({
-            ACCELFILTER: value
-        });
-        // Nachricht an den WebSocket-Worker senden
-        wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const gyroRangeDD2 = new UniDropdown(document.getElementById('gyroRangeDD2'), {
-    type: 'select',
-    label: 'Gyro Range',
-    items: [
-        { value: 125, label: "±125°/s" },
-        { value: 250, label: "±250°/s" },
-        { value: 500, label: "±500°/s" },
-        { value: 1000, label: "±1000°/s" },
-        { value: 2000, label: "±2000°/s" },
-    ],
-    onChange: (value, label) => {
-        // Aktuelle Einstellungen in ein JSON-Objekt umwandeln
-        const settingsJSON = JSON.stringify({
-            GYRORANGE: value
-        });
-        // Nachricht an den WebSocket-Worker senden
-        wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const gyroSampleRateDD2 = new UniDropdown(document.getElementById('gyroSampleRateDD2'), {
-    type: 'select',
-    label: 'Gyro Sample Rate',
-    items: [
-        { value: 0, label: "OFF" },
-        { value: 125, label: "12.5 Hz" },
-        { value: 26, label: "26 Hz" },
-        { value: 52, label: "52 Hz" },
-        { value: 104, label: "104 Hz" },
-        { value: 208, label: "208 Hz" },
-        { value: 416, label: "416 Hz" },
-        { value: 833, label: "833 Hz" },
-        { value: 1660, label: "1660 Hz" },
-        { value: 3330, label: "3330 Hz" },
-        { value: 6660, label: "6660 Hz" }
-    ],
-    onChange: (value, label) => {
-        // Aktuelle Einstellungen in ein JSON-Objekt umwandeln
-        const settingsJSON = JSON.stringify({
-            GYROSAMPLERATE: value
-        });
-        // Nachricht an den WebSocket-Worker senden
-        wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const gyroFilterDD2 = new UniDropdown(document.getElementById('gyroFilterDD2'), {
-    type: 'select',
-    label: 'Gyro Filter',
-    items: [
-        { value: "OFF", label: "OFF" },
-        { value: "LOWPASS", label: "LOWPASS" },
-        { value: "HIGHPASS1", label: "HIGHPASS 1" },
-        { value: "HIGHPASS2", label: "HIGHPASS 2" },
-
-    ],
-    onChange: (value, label) => {
-        // Aktuelle Einstellungen in ein JSON-Objekt umwandeln
-        const settingsJSON = JSON.stringify({
-            GYROFILTER: value
-        });
-        // Nachricht an den WebSocket-Worker senden
-        wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
-        console.log('Ausgewählt:', value, label);
-    }
-});
-const tempSampleRateDD2 = new UniDropdown(document.getElementById('tempSampleRateDD2'), {
-    type: 'select',
-    label: 'Temp Samplerate',
-    items: [
-        { value: "0", label: "OFF" },
-        { value: "1", label: "1.6 Hz" },
-        { value: "2", label: "12.5 Hz" },
-        { value: "3", label: "52 Hz" },
-
-    ],
-    onChange: (value, label) => {
-        // Aktuelle Einstellungen in ein JSON-Objekt umwandeln
-        const settingsJSON = JSON.stringify({
-            TEMPSAMPLERATE: value
-        });
-        // Nachricht an den WebSocket-Worker senden
-        wsWorker.postMessage({ type: 'send', msgContent: settingsJSON });
-        console.log('Ausgewählt:', value, label);
-    }
-});
 
 
 // LIVECHARTSETTINGS
@@ -3561,6 +2109,9 @@ let paused = false;
 let autoScroll = true;
 let pausedLastTimestamp = 0;
 let panOffset = 0;
+let liveChartPanOffset = 0;
+let rmsPanOffset = 0;
+let gyroRmsPanOffset = 0;
 let currentTimeRange = 5;
 let samplesReceived = 0;
 let lastRateCheck = performance.now();
@@ -3575,82 +2126,36 @@ let tts = 0.0;
 let fts = 0.0;
 let lts = 0.0;
 
-function formatRecordedValue(value, digits = 1) {
-    return Number.isFinite(value) ? value.toFixed(digits) : "";
+function createAccRecordingRow(sample, channelIndex = 0) {
+    return createRecordingRow(sample, channelIndex);
 }
 
-function createAccRecordingRow(sample) {
-    return [
-        formatMicrosecondsToHMS(sample.time, 6),
-        sample.time,
-        formatRecordedValue(sample.x),
-        formatRecordedValue(sample.y),
-        formatRecordedValue(sample.z),
-    ];
-}
-
-function createGyroRecordingRow(sample) {
-    return [
-        formatMicrosecondsToHMS(sample.time, 6),
-        sample.time,
-        formatRecordedValue(sample.x),
-        formatRecordedValue(sample.y),
-        formatRecordedValue(sample.z),
-    ];
+function createGyroRecordingRow(sample, channelIndex = 0) {
+    return createRecordingRow(sample, channelIndex);
 }
 
 function downloadRecordedCsv(isIntermediate = false) {
-    if (!recordedAccRows.length && !recordedGyroRows.length) {
+    const downloadBtn = document.getElementById("downloadBtn");
+    const activeQuaternion = Array.isArray(calibrationMemory[1]) && calibrationMemory[1].length === 4
+        ? calibrationMemory[1]
+        : (ausrichtung && ausrichtung.some(v => v !== 0) ? ausrichtung : [0, 0, 0, 1]);
+    const result = downloadRecordedCsvPure({
+        isIntermediate,
+        recordedAccRows,
+        recordedGyroRows,
+        filePartIndex,
+        accCsvHeaders: ACC_CSV_HEADERS,
+        gyroCsvHeaders: GYRO_CSV_HEADERS,
+        activeQuaternion,
+        recordingDateStr: window.currentRecordingDateStr || new Date().toLocaleString('de-DE'),
+    });
+
+    if (!result.downloaded) {
         return false;
     }
 
-    const downloadBtn = document.getElementById("downloadBtn");
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "_");
-    const suffix = isIntermediate ? `_part${String(filePartIndex).padStart(3, '0')}` : "";
-
-    function getActiveQuaternion() {
-        if (typeof calibrationMemory !== 'undefined' && Array.isArray(calibrationMemory[1]) && calibrationMemory[1].length === 4) {
-            return calibrationMemory[1];
-        }
-        if (typeof ausrichtung !== 'undefined' && ausrichtung && ausrichtung.some(v => v !== 0)) {
-            return ausrichtung;
-        }
-        return [0, 0, 0, 1];
-    }
-    const activeQuat = getActiveQuaternion();
-    const quatString = activeQuat.map(v => Number(v).toFixed(4)).join(", ");
-    
-    // Store full local date string captured at the START of the recording
-    const recordingDateStr = window.currentRecordingDateStr || new Date().toLocaleString('de-DE');
-
-    if (recordedAccRows.length > 0) {
-        const headerInfoAcc = `"# Gesamtquaternion: [${quatString}]"\n"# Recording Date: [${recordingDateStr}]"\n`;
-        const headerAcc = ACC_CSV_HEADERS.join(",");
-        const csvAcc = `${headerInfoAcc}${headerAcc}\n${recordedAccRows.map((row) => row.join(",")).join("\n")}`;
-        const blobAcc = new Blob([csvAcc], { type: "text/csv" });
-        const urlAcc = URL.createObjectURL(blobAcc);
-        const anchorAcc = document.createElement("a");
-        anchorAcc.href = urlAcc;
-        anchorAcc.download = `recording_${timestamp}${suffix}_acc.csv`;
-        anchorAcc.click();
-        URL.revokeObjectURL(urlAcc);
-    }
-
-    if (recordedGyroRows.length > 0) {
-        const headerInfoGyro = `"# Gesamtquaternion: [${quatString}]"\n"# Recording Date: [${recordingDateStr}]"\n`;
-        const headerGyro = GYRO_CSV_HEADERS.join(",");
-        const csvGyro = `${headerInfoGyro}${headerGyro}\n${recordedGyroRows.map((row) => row.join(",")).join("\n")}`;
-        const blobGyro = new Blob([csvGyro], { type: "text/csv" });
-        const urlGyro = URL.createObjectURL(blobGyro);
-        const anchorGyro = document.createElement("a");
-        anchorGyro.href = urlGyro;
-        anchorGyro.download = `recording_${timestamp}${suffix}_gyro.csv`;
-        anchorGyro.click();
-        URL.revokeObjectURL(urlGyro);
-    }
-
     if (isIntermediate) {
-        filePartIndex += 1;
+        filePartIndex = result.nextFilePartIndex;
         recordedAccRows = [];
         recordedGyroRows = [];
     } else if (downloadBtn) {
@@ -3715,21 +2220,87 @@ const layout = {
 
 // FFT PLOT
 
-//let fftWorker = null;updat
+let fftWorker = null;
+let rmsWorker = null;
+let gyroFftWorker = null;
+let gyroRmsWorker = null;
 let fftPlot = null;
 let rmsPlot = null;
 let gyroFftPlot = null;
 let gyroRmsPlot = null;
 
+const chartInteractionRuntime = createChartInteractionRuntime({
+    getChart: () => chart,
+    getGyroChart: () => gyroChart,
+    getRmsPlot: () => rmsPlot,
+    getGyroRmsPlot: () => gyroRmsPlot,
+    getFftPlot: () => fftPlot,
+    getGyroFftPlot: () => gyroFftPlot,
+    getLiveChartSize: () => getSize(),
+    getGyroChartSize: () => getGyroChartSize(),
+    getFftChartSize: () => getFftChartSize(),
+    getRmsChartSize: () => getRmsChartSize(),
+    getGyroFftChartSize: () => getGyroFftChartSize(),
+    getGyroRmsChartSize: () => getGyroRmsChartSize(),
+    updateLiveChartPanelHeights,
+    updateFftRmsPanelHeights,
+    updateGyroFftRmsPanelHeights,
+    setCurrentTimeRange: (value) => {
+        currentTimeRange = value;
+    },
+    setDisplayDurationSeconds: (value) => {
+        displayDurationSeconds = value;
+    },
+    getDisplayDurationSeconds: () => displayDurationSeconds,
+    getLivePanOffset: () => liveChartPanOffset,
+    setLivePanOffset: (value) => {
+        liveChartPanOffset = Number.isFinite(value) ? value : 0;
+        panOffset = liveChartPanOffset;
+    },
+    getPanOffset: () => panOffset,
+    getRmsPanOffset: () => rmsPanOffset,
+    setRmsPanOffset: (value) => {
+        rmsPanOffset = Number.isFinite(value) ? value : 0;
+    },
+    getGyroRmsPanOffset: () => gyroRmsPanOffset,
+    setGyroRmsPanOffset: (value) => {
+        gyroRmsPanOffset = Number.isFinite(value) ? value : 0;
+    },
+    getRmsDurationSeconds: () => displayDurationSecondsRMS,
+    setRmsDurationSeconds: (value) => {
+        displayDurationSecondsRMS = value;
+    },
+    getGyroRmsDurationSeconds: () => gyroDisplayDurationSecondsRMS,
+    setGyroRmsDurationSeconds: (value) => {
+        gyroDisplayDurationSecondsRMS = value;
+    },
+    getLastTimestamp: () => lastTimestamp,
+    getTimestamps: () => timestamps,
+    preserveScalesOnSeriesToggle,
+    installManualLegendToggle,
+});
+
+const {
+    bindRmsXAxisOverlay,
+    bindSharedXAxisOverlay,
+    bindYAxisOverlay,
+    createLiveChartResizeObserver,
+    observeChartPanels,
+    registerRuntimeAxisListeners,
+    setupInitialOverlayInteractions,
+    syncAxisOverlayPositions,
+    setSharedXScale,
+} = chartInteractionRuntime;
+
 
 // === Web Workers ===
-const wsWorker = new Worker("ws-worker.js");
+const wsWorker = new Worker("ws-worker.js?v=99");
 window.wsWorker = wsWorker; // Export globally for Replay Manager
-const decodeWorker = new Worker("decode-worker2.js");
+const decodeWorker = new Worker("decode-worker2.js?v=55");
 const accFilterWorker = new Worker('filter-worker.js');
 const gyroFilterWorker = new Worker('filter-worker.js');
 const downsamplingWorker = ENABLE_FUSION_PIPELINE ? new Worker('downsampling-worker.js') : createNoopWorker();
-const fusionWorker = ENABLE_FUSION_PIPELINE ? new Worker('fusion-worker5.js') : createNoopWorker();
+const fusionWorker = ENABLE_FUSION_PIPELINE ? new Worker('fusion-worker6.js') : createNoopWorker();
 let bootOverlayReadyTimer = null;
 const TELEMETRY_PANEL_HIDDEN_KEY = 'telemetryPanelHidden';
 const TELEMETRY_TOOLTIPS = {
@@ -3754,7 +2325,7 @@ const TELEMETRY_TOOLTIPS = {
     telemetryBacklogPeak: 'Groesster beobachteter Rueckstau im Stream-Puffer. Hohe Peaks deuten auf kurzfristige Transport- oder Verarbeitungsengpaesse hin.',
 };
 const telemetryElements = {
-    panel: document.getElementById('telemetryPanel'),
+    panel: document.getElementById('telemetryWrapper'),
     toggle: document.getElementById('telemetryToggle'),
     wsState: document.getElementById('telemetryWsState'),
     activeClients: document.getElementById('telemetryActiveClients'),
@@ -3948,6 +2519,9 @@ function renderTelemetry() {
 function updateTelemetry(patch = {}) {
     Object.assign(telemetryState, patch);
     renderTelemetry();
+    if (patch.wsState && window.updateTelemetryNodeWsState) {
+        window.updateTelemetryNodeWsState(0, patch.wsState);
+    }
 }
 
 window.setInterval(() => {
@@ -3958,6 +2532,121 @@ window.setInterval(() => {
         recentBytes: 0,
     });
 }, 1000);
+
+const telemetryElements2 = {
+    wsState: document.getElementById('telemetryWsState2'),
+    activeClients: document.getElementById('telemetryActiveClients2'),
+    sensorPackets: document.getElementById('telemetrySensorPackets2'),
+    framesPerSecond: document.getElementById('telemetryFramesPerSecond2'),
+    wsErrors: document.getElementById('telemetryWsErrors2'),
+    rawBytes: document.getElementById('telemetryRawBytes2'),
+    frameLimit: document.getElementById('telemetryFrameLimit2'),
+    inflightWs: document.getElementById('telemetryInflightWs2'),
+    cpuLoad: document.getElementById('telemetryCpuLoad2'),
+    cpuTemp: document.getElementById('telemetryCpuTemp2'),
+    freeHeap: document.getElementById('telemetryFreeHeap2'),
+    minHeap: document.getElementById('telemetryMinHeap2'),
+    largestHeap: document.getElementById('telemetryLargestHeap2'),
+    psramTotal: document.getElementById('telemetryPsramTotal2'),
+    freePsram: document.getElementById('telemetryFreePsram2'),
+    minPsram: document.getElementById('telemetryMinPsram2'),
+    largestPsram: document.getElementById('telemetryLargestPsram2'),
+    drops: document.getElementById('telemetryDrops2'),
+    backlogPeak: document.getElementById('telemetryBacklogPeak2'),
+};
+
+const telemetryState2Tracker = {
+    recentFrames: 0,
+    recentBytes: 0,
+};
+
+window.setInterval(() => {
+    if (telemetryElements2.framesPerSecond) telemetryElements2.framesPerSecond.textContent = String(telemetryState2Tracker.recentFrames);
+    if (telemetryElements2.rawBytes) telemetryElements2.rawBytes.textContent = `${formatTelemetryBytes(telemetryState2Tracker.recentBytes)}/s`;
+    telemetryState2Tracker.recentFrames = 0;
+    telemetryState2Tracker.recentBytes = 0;
+}, 1000);
+
+window.incrementTelemetryNodeFrames = function(channelIndex, bytes) {
+    if (channelIndex === 1) {
+        telemetryState2Tracker.recentFrames++;
+        telemetryState2Tracker.recentBytes += bytes;
+    }
+};
+
+window.updateTelemetryNodeWsState = function(channelIndex, state) {
+    if (channelIndex === 1 && telemetryElements2.wsState) {
+        telemetryElements2.wsState.textContent = state;
+    }
+    const stateEl = document.getElementById(`nodeWsState_${channelIndex}`);
+    if (stateEl) {
+        if (state === 'verbunden' || state === 'Live') {
+            stateEl.innerHTML = '(● Live)';
+            stateEl.style.color = '#50c878';
+            stateEl.style.opacity = '1';
+        } else if (state === 'fehler' || state === 'getrennt' || state === 'Fehler') {
+            stateEl.innerHTML = '(✖ ' + state + ')';
+            stateEl.style.color = '#ff6b6b';
+            stateEl.style.opacity = '1';
+        } else {
+            stateEl.innerHTML = '(● ' + state + ')';
+            stateEl.style.color = '#f39c12';
+            stateEl.style.opacity = '1';
+        }
+    }
+};
+
+window.updateTelemetryNode = function(channelIndex, payload) {
+    if (channelIndex !== 1 || !payload) return; 
+
+    if (telemetryElements2.activeClients) telemetryElements2.activeClients.textContent = String(payload.activeClients ?? 0);
+    if (telemetryElements2.sensorPackets) telemetryElements2.sensorPackets.textContent = String(payload.sensorPackets ?? 0);
+    if (telemetryElements2.wsErrors) telemetryElements2.wsErrors.textContent = String(payload.wsSendErrors ?? 0);
+    if (telemetryElements2.frameLimit) telemetryElements2.frameLimit.textContent = payload.frameLimitPackets > 0 ? `${payload.frameLimitPackets} pkt` : '-';
+    
+    if (telemetryElements2.inflightWs) {
+        telemetryElements2.inflightWs.textContent = String(payload.inflightWs ?? 0);
+        setTelemetrySeverity(telemetryElements2.inflightWs, (payload.inflightWs ?? 0) >= 3 ? 'warn' : null);
+    }
+    if (telemetryElements2.cpuLoad) {
+        telemetryElements2.cpuLoad.textContent = (payload.cpuLoadPct ?? -1) >= 0 ? `${payload.cpuLoadPct}%` : '-';
+        setTelemetrySeverity(telemetryElements2.cpuLoad, (payload.cpuLoadPct ?? 0) >= 90 ? 'danger' : (payload.cpuLoadPct ?? 0) >= 75 ? 'warn' : null);
+    }
+    if (telemetryElements2.cpuTemp) {
+        telemetryElements2.cpuTemp.textContent = Number.isFinite(payload.cpuTempC) ? `${payload.cpuTempC.toFixed(1)} C` : '-';
+        setTelemetrySeverity(telemetryElements2.cpuTemp, payload.cpuTempC >= 80 ? 'danger' : payload.cpuTempC >= 70 ? 'warn' : null);
+    }
+    if (telemetryElements2.freeHeap) {
+        telemetryElements2.freeHeap.textContent = formatTelemetryMetricBytes(payload.freeHeap);
+        setTelemetrySeverity(telemetryElements2.freeHeap, payload.freeHeap < 8 * 1024 ? 'danger' : payload.freeHeap < 16 * 1024 ? 'warn' : null);
+    }
+    if (telemetryElements2.minHeap) {
+        telemetryElements2.minHeap.textContent = formatTelemetryMetricBytes(payload.minFreeHeap);
+        setTelemetrySeverity(telemetryElements2.minHeap, payload.minFreeHeap < 2 * 1024 ? 'danger' : payload.minFreeHeap < 8 * 1024 ? 'warn' : null);
+    }
+    if (telemetryElements2.largestHeap) {
+        telemetryElements2.largestHeap.textContent = formatTelemetryMetricBytes(payload.largestHeapBlock);
+        setTelemetrySeverity(telemetryElements2.largestHeap, payload.largestHeapBlock < 4 * 1024 ? 'danger' : payload.largestHeapBlock < 8 * 1024 ? 'warn' : null);
+    }
+    
+    const psramAvail = Boolean(payload.psramAvailable);
+    if (telemetryElements2.psramTotal) telemetryElements2.psramTotal.textContent = psramAvail ? formatTelemetryMetricBytes(payload.psramTotal) : 'n/a';
+    if (telemetryElements2.freePsram) {
+        telemetryElements2.freePsram.textContent = psramAvail ? formatTelemetryMetricBytes(payload.freePsram) : 'n/a';
+        setTelemetrySeverity(telemetryElements2.freePsram, psramAvail && payload.freePsram < 128 * 1024 ? 'warn' : null);
+    }
+    if (telemetryElements2.minPsram) telemetryElements2.minPsram.textContent = psramAvail ? formatTelemetryMetricBytes(payload.minFreePsram) : 'n/a';
+    if (telemetryElements2.largestPsram) telemetryElements2.largestPsram.textContent = psramAvail ? formatTelemetryMetricBytes(payload.largestPsramBlock) : 'n/a';
+    
+    if (telemetryElements2.drops) {
+        telemetryElements2.drops.textContent = String(payload.streamDroppedBytes ?? 0);
+        setTelemetrySeverity(telemetryElements2.drops, (payload.streamDroppedBytes ?? 0) > 0 ? 'warn' : null);
+    }
+    if (telemetryElements2.backlogPeak) {
+        telemetryElements2.backlogPeak.textContent = formatTelemetryMetricBytes(payload.streamBacklogPeak);
+        setTelemetrySeverity(telemetryElements2.backlogPeak, (payload.streamBacklogPeak ?? 0) > 8 * 1024 ? 'warn' : null);
+    }
+};
 
 telemetryElements.toggle?.addEventListener('click', () => {
     const willHide = !telemetryElements.panel?.classList.contains('is-hidden');
@@ -4028,7 +2717,8 @@ document.addEventListener("DOMContentLoaded", () => {
     restoreAppSettingsFromCookie();
     restoreCalibrationFromCookie();
     setupUIListeners();
-    connectWebSocket();
+    // Discovery erst nach kompletter Modulevaluierung starten, damit die Charts bereits existieren.
+    queueMicrotask(() => connectWebSocket());
     startChartUpdates();
     initFFTChart();
     initRMSChart();
@@ -4132,57 +2822,32 @@ document.addEventListener("DOMContentLoaded", () => {
     const fftRmsLayoutToggle = document.getElementById('fftRmsLayoutToggle');
     const gyroFftRmsGrid = document.getElementById('gyroFftRmsGrid');
     const gyroFftRmsLayoutToggle = document.getElementById('gyroFftRmsLayoutToggle');
-    const updateChartLayoutToggle = () => {
-        const isSideBySide = livechartsGrid?.classList.contains('is-side-by-side');
-        if (chartLayoutToggle) {
-            chartLayoutToggle.textContent = isSideBySide ? 'Untereinander' : 'Nebeneinander';
-            chartLayoutToggle.setAttribute('aria-pressed', isSideBySide ? 'true' : 'false');
+
+    const syncLayoutToggleLabel = (toggleButton, grid) => {
+        if (!toggleButton) {
+            return;
         }
+
+        const isSideBySide = grid?.classList.contains('is-side-by-side');
+        toggleButton.textContent = isSideBySide ? 'Untereinander' : 'Nebeneinander';
+        toggleButton.setAttribute('aria-pressed', isSideBySide ? 'true' : 'false');
     };
-    const updateFftRmsLayoutToggle = () => {
-        const isSideBySide = fftRmsGrid?.classList.contains('is-side-by-side');
-        if (fftRmsLayoutToggle) {
-            fftRmsLayoutToggle.textContent = isSideBySide ? 'Untereinander' : 'Nebeneinander';
-            fftRmsLayoutToggle.setAttribute('aria-pressed', isSideBySide ? 'true' : 'false');
-        }
+
+    const setupLayoutToggle = (toggleButton, grid, updatePanelHeights, resizeCharts) => {
+        syncLayoutToggleLabel(toggleButton, grid);
+        toggleButton?.addEventListener('click', () => {
+            grid?.classList.toggle('is-side-by-side');
+            syncLayoutToggleLabel(toggleButton, grid);
+            updatePanelHeights();
+            requestAnimationFrame(() => {
+                resizeCharts();
+            });
+        });
     };
-    const updateGyroFftRmsLayoutToggle = () => {
-        const isSideBySide = gyroFftRmsGrid?.classList.contains('is-side-by-side');
-        if (gyroFftRmsLayoutToggle) {
-            gyroFftRmsLayoutToggle.textContent = isSideBySide ? 'Untereinander' : 'Nebeneinander';
-            gyroFftRmsLayoutToggle.setAttribute('aria-pressed', isSideBySide ? 'true' : 'false');
-        }
-    };
-    updateChartLayoutToggle();
-    updateFftRmsLayoutToggle();
-    updateGyroFftRmsLayoutToggle();
-    chartLayoutToggle?.addEventListener('click', () => {
-        livechartsGrid?.classList.toggle('is-side-by-side');
-        updateChartLayoutToggle();
-        updateLiveChartPanelHeights();
-        requestAnimationFrame(() => {
-            chart?.setSize(getSize());
-            gyroChart?.setSize(getGyroChartSize());
-        });
-    });
-    fftRmsLayoutToggle?.addEventListener('click', () => {
-        fftRmsGrid?.classList.toggle('is-side-by-side');
-        updateFftRmsLayoutToggle();
-        updateFftRmsPanelHeights();
-        requestAnimationFrame(() => {
-            fftPlot?.setSize(getFftChartSize());
-            rmsPlot?.setSize(getRmsChartSize());
-        });
-    });
-    gyroFftRmsLayoutToggle?.addEventListener('click', () => {
-        gyroFftRmsGrid?.classList.toggle('is-side-by-side');
-        updateGyroFftRmsLayoutToggle();
-        updateGyroFftRmsPanelHeights();
-        requestAnimationFrame(() => {
-            gyroFftPlot?.setSize(getGyroFftChartSize());
-            gyroRmsPlot?.setSize(getGyroRmsChartSize());
-        });
-    });
+
+    setupLayoutToggle(chartLayoutToggle, livechartsGrid, updateLiveChartPanelHeights, resizeLiveCharts);
+    setupLayoutToggle(fftRmsLayoutToggle, fftRmsGrid, updateFftRmsPanelHeights, resizeFftRmsCharts);
+    setupLayoutToggle(gyroFftRmsLayoutToggle, gyroFftRmsGrid, updateGyroFftRmsPanelHeights, resizeGyroFftRmsCharts);
 
 
 
@@ -4191,21 +2856,25 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById('sidebarToggle').addEventListener('click', function () {
         const sidebar = document.getElementById('sidebar');
         sidebar.classList.toggle('expanded');
-        updateLiveChartPanelHeights();
-        updateFftRmsPanelHeights();
-        updateGyroFftRmsPanelHeights();
+        updateAllChartPanelHeights();
     });
 
-    updateLiveChartPanelHeights();
-    updateFftRmsPanelHeights();
-    updateGyroFftRmsPanelHeights();
+    updateAllChartPanelHeights();
 
     window.addEventListener('dashboardTabChanged', (event) => {
-        if (event.detail?.sectionId === 'fftChartarea') {
+        const sectionId = event.detail?.sectionId;
+
+        if (typeof accVectorViewport?.setVisible === 'function') {
+            accVectorViewport.setVisible(sectionId === 'vectorAlignArea');
+        }
+        if (typeof motionViewport?.setVisible === 'function') {
+            motionViewport.setVisible(sectionId === 'motionViewportArea');
+        }
+
+        if (sectionId === 'fftChartarea') {
             updateFftRmsPanelHeights();
             requestAnimationFrame(() => {
-                fftPlot?.setSize(getFftChartSize());
-                rmsPlot?.setSize(getRmsChartSize());
+                resizeFftRmsCharts();
             });
             return;
         }
@@ -4213,8 +2882,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (event.detail?.sectionId === 'gyroFftChartarea') {
             updateGyroFftRmsPanelHeights();
             requestAnimationFrame(() => {
-                gyroFftPlot?.setSize(getGyroFftChartSize());
-                gyroRmsPlot?.setSize(getGyroRmsChartSize());
+                resizeGyroFftRmsCharts();
             });
         }
         
@@ -4275,6 +2943,9 @@ if (fpsSlider) {
 // === WebSocket Worker einrichten ===
 function setupWSWorker() {
     wsWorker.onmessage = (event) => {
+        if (window.activeSensors && window.activeSensors[0]) {
+             window.activeSensors[0].lastDataMs = performance.now();
+        }
         const { type, payload } = event.data;
         if (type === "data") {
             if (payload instanceof ArrayBuffer) {
@@ -4289,6 +2960,14 @@ function setupWSWorker() {
                 );
                 // ArrayBuffer als Transferable weitergeben
                 decodeWorker.postMessage(payload, [payload]);
+            }
+        } else if (type === "firmwareVer") {
+            const masterNodeIp = (window.activeSensors && window.activeSensors[0]) ? window.activeSensors[0].ip : "192.168.4.1";
+            const safeIp = masterNodeIp.replace(/\./g, "_");
+            const otaBtn = document.getElementById(`otaTriggerBtn_${safeIp}`);
+            if (otaBtn) {
+                otaBtn.innerText = payload;
+                otaBtn.style.color = "rgba(255,255,255,0.6)";
             }
         } else if (type === "connected") {
             console.log("WebSocket verbunden.", payload?.url || '');
@@ -4362,10 +3041,6 @@ let updateIntervalMs = 50; // 20 FPS
 window.startChartUpdates = function() {
     function updateLoop(now) {
         if (!chartUpdateRunning) return;
-        if (window.isOfflineReplayMode) {
-            requestAnimationFrame(updateLoop);
-            return;
-        }
 
         if (now - lastChartUpdate >= updateIntervalMs) {
             updateDashboard();
@@ -4399,7 +3074,7 @@ if (!message || typeof message !== 'object') {
     return;
 }
 
-if (message.type === 'ack' || message.type === 'state') {
+if (message.type === 'ack') {
     return;
 }
 
@@ -4430,6 +3105,12 @@ setBootOverlayState(
 decodeWorker.postMessage({type: "calibdata", payload: {type: 1, quaternion: message.quaternion}});
 
 ausrichtung = Array.isArray(message.quaternion) ? message.quaternion.slice() : Array.from(message.quaternion || []);
+if (window.activeSensors) {
+    const mNode = window.activeSensors.find(n => n.isMaster);
+    if (mNode) {
+        mNode.orientationState = { quaternionXYZW: ausrichtung };
+    }
+}
 if (currentOrientationMode === 1) {
     syncViewportBaseQuaternion({ silent: true });
 }
@@ -4440,13 +3121,15 @@ if (currentOrientationMode === 1) {
 
 
 // === Decode Worker einrichten ===
-window.processSensorBatch = function(data) {
+window.processSensorBatch = function(data, channelIndex = 0, nodeDef = null) {
     const { acc, gyro, temp, info, acccalib, accraw, gyroraw, gyrocalib } = data;
 
-        if (ENABLE_MOTION_VIEW && ((accraw && accraw.length > 0) || (gyroraw && gyroraw.length > 0))) {
-            const motionAccSamples = Array.isArray(accraw) && accraw.length > 0
-                ? accraw.map((sample, index) => buildMotionAccelerationSample(sample, acc?.[index]) || acc?.[index] || sample)
-                : (Array.isArray(acc) ? acc.map((sample) => buildMotionAccelerationSample(sample, sample) || sample) : []);
+        const targetIp = document.getElementById("settingsSensorTarget")?.value || "192.168.4.1";
+        const isTarget = nodeDef ? (nodeDef.ip === targetIp) : true;
+        
+        if (isTarget && ENABLE_MOTION_VIEW && ((accraw && accraw.length > 0) || (gyroraw && gyroraw.length > 0))) {
+            const motionAccSamples = accraw ? accraw.map((sample, index) => buildMotionAccelerationSample(sample, acc?.[index]) || acc?.[index] || sample) : [];
+            
             motionWorker.postMessage({
                 type: 'batch',
                 payload: {
@@ -4458,7 +3141,7 @@ window.processSensorBatch = function(data) {
 
 
         if (accraw && accraw.length > 0) {
-            if (ENABLE_FUSION_PIPELINE) {
+            if (isTarget && ENABLE_FUSION_PIPELINE) {
                 downsamplingWorker.postMessage({
                     type: "batch",
                     sensor: "acc",
@@ -4467,10 +3150,11 @@ window.processSensorBatch = function(data) {
             }
 
             for (let sample of accraw) {
-                accRawBuffer.push([sample.time, sample.x, sample.y, sample.z, Math.hypot(sample.x, sample.y, sample.z)]);
+                let totalAcc = Math.sqrt(sample.x*sample.x + sample.y*sample.y + sample.z*sample.z);
+                accRawBuffer.push([sample.time, sample.x, sample.y, sample.z, totalAcc]);
                 
                 if (window.sonificationEnabled) {
-                    let totalVibration = Math.hypot(sample.x, sample.y, sample.z);
+                    let totalVibration = totalAcc;
                     window.audioHighPass = 0.995 * (window.audioHighPass + totalVibration - window.audioPrevZ);
                     window.audioPrevZ = totalVibration;
                     let out = window.audioHighPass / 50.0;
@@ -4531,21 +3215,32 @@ window.processSensorBatch = function(data) {
             sensor: "acc",
             data: acc.map(s => ({ x: s.x, y: s.y, z: s.z, time: s.time }))
             }); */
+// Master Node Data für Multi-Channel Rendering bucketieren (Master ist CH1 = Index 0)
+            const calibratedAcc = [];
             
+            // TargetBuffer ermitteln, ansonsten wird Node 1 von Node 2 überschrieben!
+            // WICHTIG: Kein window.accBuffer, da globals (const/let) nicht auf window liegen!
+            let targetBuffer = (nodeDef && nodeDef.accBuffer) ? nodeDef.accBuffer : accBuffer;
             // Rohdaten pushen einmal komplett
             for (let index = 0; index < acc.length; index++) {
-                const sample = buildLiveAccelerationSample(accraw?.[index], acc[index]) || acc[index];
-
-                accBuffer.push([sample.time, sample.x, sample.y, sample.z, sample.total]);
+                const sample = window.isOfflineReplayMode 
+                    ? acc[index] 
+                    : (buildLiveAccelerationSample(accraw?.[index], acc[index]) || acc[index]);
+                calibratedAcc.push(sample);
+                targetBuffer.push([sample.time, sample.x, sample.y, sample.z, sample.total]);
                 batchTimes[index] = sample.time;
                 batchXs[index] = sample.x;
                 batchYs[index] = sample.y;
                 batchZs[index] = sample.z;
                 batchTotals[index] = sample.total;
                 
+                if (window.feedImpactTestData) {
+                    window.feedImpactTestData(sample.x, sample.y, sample.z, sample.time);
+                }
+                
                 // --- RECORDING LOGIC ADDED HERE ---
                 if (isRecording) {
-                    recordedAccRows.push(createAccRecordingRow(sample));
+                    recordedAccRows.push(createAccRecordingRow(sample, channelIndex));
                     
                     if (recordedAccRows.length >= MAX_RECORDED_ROWS) {
                         console.log("Max rows reached (ACC). Triggering intermediate download.");
@@ -4561,6 +3256,9 @@ window.processSensorBatch = function(data) {
 
 
 //mwrmsworker.postMessage({ type: 'acc', payload: [newSample] })
+            }
+            if (window.insertIntoMultiChart && window.activeSensors && window.activeSensors.length > 0) {
+                window.insertIntoMultiChart(channelIndex, calibratedAcc);
             }
 
             if (accFilterEnabled) {
@@ -4585,18 +3283,25 @@ window.processSensorBatch = function(data) {
                 data: gyro.map(s => ({ x: s.x, y: s.y, z: s.z, time: s.time }))
                 }); */
 
+            // Master Node Gyro Data bucketieren
+            const calibratedGyro = [];
+
             for (let index = 0; index < gyro.length; index++) {
-                const sample = buildLiveGyroSample(gyroraw?.[index], gyro[index]) || gyro[index];
+                const sample = window.isOfflineReplayMode
+                    ? gyro[index]
+                    : (buildLiveGyroSample(gyroraw?.[index], gyro[index]) || gyro[index]);
+                calibratedGyro.push(sample);
                 // sample ist { time, x, y, z }
                 // push als Array oder Objekt in deinen MultiRingBuffer
-                gyroBuffer.push([sample.time, sample.x, sample.y, sample.z]);
+                let targetGyroBuffer = (nodeDef && nodeDef.gyroBuffer) ? nodeDef.gyroBuffer : gyroBuffer;
+                targetGyroBuffer.push([sample.time, sample.x, sample.y, sample.z]);
                 batchTimes[index] = sample.time;
                 batchXs[index] = sample.x;
                 batchYs[index] = sample.y;
                 batchZs[index] = sample.z;
 
                 if (isRecording) {
-                    recordedGyroRows.push(createGyroRecordingRow(sample));
+                    recordedGyroRows.push(createGyroRecordingRow(sample, channelIndex));
 
                     if (recordedGyroRows.length >= MAX_RECORDED_ROWS) {
                         console.log("Max rows reached (GYRO). Triggering intermediate download.");
@@ -4607,6 +3312,9 @@ window.processSensorBatch = function(data) {
 //                downsamplingWorker.postMessage({ type: 'gyro', payload: { x: sample.x, y: sample.y, z: sample.z, time: sample.time } });
                        const newSample = { x: sample.x, y: sample.y, z: sample.z, time: sample.time };
 //mwrmsworker.postMessage({ type: 'gyro', payload: [newSample] })
+            }
+            if (window.insertIntoMultiGyroChart && window.activeSensors && window.activeSensors.length > 0) {
+                window.insertIntoMultiGyroChart(channelIndex, calibratedGyro);
             }
 
             if (gyroFilterEnabled) {
@@ -4619,48 +3327,56 @@ window.processSensorBatch = function(data) {
             }
         }
 
-        if (temp && temp.length > 0) {
-            for (let sample of temp) {
-                // sample ist { time, value }
-                // push als Array oder Objekt in deinen MultiRingBuffer
+    if (temp && temp.length > 0) {
+        if (typeof tempBuffer !== 'undefined' && tempBuffer.push) {
+            for (let i = 0; i < temp.length; i++) {
+                let sample = temp[i];
                 tempBuffer.push([sample.time, sample.value]);
             }
         }
+    }
 
-        if (info && info.length > 0) {
-            info.forEach(entry => {
-                console.log("INFO BEKOMMEN: " + entry.type + "  " + entry.value);
-                switch (entry.type) {
-                    case "ACCELRATE":
-                        accelSampleRateDD2.setValue(entry.value, true);
-                        break;
-                    case "ACCELRANGE":
-                        accelRangeDD2.setValue(entry.value, true);
-                        break;
-                    case "ACCELFILTER":
-                        accelFilterDD2.setValue(entry.value, true);
-                        break;
+    if (info && info.length > 0) {
+        window.updateSensorUIFromInfo("192.168.4.1", info);
+    }
+};
 
-                    case "GYROFILTER":
-                        gyroFilterDD2.setValue(entry.value, true);
-                        break;
-                    case "GYROSAMPLERATE":
-                        gyroSampleRateDD2.setValue(entry.value, true);
-                        break;
-
-                    case "GYRORANGE":
-                        gyroRangeDD2.setValue(entry.value, true);
-                        break;
-                    case "TEMPSAMPLERATE":
-                        tempSampleRateDD2.setValue(entry.value, true);
-                        break;
-
-
-                    default:
-                        console.warn("Unbekannte Config-SubID");
+window.updateSensorUIFromInfo = function(nodeIp, infoArray) {
+    if(!window.sensorConfigs) window.sensorConfigs = {};
+    if(!window.sensorConfigs[nodeIp]) window.sensorConfigs[nodeIp] = {};
+    
+    let safeIp = (nodeIp || "192.168.4.1").replace(/\./g, "_");
+    
+    infoArray.forEach(entry => {
+        let typeStr = entry.type;
+        let value = entry.value;
+        let idMapping = {
+            "ACCELRATE": "accelSampleRate",
+            "ACCELRANGE": "accelRange",
+            "ACCELFILTER": "accelFilter",
+            "GYROSAMPLERATE": "gyroSampleRate",
+            "GYRORANGE": "gyroRange",
+            "GYROFILTER": "gyroFilter",
+            "TEMPSAMPLERATE": "tempSampleRate"
+        };
+        let cfgKey = idMapping[typeStr];
+        let subIdMapping = { "ACCELRATE":100, "ACCELRANGE":101, "ACCELFILTER":102, "GYROSAMPLERATE":103, "GYRORANGE":104, "GYROFILTER":105, "TEMPSAMPLERATE":106 };
+        let numKey = subIdMapping[typeStr];
+        
+        if (numKey) window.sensorConfigs[nodeIp][numKey] = value;
+        
+        if (cfgKey) {
+            // Updated the dynamically built CustomDropdown in ui-setup.js
+            if(window.nodeDropdowns && window.nodeDropdowns[nodeIp]) {
+                let inst = window.nodeDropdowns[nodeIp][cfgKey];
+                if(inst && typeof inst.setValueSelect === 'function') {
+                    inst.setValueSelect(value, true);
+                } else if(inst && typeof inst.setValue === 'function') {
+                    inst.setValue(value, true);
                 }
-            });
+            }
         }
+    });
 };
 
 function setupDecodeWorker() {
@@ -4675,12 +3391,1576 @@ function setupDecodeWorker() {
 
 
 
+// === Node Discovery für Multi-Channel ===
+window.activeSensors = [];
+window.multiChartData = []; // [Zeit, CH1_X, CH1_Y, CH1_Z, CH2_X, ...]
+window.multiFftData = [];   // Array für das synchrone FFT Plotting [Freqs, CH1_Max, CH1_Avg, CH1_Cur, CH2_Max...]
+window.multiGyroFftData = [];
+
+window.setGyroFftSensorCount = function(n) {
+    if (!gyroFftPlot) return;
+    
+    const baseColors = [
+        { max: "rgba(200,210,223,0.08)", avg: "#FFD600", cur: "rgba(122,187,255,0.45)" }, // CH1
+        { max: "rgba(77,166,255,0.08)",  avg: "#4da6ff", cur: "rgba(77,166,255,0.45)" },  // CH2
+        { max: "rgba(0,255,0,0.08)",     avg: "#50c878", cur: "rgba(80,200,120,0.45)" },  // CH3
+        { max: "rgba(224,64,251,0.08)",  avg: "#e040fb", cur: "rgba(224,64,251,0.45)" }   // CH4
+    ];
+    
+    let newSeries = [{ label: "Freq (Hz)" }];
+    
+    for (let i = 0; i < n; i++) {
+        const c = baseColors[i % 4];
+        const valFormatter = (u, v) => (v != null ? Math.abs(v).toFixed(2) : '--');
+        newSeries.push({ label: `CH${i+1} Max`, stroke: null, width: 0, fill: c.max, points: { show: false }, value: valFormatter });
+        newSeries.push({ label: `CH${i+1} Avg`, stroke: c.avg, width: 2, fill: c.avg.replace(')', ', 0.3)').replace('rgb', 'rgba'), points: { show: false }, value: valFormatter });
+        newSeries.push({ label: `CH${i+1} Live`, stroke: c.cur, width: 1, points: { show: false }, value: valFormatter });
+    }
+    
+    let newOpts = {
+        title: 'Gyro FFT Multi-Channel',
+        width: gyroFftPlot.width,
+        height: gyroFftPlot.height,
+        scales: { 
+            x: { 
+                time: false,
+                range: (u, min, max) => {
+                    if (u._xLocked && u._xLockMin != null && u._xLockMax != null) return [u._xLockMin, u._xLockMax];
+                    return [min, max];
+                }
+            }, 
+            y: { 
+                auto: true,
+                range: (u, min, max) => [0, Math.max(500, (max == null ? 500 : max * 1.1))]
+            } 
+        },
+        axes: [
+            { scale: "x", label: "Hz", stroke: "white" },
+            { scale: "y", label: "Mag", stroke: "white" }
+        ],
+        series: newSeries,
+        legend: { mount: (u, table) => { document.getElementById("gyroFftChartLegendHost")?.replaceChildren(table); } },
+        cursor: {
+            sync: { key: 'fft_sync' },
+            points: {},
+            drag: { x: true, y: true, setScale: true }
+        },
+        hooks: {
+            setSelect: [
+                (u) => {
+                    if (u.select.width > 0 || u.select.height > 0) {
+                        u._xLocked = true;
+                        u._xLockMin = u.posToVal(u.select.left, 'x');
+                        u._xLockMax = u.posToVal(u.select.left + u.select.width, 'x');
+                    }
+                }
+            ],
+            ready: [
+                (u) => {
+                    u.root.addEventListener('dblclick', () => {
+                        u._xLocked = false;
+                        u._xLockMin = null;
+                        u._xLockMax = null;
+                        u.setScale('x', { auto: true });
+                    });
+                }
+            ]
+        }
+    };
+    
+    const parent = gyroFftPlot.root.parentNode;
+    gyroFftPlot.destroy();
+    gyroFftPlot = new uPlot(newOpts, Array(n * 3 + 1).fill().map(() => []), parent);
+};
+
+window.setFftSensorCount = function(n) {
+    if (!fftPlot) return;
+    
+    const baseColors = [
+        { max: "rgba(200,210,223,0.08)", avg: "#FFD600", cur: "rgba(122,187,255,0.45)" }, // CH1
+        { max: "rgba(77,166,255,0.08)",  avg: "#4da6ff", cur: "rgba(77,166,255,0.45)" },  // CH2
+        { max: "rgba(0,255,0,0.08)",     avg: "#50c878", cur: "rgba(80,200,120,0.45)" },  // CH3
+        { max: "rgba(224,64,251,0.08)",  avg: "#e040fb", cur: "rgba(224,64,251,0.45)" }   // CH4
+    ];
+    
+    let newSeries = [{ label: "Freq (Hz)" }];
+    
+    for (let i = 0; i < n; i++) {
+        const c = baseColors[i % 4];
+        const valFormatter = (u, v) => (v != null ? Math.abs(v).toFixed(2) : '--');
+        newSeries.push({ label: `CH${i+1} Max`, stroke: null, width: 0, fill: c.max, points: { show: false }, value: valFormatter });
+        newSeries.push({ label: `CH${i+1} Avg`, stroke: c.avg, width: 2, fill: c.avg.replace(')', ', 0.3)').replace('rgb', 'rgba'), points: { show: false }, value: valFormatter });
+        newSeries.push({ label: `CH${i+1} Live`, stroke: c.cur, width: 1, points: { show: false }, value: valFormatter });
+    }
+    
+    let newOpts = {
+        title: 'ACC FFT Multi-Channel',
+        width: fftPlot.width,
+        height: fftPlot.height,
+        scales: { 
+            x: { 
+                time: false,
+                range: (u, min, max) => {
+                    if (u._xLocked && u._xLockMin != null && u._xLockMax != null) return [u._xLockMin, u._xLockMax];
+                    return [min, max];
+                }
+            }, 
+            y: { 
+                range: (u, min, max) => [0, Math.max(500, (max == null ? 500 : max * 1.1))]
+            } 
+        },
+        axes: [
+            { scale: "x", label: "Hz", stroke: "white" },
+            { scale: "y", label: "Mag", stroke: "white" }
+        ],
+        series: newSeries,
+        legend: { mount: (u, table) => { document.getElementById("fftChartLegendHost")?.replaceChildren(table); } },
+        cursor: {
+            sync: { key: 'fft_sync' },
+            points: {},
+            drag: { x: true, y: true, setScale: true }
+        },
+        hooks: {
+            setSelect: [
+                (u) => {
+                    if (u.select.width > 0 || u.select.height > 0) {
+                        u._xLocked = true;
+                        u._xLockMin = u.posToVal(u.select.left, 'x');
+                        u._xLockMax = u.posToVal(u.select.left + u.select.width, 'x');
+                    }
+                }
+            ],
+            ready: [
+                (u) => {
+                    u.root.addEventListener('dblclick', () => {
+                        u._xLocked = false;
+                        u._xLockMin = null;
+                        u._xLockMax = null;
+                        u.setScale('x', { auto: true });
+                    });
+                }
+            ]
+        }
+    };
+    
+    const parent = fftPlot.root.parentNode;
+    fftPlot.destroy();
+    // Verwende .map(() => []), damit uPlot nicht über geklonte Array-Referenzen stolpert!
+    fftPlot = new uPlot(newOpts, Array(n * 3 + 1).fill().map(() => []), parent);
+};
+
+
+window.setRmsSensorCount = function(n) {
+    if (!rmsPlot) return;
+    
+    const baseColors = [
+        { x: "#FFD600", y: "#ec3030ff", z: "#7ABBFFff", max: "#14c53bff", maxFill: "rgba(20,197,59,0.2)" },   // CH1 (Z=hellblau)
+        { x: "#997A00", y: "#8C1C1Cff", z: "#3D6FCCff", max: "#0B7523ff", maxFill: "rgba(11,117,35,0.2)" },   // CH2: CH1 ~60%
+        { x: "#50c878", y: "#81c784ff", z: "#2e8b57ff", max: "#32cd32ff", maxFill: "rgba(50,205,50,0.2)" },   // CH3
+        { x: "#e040fb", y: "#ea80fcff", z: "#aa00ffff", max: "#d500f9ff", maxFill: "rgba(213,0,249,0.2)" }    // CH4
+    ];
+
+    // Abs-Formatter: CH2+ Werte sind negiert (Spiegel), Legende zeigt trotzdem positive Werte
+    const absVal = (u, v) => v != null ? Math.abs(v).toFixed(1) : '--';
+
+    let newSeries = [{ label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 2) }];
+    
+    for (let i = 0; i < n; i++) {
+        const c = baseColors[i % 4];
+        newSeries.push({ label: `CH${i+1} X (mg)`,  stroke: c.x,   value: absVal });
+        newSeries.push({ label: `CH${i+1} Y (mg)`,  stroke: c.y,   value: absVal });
+        newSeries.push({ label: `CH${i+1} Z (mg)`,  stroke: c.z,   value: absVal });
+        newSeries.push({ label: `CH${i+1} Total`,   stroke: c.max, fill: c.maxFill, value: absVal });
+    }
+    
+    // Y-Achsen-Ticks als absolute Werte anzeigen (CH2 ist gespiegelt)
+    const absAxis = (u, vals) => vals.map(v => Math.abs(v).toFixed(0));
+
+    const symRange = (s, min, max) => {
+        const activeCount = window.activeSensors ? window.activeSensors.filter(n => !n.isHiddenFromUI).length : 1;
+        const absMax = Math.max(250, Math.abs(min ?? 0) * 1.1, Math.abs(max ?? 0) * 1.1);
+        return activeCount > 1 ? [-absMax, absMax] : [0, absMax];
+    };
+
+    let newOpts = createRmsChartOptions({
+        size: { width: rmsPlot.ctx.canvas.clientWidth / window.devicePixelRatio, height: rmsPlot.ctx.canvas.clientHeight / window.devicePixelRatio },
+        title: 'ACC RMS Multi-Channel',
+        yRange: symRange,
+        series: newSeries,
+        legendHostId: "rmsChartLegendHost",
+        formatMicrosecondsToHMS,
+    });
+
+    // Überschreibe das Y-Achsen Label Formatting
+    if (newOpts.axes && newOpts.axes[1]) {
+        newOpts.axes[1].values = absAxis;
+    }
+
+    // Setze speziellen setScale Hook
+    newOpts.hooks = newOpts.hooks || {};
+    newOpts.hooks.setScale = [
+        ...(newOpts.hooks.setScale || []),
+        (() => {
+            let _enforcing = false;
+            return (u, key) => {
+                if (key !== 'y' || _enforcing) return;
+                const activeCount = window.activeSensors ? window.activeSensors.filter(n => !n.isHiddenFromUI).length : 1;
+                if (activeCount <= 1) return; // Kein Symmetrie-Zwang bei nur einem aktiven/gültigen Sensor
+
+                const { min, max } = u.scales.y;
+                if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+                const absMax = Math.max(Math.abs(min), Math.abs(max));
+                if (Math.abs(Math.abs(min) - absMax) > 0.5 || Math.abs(Math.abs(max) - absMax) > 0.5) {
+                    _enforcing = true;
+                    u.setScale('y', { min: -absMax, max: absMax });
+                    _enforcing = false;
+                }
+            };
+        })(),
+    ];
+    
+    const parent = rmsPlot.root.parentNode;
+    rmsPlot.destroy();
+    rmsPlot = new uPlot(newOpts, Array(n * 4 + 1).fill().map(() => []), parent);
+    installManualLegendToggle(rmsPlot, "rmsChartLegendHost");
+
+    // Nach Chart-Rebuild: Y-Overlay neu binden (symmetrisch, kein nailZero)
+    // Wichtig: alter Overlay hatte noch Zeiger auf zerstoerten Chart
+    if (typeof bindYAxisOverlay === 'function') {
+        bindYAxisOverlay('rms-y-axis-overlay', rmsPlot, false);
+    }
+};
+
+window.setGyroRmsSensorCount = function(n) {
+    if (!gyroRmsPlot) return;
+    
+    // Wir nutzen hier leicht andere Basis-Colors für Gyro zur besseren Unterscheidbarkeit
+    const baseColors = [
+        { x: "#4dd0e1", y: "#ffb74d", z: "#81c784", max: "#ce93d8", maxFill: "rgba(206,147,216,0.18)" }, // CH1
+        { x: "#00acc1", y: "#f57c00", z: "#43a047", max: "#8e24aa", maxFill: "rgba(142,36,170,0.18)" }, // CH2
+        { x: "#006064", y: "#e65100", z: "#1b5e20", max: "#4a148c", maxFill: "rgba(74,20,140,0.18)" },  // CH3
+        { x: "#84ffff", y: "#ffe082", z: "#b9f6ca", max: "#f3e5f5", maxFill: "rgba(243,229,245,0.18)" } // CH4
+    ];
+
+    // Abs-Formatter für gespiegelte Achsen
+    const absVal = (u, v) => v != null ? Math.abs(v).toFixed(1) : '--';
+    const absAxis = (u, vals) => vals.map(v => Math.abs(v).toFixed(0));
+
+    let newSeries = [{ label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 2) }];
+    
+    for (let i = 0; i < n; i++) {
+        const c = baseColors[i % 4];
+        newSeries.push({ label: `CH${i+1} Gyro X`, stroke: c.x, value: absVal });
+        newSeries.push({ label: `CH${i+1} Gyro Y`, stroke: c.y, value: absVal });
+        newSeries.push({ label: `CH${i+1} Gyro Z`, stroke: c.z, value: absVal });
+        newSeries.push({ label: `CH${i+1} Gyro Tot`, stroke: c.max, fill: c.maxFill, value: absVal });
+    }
+
+    const symRange = (s, min, max) => {
+        const activeCount = window.activeSensors ? window.activeSensors.filter(n => !n.isHiddenFromUI).length : 1;
+        const absMax = Math.max(1.0, Math.abs(min ?? 0) * 1.1, Math.abs(max ?? 0) * 1.1);
+        return activeCount > 1 ? [-absMax, absMax] : [0, absMax];
+    };
+
+    let newOpts = createRmsChartOptions({
+        size: { width: gyroRmsPlot.ctx.canvas.clientWidth / window.devicePixelRatio, height: gyroRmsPlot.ctx.canvas.clientHeight / window.devicePixelRatio },
+        title: 'Gyro RMS Multi-Channel',
+        yRange: symRange,
+        series: newSeries,
+        legendHostId: "gyroRmsChartLegendHost",
+        formatMicrosecondsToHMS,
+    });
+
+    if (newOpts.axes && newOpts.axes[1]) {
+        newOpts.axes[1].values = absAxis;
+    }
+
+    newOpts.hooks = newOpts.hooks || {};
+    newOpts.hooks.setScale = [
+        ...(newOpts.hooks.setScale || []),
+        (() => {
+            let _enforcing = false;
+            return (u, key) => {
+                if (key !== 'y' || _enforcing) return;
+                const activeCount = window.activeSensors ? window.activeSensors.filter(n => !n.isHiddenFromUI).length : 1;
+                if (activeCount <= 1) return; // Kein Symmetrie-Zwang bei nur einem aktiven/gültigen Sensor
+
+                const { min, max } = u.scales.y;
+                if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+                const absMax = Math.max(Math.abs(min), Math.abs(max));
+                if (Math.abs(Math.abs(min) - absMax) > 0.1 || Math.abs(Math.abs(max) - absMax) > 0.1) {
+                    _enforcing = true;
+                    u.setScale('y', { min: -absMax, max: absMax });
+                    _enforcing = false;
+                }
+            };
+        })(),
+    ];
+    
+    const parent = gyroRmsPlot.root.parentNode;
+    gyroRmsPlot.destroy();
+    gyroRmsPlot = new uPlot(newOpts, Array(n * 4 + 1).fill().map(() => []), parent);
+    installManualLegendToggle(gyroRmsPlot, "gyroRmsChartLegendHost");
+
+    if (typeof bindYAxisOverlay === 'function') {
+        bindYAxisOverlay('gyro-rms-y-axis-overlay', gyroRmsPlot, false);
+    }
+};
+
+
+
+class SensorNode {
+    constructor(nodeInfo, channelIndex) {
+        const normalizedNode = typeof nodeInfo === "string" ? { ip: nodeInfo, mac: "", isMaster: false } : (nodeInfo || {});
+        this.ip = normalizedNode.ip || "";
+        this.mac = normalizedNode.mac || "";
+        this.sensorId = this.mac || this.ip;
+        this.isMaster = Boolean(normalizedNode.isMaster);
+        this.channelIndex = channelIndex;
+        this.lastDataMs = performance.now(); // Init watchdog baseline
+        
+        // --- Per-Sensor Logic State ---
+        this.gravityCutEnabled = false;
+        this.orientationMode = 0;
+        this.calibrationState = null;
+        this.referenceSampleData = []; // for capturing references
+
+        // Puffer für FFT & Filter
+        if (typeof MultiRingBuffer2 !== 'undefined') {
+             this.accBuffer = new MultiRingBuffer2([Float64Array, Float32Array, Float32Array, Float32Array, Float32Array], 12000, ['time', 'x', 'y', 'z', 'total']);
+             this.rmsBuffer = new MultiRingBuffer2([Float64Array, Float32Array, Float32Array, Float32Array, Float32Array], 20000, ['time', 'x', 'y', 'z', 'total']);
+             this.gyroBuffer = new MultiRingBuffer2([Float64Array, Float32Array, Float32Array, Float32Array], 12000, ['time', 'x', 'y', 'z']);
+             this.gyroRmsBuffer = new MultiRingBuffer2([Float64Array, Float32Array, Float32Array, Float32Array, Float32Array], 20000, ['time', 'x', 'y', 'z', 'total']);
+        } else if (typeof MultiRingBuffer !== 'undefined') {
+             this.accBuffer = new MultiRingBuffer(12000);
+        }
+        
+        this.fftMaxBuffer = [];
+        this.avgFftBuffer = [];
+        this.gyroFftMaxBuffer = [];
+        this.gyroAvgFftBuffer = [];
+        
+        // Eigene Worker Instanzen!
+        this.decodeWorker = new Worker('decode-worker2.js?v=55');
+        this.wsWorker = new Worker('ws-worker.js?v=99');
+        this.fftWorker = new Worker('fft-worker.js');
+        this.rmsWorker = new Worker('rms-worker.js?v=27');
+        this.gyroFftWorker = new Worker('fft-worker.js');
+        this.gyroRmsWorker = new Worker('rms-worker.js?v=27');
+        
+        // NEW: Downsampling und Fusion für diesen Node (für 3D Anzeige)
+        this.downsamplingWorker = new Worker('downsampling-worker.js');
+        this.fusionWorker = new Worker('fusion-worker6.js');
+        
+        this.downsamplingWorker.postMessage({ type: 'init' });
+        this.downsamplingWorker.onmessage = (e) => {
+            this.fusionWorker.postMessage(e.data);
+        };
+        this.fusionWorker.onmessage = (e) => {
+            const msg = e.data;
+            if (msg && msg.type === 'state' && msg.quaternion) {
+                this.orientationState = { 
+                    quaternionXYZW: msg.quaternion,
+                    positionXYZ: msg.position || null 
+                };
+            }
+        };
+        
+        console.log(`[SensorNode] CH${channelIndex+1} Pipeline (Decoding, Websocket, FFT, RMS, Fusion) initialisiert auf ${this.sensorId}`);
+
+        // FFT Worker Event Listener für diese Instanz
+        this.fftWorker.onmessage = (e) => {
+            const { freqs, mags } = e.data;
+            if (!freqs || !mags) return;
+            
+            // Berechne lokale Averages
+            bufferFFTResult(mags, this.fftMaxBuffer, FFT_RING_SIZE);
+            const maxValues = computeMaxFFTValues(this.fftMaxBuffer);
+            bufferAverageFFT(mags, this.avgFftBuffer, N_AVG);
+            const meanValues = computeAverageFFT(this.avgFftBuffer);
+            
+            // Fülle die globalen Multi-FFT Arrays für uPlot  [Freqs, Max_CH1, Mean_CH1, Mag_CH1, Max_CH2...]
+            updateSharedMultiFftData({
+                multiFftData: window.multiFftData,
+                freqs,
+                maxValues,
+                meanValues,
+                magnitudes: mags,
+                channelIndex: this.channelIndex,
+            });
+
+            window.latestWaterfallMags = window.latestWaterfallMags || [];
+            window.latestWaterfallMags[this.channelIndex] = mags;
+
+            if (this.channelIndex === 0 && window.waterfallRenderer) {
+                const visibleNodes = window.activeSensors.filter(n => !n.isHiddenFromUI);
+                const combinedMags = visibleNodes.map(n => window.latestWaterfallMags[n.channelIndex] || new Float32Array(mags.length));
+                syncWaterfallRenderer({
+                    renderer: window.waterfallRenderer,
+                    maxHzInputId: 'waterfallMaxHz',
+                    maxFreq: Math.max(...freqs),
+                    magnitudes: combinedMags,
+                    timestamp: e.data.timestamp,
+                    timeString: e.data.timeString,
+                    clockTimeStr: e.data.clockTimeStr,
+                    lastMaxWindowKey: 'waterfallLastMax',
+                    labelMaxId: 'wfLblMax',
+                    labelMidId: 'wfLblMid',
+                });
+            }
+        };
+
+        // RMS Worker Event Listener für diese Instanz
+        this.rmsWorker.onmessage = (e) => {
+            if(rmsPaused || !this.rmsBuffer) return;
+            const { rmsX, rmsY, rmsZ, rmsTotal, time } = e.data;
+            this.rmsBuffer.push([time, rmsX, rmsY, rmsZ, rmsTotal]);
+        };
+
+        // Gyro RMS Worker Event Listener für diese Instanz
+        this.gyroRmsWorker.onmessage = (e) => {
+            if(rmsPaused || !this.gyroRmsBuffer) return;
+            const { rmsX, rmsY, rmsZ, rmsTotal, time } = e.data;
+            this.gyroRmsBuffer.push([time, rmsX, rmsY, rmsZ, rmsTotal]);
+        };
+
+        // Gyro FFT Worker Event Listener für diese Instanz
+        this.gyroFftWorker.onmessage = (e) => {
+            const { freqs, mags } = e.data;
+            if (!freqs || !mags) return;
+            
+            bufferFFTResult(mags, this.gyroFftMaxBuffer, GYRO_FFT_RING_SIZE);
+            const maxValues = computeMaxFFTValues(this.gyroFftMaxBuffer);
+            bufferAverageFFT(mags, this.gyroAvgFftBuffer, gyroN_AVG);
+            const meanValues = computeAverageFFT(this.gyroAvgFftBuffer);
+            
+            updateSharedMultiFftData({
+                multiFftData: window.multiGyroFftData,
+                freqs,
+                maxValues,
+                meanValues,
+                magnitudes: mags,
+                channelIndex: this.channelIndex,
+            });
+
+            window.latestGyroWaterfallMags = window.latestGyroWaterfallMags || [];
+            window.latestGyroWaterfallMags[this.channelIndex] = mags;
+
+            if (this.channelIndex === 0 && window.gyroWaterfallRenderer) {
+                const visibleNodes = window.activeSensors.filter(n => !n.isHiddenFromUI);
+                const combinedGyroMags = visibleNodes.map(n => window.latestGyroWaterfallMags[n.channelIndex] || new Float32Array(mags.length));
+                syncWaterfallRenderer({
+                    renderer: window.gyroWaterfallRenderer,
+                    maxHzInputId: 'gyroWaterfallMaxHz',
+                    maxFreq: Math.max(...freqs),
+                    magnitudes: combinedGyroMags,
+                    timestamp: e.data.timestamp,
+                    timeString: e.data.timeString,
+                    clockTimeStr: e.data.clockTimeStr,
+                    lastMaxWindowKey: 'gyroWaterfallLastMax',
+                    labelMaxId: 'gwfLblMax',
+                    labelMidId: 'gwfLblMid',
+                });
+            }
+        };
+    }
+
+    connect() {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const url = `${protocol}//${this.ip}/ws`;
+        console.log(`[SensorNode CH${this.channelIndex+1}] Verbinde zu: ${url}`);
+        
+        // Eigener WS-Worker übernimmt die Verbindung für diesen Node
+        this.wsWorker.postMessage({ type: "connect", wsServerUrl: url });
+        
+        this.wsWorker.onmessage = (event) => {
+            this.lastDataMs = performance.now();
+            const { type, payload, subId, value, msg } = event.data;
+            if (type === "data" && payload instanceof ArrayBuffer) {
+                if (window.incrementTelemetryNodeFrames) {
+                    window.incrementTelemetryNodeFrames(this.channelIndex, payload.byteLength || 0);
+                }
+                this.decodeWorker.postMessage(payload, [payload]);
+            } else if (type === "config") {
+                if (!window.sensorConfigs) window.sensorConfigs = {};
+                if (!window.sensorConfigs[this.sensorId]) window.sensorConfigs[this.sensorId] = {};
+                window.sensorConfigs[this.sensorId][subId] = value;
+                console.log(`[SensorNode CH${this.channelIndex+1}] Config empfangen (${this.sensorId}): ${subId}=${value}`);
+            } else if (type === "espStats") {
+                if (payload && payload.syncedEspTime !== undefined) {
+                    // Cache für Sync-Offset (O(1), kein zusätzlicher Aufwand)
+                    this.syncedEspTime = payload.syncedEspTime;
+                    this.decodeWorker.postMessage({ type: 'time_sync', payload: payload.syncedEspTime });
+                }
+                if (window.updateTelemetryNode) {
+                    window.updateTelemetryNode(this.channelIndex, payload);
+                }
+            } else if (type === "firmwareVer") {
+                const safeIp = (this.ip || "").replace(/\./g, "_");
+                const otaBtn = document.getElementById(`otaTriggerBtn_${safeIp}`);
+                if (otaBtn) {
+                    otaBtn.innerText = payload;
+                    otaBtn.style.color = "rgba(255,255,255,0.6)";
+                }
+            } else if (type === "connected") {
+                console.log(`[SensorNode CH${this.channelIndex+1}] Websocket verbunden an ${this.ip}`);
+                if (window.updateTelemetryNodeWsState) {
+                    window.updateTelemetryNodeWsState(this.channelIndex, 'verbunden');
+                }
+            } else if (type === "error" || type === "closed") {
+                console.warn(`[SensorNode CH${this.channelIndex+1}] Websocket Error/Closed:`, event.data);
+                if (window.updateTelemetryNodeWsState) {
+                    window.updateTelemetryNodeWsState(this.channelIndex, type === "error" ? "fehler" : "getrennt");
+                }
+                
+                // AUTO-RECONNECT NACH NVS-WLAN-ABSTURZ
+                // Wenn der NVS geschrieben wird, friert das WLAN auf dem ESP32 temporär ein. LWIP schließt den TCP Socket.
+                // Der Browser muss sich nach dem Freiwerden des Speichers stumpf wiederverbinden, damit Channel 2 überlebt!
+                if (!this.reconnectTimeout) {
+                    console.log(`[SensorNode CH${this.channelIndex+1}] Plane automatischen Reconnect in 2000ms...`);
+                    this.reconnectTimeout = setTimeout(() => {
+                        this.reconnectTimeout = null;
+                        // Erneut verbinden
+                        this.wsWorker.postMessage({ type: "connect", wsServerUrl: url });
+                    }, 2000);
+                }
+            }
+        };
+
+        this.decodeWorker.onmessage = (event) => {
+            const { acc, gyro, temp, info, acccalib, gyrocalib } = event.data;
+            if (temp && temp.length > 0) {
+                const latestTemp = temp[temp.length - 1].value;
+                if (Number.isFinite(latestTemp)) {
+                    this.currentTemperature = latestTemp;
+                }
+            }
+            if (!acc || acc.length === 0) {
+                 if(Math.random() < 0.05) console.warn(`[SensorNode CH${this.channelIndex+1}] Decoder lieferte leeres ACC Array`);
+            }
+            
+            if (info && info.length > 0) {
+                window.updateSensorUIFromInfo(this.ip, info);
+            }
+            
+            // Wenn der Worker in den lokalen Kalibrierungsmodus geschaltet wurde,
+            // pushe die extrahierten Idle-Samples in den globalen Puffer, auf den das Popup lauscht!
+            if (acccalib && acccalib.length > 0) {
+                for (let sample of acccalib) {
+                    accBufferCALIB.push([sample.x, sample.y, sample.z]);
+                }
+            }
+            if (gyrocalib && gyrocalib.length > 0 && typeof gyroBufferCALIB !== 'undefined') {
+                for (let sample of gyrocalib) {
+                    gyroBufferCALIB.push([sample.x, sample.y, sample.z]);
+                }
+            }
+            
+            if (acc && acc.length > 0) {
+                 this.lastDataMs = performance.now();
+                 const calibratedAcc = [];
+                // Fülle lokalen Puffer für FFT & RMS
+                if (this.accBuffer) {
+                    for (let i = 0; i < acc.length; i++) {
+                        let sample = acc[i];
+                        
+                        // NEW: Pipeline Node-Specific Calibration & Gravity Cut!
+                        if (window.buildNodeAccelerationSample) {
+                            sample = window.buildNodeAccelerationSample(sample, this) || sample;
+                        }
+                        
+                        let total = sample.total || Math.sqrt(sample.x*sample.x + sample.y*sample.y + sample.z*sample.z);
+                        this.accBuffer.push([sample.time, sample.x, sample.y, sample.z, total]);
+                        calibratedAcc.push(sample);
+                        
+                        if (typeof isRecording !== 'undefined' && isRecording) {
+                            recordedAccRows.push(createAccRecordingRow(sample, this.channelIndex));
+                            
+                            if (recordedAccRows.length >= MAX_RECORDED_ROWS) {
+                                console.log(`Max rows reached (ACC CH${this.channelIndex+1}). Triggering intermediate download.`);
+                                downloadRecordedCsv(true);
+                            }
+                        }
+                    }
+                }
+                
+                // Pipeline Downsampling & Fusion
+                this.downsamplingWorker.postMessage({ type: 'batch', sensor: 'acc', data: acc });
+
+                 // Sende kalibrierte Daten ins LiveChart
+                 if (window.insertIntoMultiChart) {
+                     window.insertIntoMultiChart(this.channelIndex, calibratedAcc.length > 0 ? calibratedAcc : acc);
+                 }
+            }
+            
+            if (gyro && gyro.length > 0) {
+                const calibratedGyro = [];
+                for (let i = 0; i < gyro.length; i++) {
+                    let sample = gyro[i];
+                    if (window.buildNodeGyroSample) {
+                        sample = window.buildNodeGyroSample(sample, this) || sample;
+                    }
+                    if (this.gyroBuffer) {
+                        this.gyroBuffer.push([sample.time, sample.x, sample.y, sample.z]);
+                    }
+                    calibratedGyro.push(sample);
+                    
+                    if (typeof isRecording !== 'undefined' && isRecording) {
+                        recordedGyroRows.push(createGyroRecordingRow(sample, this.channelIndex));
+                        
+                        if (recordedGyroRows.length >= MAX_RECORDED_ROWS) {
+                            console.log(`Max rows reached (GYRO CH${this.channelIndex+1}). Triggering intermediate download.`);
+                            downloadRecordedCsv(true);
+                        }
+                    }
+                }
+                // Pipeline Downsampling & Fusion
+                this.downsamplingWorker.postMessage({ type: 'batch', sensor: 'gyro', data: gyro });
+                
+                if (window.insertIntoMultiGyroChart) {
+                    window.insertIntoMultiGyroChart(this.channelIndex, calibratedGyro.length > 0 ? calibratedGyro : gyro);
+                }
+            }
+        };
+    }
+}
+
+// --- Decentralized Node-Accessing API ---
+window.getNodeByIp = function(ip) {
+    return window.activeSensors ? window.activeSensors.find(n => n.ip === ip) : null;
+};
+
+window.persistNodeCalibration = function(node) {
+    if (!node || (!node.ip && !node.mac)) return;
+    try {
+        let serializedQuat = null;
+        if (node.calibrationState && node.calibrationState.quat) {
+            serializedQuat = Array.from(node.calibrationState.quat);
+        }
+        const payload = {
+            ip: node.ip,
+            mac: node.mac,
+            orientationMode: node.orientationMode,
+            calibrationState: {
+                scale: node.calibrationState?.scale || 1,
+                quat: serializedQuat,
+                accNoise: node.calibrationState?.accNoise,
+                gyroZero: node.calibrationState?.gyroZero
+            },
+            gravityCutEnabled: node.gravityCutEnabled
+        };
+        const identifier = node.mac ? node.mac.replace(/:/g, '') : node.ip.replace(/\./g, '_');
+        const key = `node_calib_${identifier}`;
+        globalThis.localStorage.setItem(key, JSON.stringify(payload));
+        console.log(`[CH-SEC] Saved calibration for ${identifier}`);
+    } catch(e) { console.warn(e); }
+};
+
+window.restoreNodeCalibration = function(node) {
+    if (!node || (!node.ip && !node.mac)) return;
+    try {
+        const identifier = node.mac ? node.mac.replace(/:/g, '') : node.ip.replace(/\./g, '_');
+        const key = `node_calib_${identifier}`;
+        const raw = globalThis.localStorage.getItem(key);
+        if (raw) {
+            const payload = JSON.parse(raw);
+            node.orientationMode = payload.orientationMode || 0;
+            node.calibrationState = payload.calibrationState || {};
+            node.gravityCutEnabled = !!payload.gravityCutEnabled;
+            
+            // Master Override (Syncs into global scope replacing old IP-based cookies)
+            if (node.isMaster) {
+                if (typeof window.applyOrientationMode === 'function') {
+                    window.applyOrientationMode(node.orientationMode, { syncDropdown: true, persistState: false });
+                }
+                
+                if (node.calibrationState.scale) {
+                     window.currentAccelCalibrationScale = node.calibrationState.scale;
+                     if (window.decodeWorker) window.decodeWorker.postMessage({ type: 'accelCalibrationScale', payload: { scale: node.calibrationState.scale }});
+                }
+                
+                if (node.calibrationState.gyroZero) {
+                     window.currentWorldSimpleGyroState = node.calibrationState.gyroZero;
+                     if (window.decodeWorker) window.decodeWorker.postMessage({ type: 'worldSimpleGyroState', payload: node.calibrationState.gyroZero });
+                }
+                
+                if (node.calibrationState.quat) {
+                      let q = node.calibrationState.quat;
+                      if (!Array.isArray(q) && !(q instanceof Float32Array)) {
+                          if (q[0] !== undefined && q[1] !== undefined) {
+                              q = [q[0], q[1], q[2], q[3]];
+                          } else {
+                              q = null; 
+                          }
+                      }
+                      if (q && window.calibrationMemory) {
+                          window.calibrationMemory[1] = q;
+                          if (typeof window.syncViewportPostTransformQuaternion === 'function') {
+                               window.syncViewportPostTransformQuaternion({ persistState: true, resetLiveBuffers: false });
+                          }
+                      }
+                }
+                return;
+            }
+            
+            if (node.decodeWorker) {
+                 if (node.calibrationState.scale) node.decodeWorker.postMessage({ type: 'accelCalibrationScale', payload: { scale: node.calibrationState.scale }});
+                 if (node.calibrationState.gyroZero) node.decodeWorker.postMessage({ type: 'worldSimpleGyroState', payload: node.calibrationState.gyroZero });
+                 if (node.calibrationState.quat) {
+                      let q = node.calibrationState.quat;
+                      if (!Array.isArray(q) && !(q instanceof Float32Array)) {
+                          if (q[0] !== undefined && q[1] !== undefined) {
+                              q = [q[0], q[1], q[2], q[3]];
+                          } else {
+                              q = null; // Corrupted
+                          }
+                      }
+                      if (q) node.decodeWorker.postMessage({ type: 'calibdata', payload: { type: 2, quaternion: q }});
+                 }
+                 node.decodeWorker.postMessage({ type: 'calibmode', payload: { mode: node.orientationMode }});
+                 node.decodeWorker.postMessage({ type: 'setgravity', payload: { gravity: node.gravityCutEnabled }});
+            }
+            console.log(`[CH-SEC] Restored calibration for ${node.ip}`);
+            return true;
+        }
+    } catch(e) { console.warn(e); }
+    return false;
+};
+
+window.setNodeOrientationMode = function(ip, mode) {
+    const node = window.getNodeByIp(ip);
+    if (!node) return;
+    node.orientationMode = mode;
+    console.log(`[Node ${ip}] Orientation = ${mode}`);
+    
+    if (node.decodeWorker && !node.isMaster) {
+        node.decodeWorker.postMessage({ type: 'calibmode', payload: { mode: mode } });
+        window.persistNodeCalibration(node);
+    }
+    
+    // Fallback: If this is Master (CH1), sync global mode to keep 3D Viewer identical
+    if (node.isMaster && typeof window.setOrientationMode === 'function') {
+        window.setOrientationMode(mode);
+    }
+};
+
+window.toggleNodeGravityCut = function(ip) {
+    const node = window.getNodeByIp(ip);
+    if (!node) return false;
+    node.gravityCutEnabled = !node.gravityCutEnabled;
+    console.log(`[Node ${ip}] Gravity Cut = ${node.gravityCutEnabled}`);
+    
+    if (node.decodeWorker && !node.isMaster) {
+        node.decodeWorker.postMessage({ type: 'setgravity', payload: { gravity: node.gravityCutEnabled } });
+        window.persistNodeCalibration(node);
+    }
+    
+    // Fallback: Sync Master to Global for 3D Viewer
+    if (node.isMaster && typeof window.setGravityCutEnabled === 'function') {
+        window.setGravityCutEnabled(node.gravityCutEnabled);
+    }
+    return node.gravityCutEnabled;
+};
+
+window.openNodeCalibrationPopup = function(ip) {
+    const node = window.getNodeByIp(ip);
+    if (!node) return;
+    
+    // Hack: Da das bestehende popup immer global arbeitet, überschreiben wir temporär
+    // die Quelle, wenn es CH2 ist, oder wir geben eine Meldung aus, falls zu komplex.
+    // Für jetzt öffnen wir das globale, aber merken uns intern den "pendingCalibrationNode"
+    window.pendingCalibrationIp = ip;
+    
+    // openPopup() ist im selben ES Modul vorhanden und muss nicht über window. angesprochen werden!
+    openPopup();
+    
+    const popupTitle = document.querySelector(".popup-header h2");
+    if(popupTitle) popupTitle.innerText = `Sensorkalibrierung (${ip})`;
+};
+
+// window.buildNodeAccelerationSample starts around line 3652
+window.buildNodeAccelerationSample = function(raw, node) {
+    if (!raw) return null;
+    if (node.isMaster && typeof window.buildLiveAccelerationSample === 'function') {
+        return window.buildLiveAccelerationSample(null, raw) || raw;
+    }
+    // Pipeline is now natively solved in the decode-worker2.js for secondary nodes as well!
+    return raw;
+};
+
+window.buildNodeGyroSample = function(raw, node) {
+    if (!raw) return null;
+    if (node.isMaster && typeof window.buildLiveGyroSample === 'function') {
+        return window.buildLiveGyroSample(null, raw) || raw;
+    }
+    return raw;
+};
+
+
+// === MULTI-CHANNEL BUFFER MERGER (BUCKETING) ===
+window.CHART_BUCKET_MS = 2.0; // 2 ms Eimer (500 Hz Chart-Resolution ist für den Browser flüssig)
+
+window.getMultiChartDataWindow = function(timeMinSec) {
+    if (!window.multiChartData || window.multiChartData.length === 0 || window.multiChartData[0].length === 0) 
+        return window.multiChartData;
+        
+    let times = window.multiChartData[0];
+    let startIdx = 0;
+    while(startIdx < times.length && times[startIdx] < timeMinSec) startIdx++;
+    return window.multiChartData.map(arr => arr.slice(startIdx));
+};
+
+window.getMultiGyroChartDataWindow = function(timeMinSec) {
+    if (!window.multiGyroChartData || window.multiGyroChartData.length === 0 || window.multiGyroChartData[0].length === 0) 
+        return window.multiGyroChartData;
+        
+    let times = window.multiGyroChartData[0];
+    let startIdx = 0;
+    while(startIdx < times.length && times[startIdx] < timeMinSec) startIdx++;
+    return window.multiGyroChartData.map(arr => arr.slice(startIdx));
+};
+
+function preserveAllYScales(myChart, updateCallback) {
+    if (!myChart || !myChart.scales) {
+        updateCallback();
+        return;
+    }
+    const scalesBefore = {};
+    for (let key in myChart.scales) {
+        if (key.startsWith('y')) {
+            scalesBefore[key] = { min: myChart.scales[key].min, max: myChart.scales[key].max };
+        }
+    }
+    
+    updateCallback();
+    
+    for (let key in scalesBefore) {
+        if (scalesBefore[key].min !== undefined && scalesBefore[key].max !== undefined) {
+            myChart.setScale(key, scalesBefore[key]);
+        }
+    }
+}
+
+function rebuildAccChartForSensorCount(sensorCount) {
+    if (!chart || typeof uPlot === "undefined") return;
+
+    const channelCount = Math.max(1, Number(sensorCount) || 1);
+    const accChartHost = document.getElementById("accChartHost");
+    const accChartLegendHost = document.getElementById("accChartLegendHost");
+    const prevX = chart.scales?.x ? { min: chart.scales.x.min, max: chart.scales.x.max } : null;
+    const prevY = chart.scales?.y ? { min: chart.scales.y.min, max: chart.scales.y.max } : null;
+
+    const baseColors = [
+        ["#FFD600", "#ec3030ff", "#7ABBFFff"], // CH1 (Z=hellblau)
+        ["#997A00", "#8C1C1Cff", "#3D6FCCff"], // CH2: CH1 ~60%
+        ["#ff4a4a", "#cc0000",   "#800000"],   // CH3
+        ["#50c878", "#228b22",   "#006400"],   // CH4
+    ];
+
+    const series = [
+        { label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 5) }
+    ];
+
+    const scales = { x: {} };
+    const axes = [
+        {
+            time: false,
+            scale: "x",
+            space: 64,
+            size: 44,
+            label: "Zeit (s)",
+            grid: { show: true },
+            values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
+            stroke: "white"
+        }
+    ];
+
+    for (let i = 0; i < channelCount; i++) {
+        const colors = baseColors[i % baseColors.length];
+        const scaleId = i === 0 ? "y" : "y" + (i + 1);
+        
+        series.push({ label: `CH${i + 1} X (mg)`, stroke: colors[0], spanGaps: true, scale: scaleId });
+        series.push({ label: `CH${i + 1} Y (mg)`, stroke: colors[1], spanGaps: true, scale: scaleId });
+        series.push({ label: `CH${i + 1} Z (mg)`, stroke: colors[2], spanGaps: true, scale: scaleId });
+        
+        scales[scaleId] = { range: [-1100, 1100] };
+        
+        axes.push({
+            scale: scaleId,
+            size: 56,
+            side: i % 2 === 0 ? 3 : 1, // 3: links, 1: rechts
+            label: channelCount > 1 ? `CH${i + 1}` : "Wert",
+            grid: { show: i === 0 },
+            ticks: { format: (u, v) => v.toFixed(2) + " mg" },
+            stroke: "white"
+        });
+    }
+
+    const nextData = Array.from({ length: series.length }, () => []);
+    const nextOptions = {
+        ...getSize(),
+        title: channelCount > 1 ? "ACC Live-Daten Multi-Channel" : "ACC Live-Daten",
+        width: accChartHost?.clientWidth || chart.width,
+        height: accChartHost?.clientHeight || chart.height,
+        padding: [6, 8, 2, 2],
+        axes: axes,
+        scales: scales,
+        series,
+        cursor: {
+            points: {},
+            drag: { x: true, y: true, setScale: true }
+        },
+        legend: {
+            mount: (u, table) => {
+                accChartLegendHost?.replaceChildren(table);
+            },
+        },
+        plugins: [createCursorYPlugin("mg")],
+    };
+
+    const parent = chart.root.parentNode;
+    chart.destroy();
+    chart = new uPlot(nextOptions, nextData, parent);
+
+    if (prevY && prevY.min !== undefined && prevY.max !== undefined) {
+        chart.setScale("y", { min: prevY.min, max: prevY.max });
+    }
+    if (prevX && prevX.min !== undefined && prevX.max !== undefined) {
+        chart.setScale("x", { min: prevX.min, max: prevX.max });
+    }
+
+    rebindAccChartInteractions();
+    installManualLegendToggle(chart, "accChartLegendHost");
+}
+
+function rebindOverlayElement(overlayId) {
+    const oldOverlay = document.getElementById(overlayId);
+    if (!oldOverlay || !oldOverlay.parentNode) {
+        return null;
+    }
+
+    const newOverlay = oldOverlay.cloneNode(false);
+    oldOverlay.parentNode.replaceChild(newOverlay, oldOverlay);
+    return newOverlay;
+}
+
+function rebindAccChartInteractions() {
+    if (!chart) return;
+
+    preserveScalesOnSeriesToggle(chart);
+
+    rebindOverlayElement("y-axis-overlay");
+    rebindOverlayElement("y2-axis-overlay");
+    rebindOverlayElement("x-axis-overlay");
+    
+    // We only bind y2 if it exists in the chart (e.g. scales.y2 is defined)
+    if (chart.scales && chart.scales.y2) {
+        bindYAxisOverlay("y2-axis-overlay", chart, false, "y2");
+        const syncBtn = document.getElementById("syncYAxesBtn");
+        if (syncBtn) syncBtn.style.display = ""; // Show when multiple nodes
+    } else {
+        const syncBtn = document.getElementById("syncYAxesBtn");
+        if (syncBtn) syncBtn.style.display = "none";
+    }
+    bindYAxisOverlay("y-axis-overlay", chart, false, "y");
+    bindSharedXAxisOverlay("x-axis-overlay", chart);
+    window.chartInteractions && window.chartInteractions.syncAxisOverlayPositions(chart, "livechart2", "y-axis-overlay", "x-axis-overlay", "y2-axis-overlay");
+
+    if (chart.over && !chart.over.dataset.accDblclickBound) {
+        chart.over.addEventListener("dblclick", () => {
+            window.setPanOffset(0);
+            if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
+                chart.setScale("x", { min: lastTimestamp - (displayDurationSeconds * 1000000), max: lastTimestamp });
+                if (window.chartInteractions) window.chartInteractions.syncTimeRangeUi(displayDurationSeconds * 1000000);
+            } else {
+                chart.setScale("x", { auto: true });
+            }
+            
+            for (let key in chart.scales) {
+                if (key === "x") continue;
+                chart.setScale(key, { min: -1100, max: 1100 });
+            }
+        });
+        chart.over.dataset.accDblclickBound = "1";
+    }
+}
+
+function rebindGyroChartInteractions() {
+    if (!gyroChart) return;
+
+    preserveScalesOnSeriesToggle(gyroChart);
+
+    rebindOverlayElement("gyro-y-axis-overlay");
+    rebindOverlayElement("gyro-y2-axis-overlay");
+    rebindOverlayElement("gyro-x-axis-overlay");
+    
+    if (gyroChart.scales && gyroChart.scales.y2) {
+        bindYAxisOverlay("gyro-y2-axis-overlay", gyroChart, false, "y2");
+        const syncBtn = document.getElementById("syncGyroYAxesBtn");
+        if (syncBtn) syncBtn.style.display = ""; // Show when multiple nodes
+    } else {
+        const syncBtn = document.getElementById("syncGyroYAxesBtn");
+        if (syncBtn) syncBtn.style.display = "none";
+    }
+    bindYAxisOverlay("gyro-y-axis-overlay", gyroChart, false, "y");
+    bindSharedXAxisOverlay("gyro-x-axis-overlay", gyroChart);
+    window.chartInteractions && window.chartInteractions.syncAxisOverlayPositions(gyroChart, "gyrochart", "gyro-y-axis-overlay", "gyro-x-axis-overlay", "gyro-y2-axis-overlay");
+
+    if (gyroChart.over && !gyroChart.over.dataset.gyroDblclickBound) {
+        gyroChart.over.addEventListener("dblclick", () => {
+            window.setPanOffset(0);
+            if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
+                gyroChart.setScale("x", { min: lastTimestamp - (displayDurationSeconds * 1000000), max: lastTimestamp });
+                if (window.chartInteractions) window.chartInteractions.syncTimeRangeUi(displayDurationSeconds * 1000000);
+            } else {
+                gyroChart.setScale("x", { auto: true });
+            }
+            
+            for (let key in gyroChart.scales) {
+                if (key === "x") continue;
+                gyroChart.setScale(key, { min: -20000, max: 20000 });
+            }
+        });
+        gyroChart.over.dataset.gyroDblclickBound = "1";
+    }
+}
+
+function rebuildGyroChartForSensorCount(sensorCount) {
+    if (!gyroChart || typeof uPlot === "undefined") return;
+
+    const channelCount = Math.max(1, Number(sensorCount) || 1);
+    const gyroChartHost = document.getElementById("gyrochart");
+    const gyroChartLegendHost = document.getElementById("gyroChartLegendHost");
+    const prevX = gyroChart.scales?.x ? { min: gyroChart.scales.x.min, max: gyroChart.scales.x.max } : null;
+    const prevY = gyroChart.scales?.y ? { min: gyroChart.scales.y.min, max: gyroChart.scales.y.max } : null;
+
+    const baseColors = [
+        ["#FFD600", "#ec3030ff", "#7ABBFFff"], // CH1 (Z=hellblau)
+        ["#997A00", "#8C1C1Cff", "#3D6FCCff"], // CH2: CH1 ~60%
+        ["#ff4a4a", "#cc0000",   "#800000"],   // CH3
+        ["#50c878", "#228b22",   "#006400"],   // CH4
+    ];
+
+    const series = [
+        { label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 5) }
+    ];
+
+    const scales = { x: {} };
+    const axes = [
+        {
+            time: false,
+            scale: "x",
+            space: 64,
+            size: 44,
+            label: "Zeit (s)",
+            grid: { show: true },
+            values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
+            stroke: "white"
+        }
+    ];
+
+    for (let i = 0; i < channelCount; i++) {
+        const colors = baseColors[i % baseColors.length];
+        const scaleId = i === 0 ? "y" : "y" + (i + 1);
+        
+        series.push({ label: `CH${i + 1} X (mdp)`, stroke: colors[0], spanGaps: true, scale: scaleId });
+        series.push({ label: `CH${i + 1} Y (mdp)`, stroke: colors[1], spanGaps: true, scale: scaleId });
+        series.push({ label: `CH${i + 1} Z (mdp)`, stroke: colors[2], spanGaps: true, scale: scaleId });
+        
+        scales[scaleId] = { range: [-20000, 20000] };
+        
+        axes.push({
+            scale: scaleId,
+            size: 56,
+            side: i % 2 === 0 ? 3 : 1, // 3: links, 1: rechts
+            label: channelCount > 1 ? `CH${i + 1}` : "Wert",
+            grid: { show: i === 0 },
+            ticks: { format: (u, v) => v.toFixed(2) + " mdp" },
+            stroke: "white"
+        });
+    }
+
+    const nextData = Array.from({ length: series.length }, () => []);
+    const nextOptions = {
+        ...getGyroChartSize(),
+        title: channelCount > 1 ? "GYRO Live-Daten Multi-Channel" : "GYRO Live-Daten",
+        width: gyroChartHost?.clientWidth || gyroChart.width,
+        height: gyroChartHost?.clientHeight || gyroChart.height,
+        padding: [6, 8, 2, 2],
+        axes: axes,
+        scales: scales,
+        series,
+        cursor: {
+            points: {},
+            drag: { x: true, y: true, setScale: true }
+        },
+        legend: {
+            mount: (u, table) => {
+                gyroChartLegendHost?.replaceChildren(table);
+            },
+        },
+        plugins: [createCursorYPlugin("mdp")],
+    };
+
+    const parent = gyroChart.root.parentNode;
+    gyroChart.destroy();
+    gyroChart = new uPlot(nextOptions, nextData, parent);
+
+    if (prevY && prevY.min !== undefined && prevY.max !== undefined) {
+        gyroChart.setScale("y", { min: prevY.min, max: prevY.max });
+    }
+    if (prevX && prevX.min !== undefined && prevX.max !== undefined) {
+        gyroChart.setScale("x", { min: prevX.min, max: prevX.max });
+    }
+
+    rebindGyroChartInteractions();
+    installManualLegendToggle(gyroChart, "gyroChartLegendHost");
+}
+
+function normalizeMultiChartDataForPlot(rawData) {
+    if (!Array.isArray(rawData) || rawData.length === 0) {
+        return rawData;
+    }
+
+    const times = Array.isArray(rawData[0]) ? rawData[0].slice() : [];
+    const normalized = [times];
+
+    for (let seriesIndex = 1; seriesIndex < rawData.length; seriesIndex++) {
+        const sourceSeries = Array.isArray(rawData[seriesIndex]) ? rawData[seriesIndex] : [];
+        const denseSeries = new Array(times.length);
+
+        for (let i = 0; i < times.length; i++) {
+            const value = sourceSeries[i];
+            denseSeries[i] = Number.isFinite(value) ? value : null;
+        }
+
+        normalized.push(denseSeries);
+    }
+
+    return normalized;
+}
+
+
+
+window.insertIntoMultiChart = function(channelIndex, samples) {
+    if (!window.multiChartData || window.multiChartData.length === 0) return;
+    if (channelIndex >= window.activeSensors.length) return;
+    
+    const baseIdx = channelIndex * 4 + 1;
+    if (baseIdx + 3 >= window.multiChartData.length) return;
+    
+    const node = window.activeSensors[channelIndex];
+    // --- Offset-Tracking für Sekundär-Kanäle (O(1) EMA, kein Array/Sort) ---
+    if (node) {
+        if (channelIndex === 0) {
+            // Master: kein Offset nötig
+            node.timeOffset = 0;
+        } else if (samples.length > 0) {
+            // Primär: syncedEspTime aus espStats (aktuellste Firmware-Zeit, O(1))
+            // Fallback: Ring-Buffer-Lookup falls espStats noch nicht empfangen
+            const masterNode = window.activeSensors[0];
+            let masterLatestTime = 0;
+            if (masterNode?.syncedEspTime > 0 && node.syncedEspTime > 0) {
+                // Direkte ESP-Zeitdifferenz – stabilster Weg, unabhängig von Datenpaketen
+                masterLatestTime = masterNode.syncedEspTime;
+                const secondaryEspTime = node.syncedEspTime;
+                const currentDiff = masterLatestTime - secondaryEspTime;
+                const prevOffset = node.timeOffset;
+                if (!Number.isFinite(prevOffset) || prevOffset === 0) {
+                    node.timeOffset = currentDiff;
+                } else {
+                    const delta = currentDiff - prevOffset;
+                    // Sprung > 500ms → direkt setzen, sonst EMA α=0.05
+                    node.timeOffset = Math.abs(delta) > 500000
+                        ? currentDiff
+                        : prevOffset + delta * 0.05;
+                }
+            } else {
+                // Fallback: O(1) Ring-Buffer-Lookup
+                masterLatestTime = Number(
+                    (masterNode?.accBuffer ?? accBuffer)?.getLast?.()?.time ?? 0
+                );
+                const secondaryLatestTime = samples[samples.length - 1].time;
+                if (masterLatestTime > 0 && secondaryLatestTime > 0) {
+                    const currentDiff = masterLatestTime - secondaryLatestTime;
+                    const prevOffset = node.timeOffset;
+                    if (!Number.isFinite(prevOffset) || prevOffset === 0) {
+                        node.timeOffset = currentDiff;
+                    } else {
+                        const delta = currentDiff - prevOffset;
+                        node.timeOffset = Math.abs(delta) > 500000
+                            ? currentDiff
+                            : prevOffset + delta * 0.05;
+                    }
+                } else if (!Number.isFinite(node.timeOffset)) {
+                    node.timeOffset = 0;
+                }
+            }
+        } else if (!Number.isFinite(node.timeOffset)) {
+            node.timeOffset = 0;
+        }
+    }
+
+    const timeArr = window.multiChartData[0];
+    const xArr = window.multiChartData[baseIdx];
+    const yArr = window.multiChartData[baseIdx + 1];
+    const zArr = window.multiChartData[baseIdx + 2];
+    const totalArr = window.multiChartData[baseIdx + 3];
+    
+    for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        const t = s.time + (Number.isFinite(node?.timeOffset) ? node.timeOffset : 0);
+        
+        let lastTime = timeArr.length > 0 ? timeArr[timeArr.length - 1] : -1;
+        
+        if (timeArr.length === 0 || t > lastTime) {
+            timeArr.push(t);
+            for (let c = 1; c < window.multiChartData.length; c++) {
+                window.multiChartData[c].push(null);
+            }
+            xArr[timeArr.length - 1] = s.x;
+            yArr[timeArr.length - 1] = s.y;
+            zArr[timeArr.length - 1] = s.z;
+            totalArr[timeArr.length - 1] = s.total || Math.hypot(s.x, s.y, s.z);
+        } else {
+             let k = timeArr.length - 1;
+             while (k >= 0 && timeArr[k] > t + 5000) {
+                 k--;
+             }
+             if (k >= 0 && Math.abs(timeArr[k] - t) <= 5000) {
+                 xArr[k] = s.x;
+                 yArr[k] = s.y;
+                 zArr[k] = s.z;
+                 totalArr[k] = s.total || Math.hypot(s.x, s.y, s.z);
+             } else {
+                 const insertPos = k + 1;
+                 timeArr.splice(insertPos, 0, t);
+                 for (let c = 1; c < window.multiChartData.length; c++) {
+                     window.multiChartData[c].splice(insertPos, 0, null);
+                 }
+                 xArr[insertPos] = s.x;
+                 yArr[insertPos] = s.y;
+                 zArr[insertPos] = s.z;
+                 totalArr[insertPos] = s.total || Math.hypot(s.x, s.y, s.z);
+             }
+        }
+    }
+    
+    const MAX_BUCKETS = 60000;
+    if (timeArr.length > MAX_BUCKETS) {
+        const excess = timeArr.length - MAX_BUCKETS;
+        for (let i = 0; i < window.multiChartData.length; i++) {
+            window.multiChartData[i].splice(0, excess);
+        }
+    }
+};
+
+window.insertIntoMultiGyroChart = function(channelIndex, samples) {
+    if (!window.multiGyroChartData || window.multiGyroChartData.length === 0) return;
+    if (channelIndex >= window.activeSensors.length) return;
+    
+    const baseIdx = channelIndex * 3 + 1;
+    if (baseIdx + 2 >= window.multiGyroChartData.length) return;
+    
+    const node = window.activeSensors[channelIndex];
+    if (node) {
+        if (channelIndex === 0) {
+            node.timeOffset = 0;
+        } else if (samples.length > 0) {
+            let masterLatestTime = 0;
+            const masterBuffer = window.activeSensors[0]?.gyroBuffer;
+
+            if (masterBuffer?.length > 0) {
+                masterLatestTime = Number(masterBuffer.getLast()?.time || 0);
+            } else if (window.multiGyroChartData?.[0]?.length > 0) {
+                const times = window.multiGyroChartData[0];
+                masterLatestTime = Number(times[times.length - 1] || 0);
+            } else if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
+                masterLatestTime = Number(lastTimestamp);
+            }
+
+            const secondaryLatestTime = Number(samples[samples.length - 1]?.time || 0);
+            if (masterLatestTime > 0 && secondaryLatestTime > 0) {
+                const diff = masterLatestTime - secondaryLatestTime;
+                if (!Number.isFinite(node.timeOffset) || node.timeOffset === 0 || Math.abs(node.timeOffset - diff) > 1000000) {
+                    node.timeOffset = diff;
+                }
+            } else if (!Number.isFinite(node.timeOffset)) {
+                node.timeOffset = 0;
+            }
+        } else if (!Number.isFinite(node.timeOffset)) {
+            node.timeOffset = 0;
+        }
+    }
+
+    const timeArr = window.multiGyroChartData[0];
+    const xArr = window.multiGyroChartData[baseIdx];
+    const yArr = window.multiGyroChartData[baseIdx + 1];
+    const zArr = window.multiGyroChartData[baseIdx + 2];
+    
+    for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        const t = s.time + (Number.isFinite(node?.timeOffset) ? node.timeOffset : 0);
+        
+        let lastTime = timeArr.length > 0 ? timeArr[timeArr.length - 1] : -1;
+        
+        if (timeArr.length === 0 || t > lastTime) {
+            timeArr.push(t);
+            for (let c = 1; c < window.multiGyroChartData.length; c++) {
+                window.multiGyroChartData[c].push(null);
+            }
+            xArr[timeArr.length - 1] = s.x;
+            yArr[timeArr.length - 1] = s.y;
+            zArr[timeArr.length - 1] = s.z;
+        } else {
+             let k = timeArr.length - 1;
+             while (k >= 0 && timeArr[k] > t + 5000) {
+                 k--;
+             }
+             if (k >= 0 && Math.abs(timeArr[k] - t) <= 5000) {
+                 xArr[k] = s.x;
+                 yArr[k] = s.y;
+                 zArr[k] = s.z;
+             } else {
+                 const insertPos = k + 1;
+                 timeArr.splice(insertPos, 0, t);
+                 for (let c = 1; c < window.multiGyroChartData.length; c++) {
+                     window.multiGyroChartData[c].splice(insertPos, 0, null);
+                 }
+                 xArr[insertPos] = s.x;
+                 yArr[insertPos] = s.y;
+                 zArr[insertPos] = s.z;
+             }
+        }
+    }
+    
+    const MAX_BUCKETS_GYRO = 60000;
+    if (timeArr.length > MAX_BUCKETS_GYRO) {
+        const excess = timeArr.length - MAX_BUCKETS_GYRO;
+        for (let i = 0; i < window.multiGyroChartData.length; i++) {
+            window.multiGyroChartData[i].splice(0, excess);
+        }
+    }
+};
+
+
+window.initializeDashboardNodes = function(nodes) {
+    const nodesList = document.getElementById('nodesList');
+    if (nodesList) nodesList.innerHTML = '';
+    
+    // Zerstöre alte Background-Worker, falls der Refresh-Button gedrückt wurde
+    if (window.activeSensors) {
+        window.activeSensors.forEach(node => {
+            if (node.isMaster) return; // Globale Master-Worker NICHT zerstören!
+            
+            if (node.wsWorker) {
+                node.wsWorker.postMessage({ type: "disconnect" });
+                node.wsWorker.terminate();
+            }
+            if (node.decodeWorker) node.decodeWorker.terminate();
+            if (node.fftWorker) node.fftWorker.terminate();
+            if (node.rmsWorker) node.rmsWorker.terminate();
+            if (node.gyroFftWorker) node.gyroFftWorker.terminate();
+            if (node.gyroRmsWorker) node.gyroRmsWorker.terminate();
+        });
+    }
+    window.activeSensors = []; // Reset Nodes
+
+    updateRelativeAnalysisNodeSelector(nodes); // Update Relativ-Tab Dropdown
+    if (typeof accVectorViewport !== 'undefined' && accVectorViewport && typeof accVectorViewport.updateNodeSelector === 'function') {
+        accVectorViewport.updateNodeSelector(nodes);
+    }
+
+    const settingsTargetSelect = document.getElementById("settingsSensorTarget");
+    const sensorTabsContainer = document.getElementById("sensorTabsContainer");
+    const multiNodeSettingsHost = document.getElementById("multiNodeSettingsHost");
+    if (settingsTargetSelect) settingsTargetSelect.innerHTML = '';
+    if (sensorTabsContainer) sensorTabsContainer.innerHTML = '';
+    if (multiNodeSettingsHost) multiNodeSettingsHost.innerHTML = '';
+
+    nodes.forEach((nodeInfo, idx) => {
+        const nodeIp = nodeInfo.ip;
+        const nodeMac = nodeInfo.mac || "";
+        const isMasterNode = Boolean(nodeInfo.isMaster);
+        const channelName = isMasterNode ? "CH1 (Master)" : `CH${idx+1}`;
+        const tabColor = ['#FFD600', '#ec3030ff', '#50c878', '#4da6ff'][idx % 4];
+
+        // SensorNode-Objekt erzeugen & verbinden (moved up)
+        let node;
+        if (isMasterNode) {
+            node = {
+                ip: nodeIp,
+                mac: nodeMac,
+                sensorId: nodeMac || nodeIp,
+                isMaster: true,
+                channelIndex: idx,
+                orientationMode: typeof currentOrientationMode !== 'undefined' ? currentOrientationMode : 0,
+                gravityCutEnabled: typeof gravityCutEnabled !== 'undefined' ? gravityCutEnabled : false,
+                calibrationState: {
+                    quat: typeof calibrationMemory !== 'undefined' && calibrationMemory ? calibrationMemory[1] : null,
+                    scale: typeof currentAccelCalibrationScale !== 'undefined' ? currentAccelCalibrationScale : 1,
+                    gyroZero: typeof currentWorldSimpleGyroState !== 'undefined' ? currentWorldSimpleGyroState : null,
+                    accNoise: 15
+                },
+                accRawBuffer: window.accRawBuffer ?? (typeof accRawBuffer !== 'undefined' ? accRawBuffer : null),
+                accBuffer: window.accBuffer ?? (typeof accBuffer !== 'undefined' ? accBuffer : null),
+                rmsBuffer: window.rmsBuffer ?? (typeof rmsBuffer !== 'undefined' ? rmsBuffer : null),
+                gyroRawBuffer: window.gyroRawBuffer ?? (typeof gyroRawBuffer !== 'undefined' ? gyroRawBuffer : null),
+                gyroBuffer: window.gyroBuffer ?? (typeof gyroBuffer !== 'undefined' ? gyroBuffer : null),
+                gyroRmsBuffer: window.gyroRmsBuffer ?? (typeof gyroRmsBuffer !== 'undefined' ? gyroRmsBuffer : null),
+                fftWorker,
+                rmsWorker,
+                gyroFftWorker: typeof gyroFftWorker !== 'undefined' ? gyroFftWorker : null,
+                gyroRmsWorker: typeof gyroRmsWorker !== 'undefined' ? gyroRmsWorker : null,
+            };
+            window.restoreNodeCalibration(node);
+        } else {
+            node = new SensorNode(nodeInfo, idx);
+            window.restoreNodeCalibration(node);
+        }
+        window.activeSensors.push(node);
+
+        // Generiere dedizierte Sensor-Einstellungspalte!
+        if (typeof buildSettingsColumnForNode === 'function') {
+            buildSettingsColumnForNode(nodeIp, channelName, tabColor, nodeMac);
+        }
+
+        // 1) Hidden Select befüllen
+        if (settingsTargetSelect) {
+            const opt = document.createElement("option");
+            opt.value = nodeIp;
+            opt.textContent = channelName;
+            opt.dataset.sensorMac = nodeMac;
+            settingsTargetSelect.appendChild(opt);
+        }
+
+        // UI aktualisieren
+        if (nodesList) {
+            const div = document.createElement('div');
+            div.style.padding = '4px 8px';
+            div.style.background = 'rgba(255,255,255,0.05)';
+            div.style.borderRadius = '4px';
+            div.style.display = 'flex';
+            div.style.justifyContent = 'space-between';
+            div.style.alignItems = 'center';
+            
+            const color = ['#4da6ff', '#ff4a4a', '#50c878', '#ffd600'][idx % 4];
+            
+            div.id = `sensorNodeListRow_${idx}`;
+            div.innerHTML = `
+                <span style="color:${color}; font-weight:bold;">CH ${idx+1} <span id="nodeWsState_${idx}" style="font-size:0.6rem;opacity:0.6; margin-left:4px;">(● Sucht...)</span></span>
+                <span style="font-family:monospace;">${nodeMac || nodeIp}</span>
+            `;
+            nodesList.appendChild(div);
+        }
+        
+        if (!isMasterNode && !window.isOfflineReplayMode) {
+             node.connect();
+        }
+    });
+
+    // uPlot-Diagramm Serien dynamically anlegen
+    rebuildAccChartForSensorCount(nodes.length);
+    rebuildGyroChartForSensorCount(nodes.length);
+    
+    // Initialisiere Data Array (Zeit + 4 * N für ACC, Zeit + 3 * N für GYRO)
+    window.multiChartData = Array(nodes.length * 4 + 1).fill().map(() => []);
+    window.multiGyroChartData = Array(nodes.length * 3 + 1).fill().map(() => []);
+    
+    if (window.setFftSensorCount) {
+         window.setFftSensorCount(nodes.length);
+         window.multiFftData = Array(nodes.length * 3 + 1).fill().map(() => []); 
+    }
+
+    if (window.setGyroFftSensorCount) {
+         window.setGyroFftSensorCount(nodes.length);
+         window.multiGyroFftData = Array(nodes.length * 3 + 1).fill().map(() => []); 
+    }
+
+    if (window.setRmsSensorCount) {
+         window.setRmsSensorCount(nodes.length);
+    }
+
+    if (window.setGyroRmsSensorCount) {
+         window.setGyroRmsSensorCount(nodes.length);
+    }
+};
+
+async function discoverNodes() {
+    try {
+        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+        let apiHost = window.location.hostname;
+        if(!apiHost || apiHost === "localhost" || apiHost === "127.0.0.1") apiHost = "192.168.4.1";
+        
+        const response = await fetch(`${protocol}//${apiHost}/api/nodes`);
+        const rawNodes = await response.json();
+        const nodes = Array.isArray(rawNodes)
+            ? rawNodes.map((entry, idx) => {
+                if (typeof entry === "string") {
+                    return { ip: entry, mac: "", isMaster: idx === 0 };
+                }
+                return {
+                    ip: entry?.ip || "",
+                    mac: entry?.mac || "",
+                    isMaster: Boolean(entry?.isMaster),
+                };
+            }).filter(node => node.ip)
+            : [];
+        
+        window.initializeDashboardNodes(nodes);
+
+    } catch (e) {
+        const nodesList = document.getElementById('nodesList');
+        if (nodesList) nodesList.innerHTML = '<div style="color:#ff6b6b;font-size:0.75rem;">Nodes nicht erreichbar.</div>';
+        console.error("Discovery Error:", e);
+    }
+}
+
 // === WebSocket starten ===
 function connectWebSocket() {
+    discoverNodes();
+    document.getElementById('btnDiscoverNodes')?.addEventListener('click', discoverNodes);
+
+    setInterval(async () => {
+        if (window.isOfflineReplayMode) return;
+        try {
+            const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+            let apiHost = window.location.hostname;
+            if(!apiHost || apiHost === "localhost" || apiHost === "127.0.0.1") apiHost = "192.168.4.1";
+            
+            // MASTER POLLING (verhindert Timeout im Master = CH1)
+            const response = await fetch(`${protocol}//${apiHost}/api/nodes`);
+            const rawNodes = await response.json();
+            const nodes = Array.isArray(rawNodes)
+                ? rawNodes.map((entry, idx) => {
+                    if (typeof entry === "string") return { ip: entry, mac: "", isMaster: idx === 0 };
+                    return { ip: entry?.ip || "", mac: entry?.mac || "", isMaster: Boolean(entry?.isMaster) };
+                }).filter(n => n.ip)
+                : [];
+                
+            let changed = false;
+            if (!window.activeSensors || nodes.length !== window.activeSensors.length) {
+                changed = true;
+            } else {
+                for (let i = 0; i < nodes.length; i++) {
+                    if (nodes[i].ip !== window.activeSensors[i].ip || nodes[i].mac !== window.activeSensors[i].mac) {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if (changed) {
+                console.log("Topology change detected, but auto-reset is intentionally disabled to prevent WebSocket closures.");
+                // discoverNodes(); // AUSKOMMENTIERT: Dies hat alle laufenden Workers grundlos terminiert!
+            }
+
+        } catch(e) {}
+    }, 5000); // 5 Sekunden-Intervall ist ausreichend für den Reset des ESP-IDF 5s-Timeouts
+    
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams(window.location.search);
     const customWsHost = sanitizeCustomWsHost(params.get("ws")) || persistedCustomWsHost;
-    const previewHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
+    const previewHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0", ""]);
     const defaultEspHost = '192.168.4.1';
     const hasExplicitDevPort = window.location.port !== '' && !['80', '443'].includes(window.location.port);
     const isLocalPreview = previewHosts.has(window.location.hostname)
@@ -4696,7 +4976,7 @@ function connectWebSocket() {
         url = `${protocol}//${location.host}/ws`;
     }
 
-    console.log("[WS] Verbinde zu WebSocket:", url);
+    console.log("[WS] Verbinde zu Master WebSocket:", url);
     wsWorker.postMessage({ type: "connect", wsServerUrl: url });
 }
 
@@ -4747,14 +5027,56 @@ function handleDecodedSample(sample) {
 
 // UPDATE UI
 
-function updateDashboard() {
-
-
-
+window.updateDashboard = function updateDashboard() {
+    const now = performance.now();
+    if (window.activeSensors) {
+        window.activeSensors.forEach((node, idx) => {
+             const isDisconnected = !window.isOfflineReplayMode && (!node.lastDataMs || now - node.lastDataMs > 10000);
+             if (node.wasDisconnected !== isDisconnected) {
+                 node.wasDisconnected = isDisconnected;
+                 const host = document.getElementById("multiNodeSettingsHost");
+                 const tabs = document.getElementById("sensorTabsContainer");
+                 
+                 if (host && host.children[idx]) {
+                     host.children[idx].style.display = isDisconnected ? 'none' : 'flex';
+                 }
+                 if (tabs && tabs.children[idx]) {
+                     tabs.children[idx].style.display = isDisconnected ? 'none' : '';
+                 }
+                 
+                 if (window.fftPlot) {
+                     window.fftPlot.setSeries(idx * 3 + 1, { show: !isDisconnected });
+                     window.fftPlot.setSeries(idx * 3 + 2, { show: !isDisconnected });
+                     window.fftPlot.setSeries(idx * 3 + 3, { show: !isDisconnected });
+                 }
+                 if (window.gyroFftPlot) {
+                     window.gyroFftPlot.setSeries(idx * 3 + 1, { show: !isDisconnected });
+                     window.gyroFftPlot.setSeries(idx * 3 + 2, { show: !isDisconnected });
+                     window.gyroFftPlot.setSeries(idx * 3 + 3, { show: !isDisconnected });
+                 }
+                 if (window.chart) {
+                     window.chart.setSeries(idx * 3 + 1, { show: !isDisconnected });
+                     window.chart.setSeries(idx * 3 + 2, { show: !isDisconnected });
+                     window.chart.setSeries(idx * 3 + 3, { show: !isDisconnected });
+                 }
+                 if (window.gyroChart) {
+                     window.gyroChart.setSeries(idx * 3 + 1, { show: !isDisconnected });
+                     window.gyroChart.setSeries(idx * 3 + 2, { show: !isDisconnected });
+                     window.gyroChart.setSeries(idx * 3 + 3, { show: !isDisconnected });
+                 }
+                 if (window.rmsPlot) {
+                     window.rmsPlot.setSeries(idx * 4 + 1, { show: !isDisconnected });
+                     window.rmsPlot.setSeries(idx * 4 + 2, { show: !isDisconnected });
+                     window.rmsPlot.setSeries(idx * 4 + 3, { show: !isDisconnected });
+                     window.rmsPlot.setSeries(idx * 4 + 4, { show: !isDisconnected });
+                 }
+             }
+        });
+    }
     //console.log("[DASHBOARD] Update started, accBuffer size:", accBuffer.size);
-    let lastAccSample = accBuffer.getLast();
-    let lastAccRawSample = accRawBuffer.getLast();
-    let lastGyroSample = gyroBuffer.getLast();
+    let lastAccSample = accBuffer.getLast() || { time: 0, x: 0, y: 0, z: 0, total: 0 };
+    let lastAccRawSample = accRawBuffer.getLast() || { time: 0, x: 0, y: 0, z: 0, total: 0 };
+    let lastGyroSample = gyroBuffer.getLast() || { time: 0, x: 0, y: 0, z: 0 };
     let Samplerate1 = 0.0;
     let totalSeconds1 = 0;
 
@@ -4769,6 +5091,9 @@ function updateDashboard() {
         if (tempBuffer.length > 0) {
             let lastTempSample = tempBuffer.getLast();
             currentTemperature = lastTempSample.temperature;
+            if (window.activeSensors && window.activeSensors[0]) {
+                 window.activeSensors[0].currentTemperature = currentTemperature;
+            }
         }
         else {
             console.log("Temperaturpuffer leer");
@@ -4776,17 +5101,13 @@ function updateDashboard() {
         }
 
         if (accBuffer.length > 0) {
-
             totalSeconds1 = lastAccSample.time * 0.000001;
-            const formattedTime = formatMicrosecondsToHMS(lastAccSample.time, 2);
-            document.getElementById("timestamp").textContent = formattedTime;
-
-
         }
 
         const smoothedSampleRate = getSmoothedFilterSampleRate(Samplerate1);
         if (shouldRefreshFilterSampleRate(smoothedSampleRate)) {
             currentSampleRate = smoothedSampleRate;
+            window.currentSampleRate = smoothedSampleRate;
             lastFilterSampleRateUpdateAt = performance.now();
             if (accFilterUi) {
                 accFilterUi.cutoffDropdown.setDisplayMultiplier(currentSampleRate / 2);
@@ -4800,20 +5121,135 @@ function updateDashboard() {
             }
             console.log("[DASHBOARD] Neue Samplerate:", currentSampleRate);
         }
-        // Temperatur: aus globaler Variable (da tempBuffer noch nicht implementiert)
-        document.getElementById("temperature").textContent = currentTemperature.toFixed(2);
-        document.getElementById("samplerate").textContent = Samplerate1.toFixed(2);
-        document.getElementById("accX").textContent = lastAccSample.x.toFixed(1);
-        document.getElementById("accY").textContent = lastAccSample.y.toFixed(1);
-        document.getElementById("accZ").textContent = lastAccSample.z.toFixed(1);
-        accVectorViewport.setAccelerationSamples(buildViewportAccelerationSamples(lastAccRawSample, lastAccSample));
-        accVectorViewport.setGyroSamples(buildViewportGyroSamples(gyroRawBuffer.getLast(), lastGyroSample));
-        if (lastGyroSample) {
-            document.getElementById("gyroX").textContent = lastGyroSample.x.toFixed(1);
-            document.getElementById("gyroY").textContent = lastGyroSample.y.toFixed(1);
-            document.getElementById("gyroZ").textContent = lastGyroSample.z.toFixed(1);
+        let accXHtml = "";
+        let accYHtml = "";
+        let accZHtml = "";
+        let gyroXHtml = "";
+        let gyroYHtml = "";
+        let gyroZHtml = "";
+        let tempHtml = "";
+        let srHtml = "";
+        let gyroSrHtml = "";
+        let timeHtml = "";
+
+        const visibleSensors = window.activeSensors ? window.activeSensors.filter(n => !n.isHiddenFromUI) : [];
+        if (visibleSensors.length > 1) {
+            const cardColors = ["#FFD600", "#50c878", "#ff4a4a", "#7ABBFF"]; 
+            visibleSensors.forEach((node) => {
+                const now = performance.now();
+                const isDisconnected = !window.isOfflineReplayMode && (now - node.lastDataMs > 5000); // 5 Sekunden Timeout analog zu UI Watchdog
+                
+                let aSmp = node.accBuffer?.getLast();
+                let gSmp = node.gyroBuffer?.getLast();
+                
+                let ax = (aSmp && !isDisconnected) ? aSmp.x.toFixed(1) : "---";
+                let ay = (aSmp && !isDisconnected) ? aSmp.y.toFixed(1) : "---";
+                let az = (aSmp && !isDisconnected) ? aSmp.z.toFixed(1) : "---";
+                let gx = (gSmp && !isDisconnected) ? gSmp.x.toFixed(1) : "---";
+                let gy = (gSmp && !isDisconnected) ? gSmp.y.toFixed(1) : "---";
+                let gz = (gSmp && !isDisconnected) ? gSmp.z.toFixed(1) : "---";
+                
+                let tempNode = (Number.isFinite(node.currentTemperature) && !isDisconnected) ? node.currentTemperature.toFixed(1) : "---";
+                let srNode = "---";
+                if (node.accBuffer && node.accBuffer.length > 0 && !isDisconnected) {
+                    srNode = estimateRecentSampleRateHz(node.accBuffer).toFixed(0);
+                }
+                
+                let gyroSrNode = "---";
+                if (node.gyroBuffer && node.gyroBuffer.length > 0 && !isDisconnected) {
+                    gyroSrNode = estimateRecentSampleRateHz(node.gyroBuffer).toFixed(0);
+                }
+                let timeNode = (aSmp && !isDisconnected) ? formatRuntimeMicroseconds(aSmp.time, 2) : "---";
+
+                const idx = node.channelIndex || 0;
+                const colorHex = window.SENSOR_COLORS?.[idx % (window.SENSOR_COLORS?.length || 1)] || cardColors[idx % cardColors.length];
+                const style = `display:block; font-size:0.65em; line-height:1.2em; color:${colorHex};`;
+                
+                accXHtml += `<span style="${style}">CH${idx+1}: ${ax}</span>`;
+                accYHtml += `<span style="${style}">CH${idx+1}: ${ay}</span>`;
+                accZHtml += `<span style="${style}">CH${idx+1}: ${az}</span>`;
+                gyroXHtml += `<span style="${style}">CH${idx+1}: ${gx}</span>`;
+                gyroYHtml += `<span style="${style}">CH${idx+1}: ${gy}</span>`;
+                gyroZHtml += `<span style="${style}">CH${idx+1}: ${gz}</span>`;
+                tempHtml += `<span style="${style}">CH${idx+1}: ${tempNode}</span>`;
+                srHtml += `<span style="${style}">CH${idx+1}: ${srNode}</span>`;
+                gyroSrHtml += `<span style="${style}">CH${idx+1}: ${gyroSrNode}</span>`;
+                timeHtml += `<span style="${style}">CH${idx+1}: ${timeNode}</span>`;
+            });
+        } else {
+            accXHtml = lastAccSample ? lastAccSample.x.toFixed(1) : "0.0";
+            accYHtml = lastAccSample ? lastAccSample.y.toFixed(1) : "0.0";
+            accZHtml = lastAccSample ? lastAccSample.z.toFixed(1) : "0.0";
+            let ls = window.activeSensors?.[0]?.gyroBuffer?.getLast();
+            gyroXHtml = ls ? ls.x.toFixed(1) : "0.0";
+            gyroYHtml = ls ? ls.y.toFixed(1) : "0.0";
+            gyroZHtml = ls ? ls.z.toFixed(1) : "0.0";
+            tempHtml = currentTemperature.toFixed(1);
+            srHtml = Samplerate1.toFixed(0);
+            gyroSrHtml = (typeof gyroBuffer !== 'undefined' && gyroBuffer && gyroBuffer.length > 0) ? estimateRecentSampleRateHz(gyroBuffer).toFixed(0) : "0";
+            timeHtml = lastAccSample ? formatRuntimeMicroseconds(lastAccSample.time, 2) : "0.00";
         }
 
+        document.getElementById("temperature").innerHTML = tempHtml;
+        document.getElementById("samplerate").innerHTML = srHtml;
+        document.getElementById("gyrosamplerate").innerHTML = gyroSrHtml;
+        document.getElementById("timestamp").innerHTML = timeHtml;
+
+        document.getElementById("accX").innerHTML = accXHtml;
+        document.getElementById("accY").innerHTML = accYHtml;
+        document.getElementById("accZ").innerHTML = accZHtml;
+        let gxEl = document.getElementById("gyroX"); if(gxEl) gxEl.innerHTML = gyroXHtml;
+        let gyEl = document.getElementById("gyroY"); if(gyEl) gyEl.innerHTML = gyroYHtml;
+        let gzEl = document.getElementById("gyroZ"); if(gzEl) gzEl.innerHTML = gyroZHtml;
+        const targetIp = document.getElementById("settingsSensorTarget")?.value || "192.168.4.1";
+        const multiNodesData = [];
+        if (window.activeSensors) {
+            window.activeSensors.forEach((node, idx) => {
+                const now = performance.now();
+                const isDisconnected = !window.isOfflineReplayMode && (now - node.lastDataMs > 5000);
+                if (isDisconnected || node.isHiddenFromUI) return; // Hide disconnected sensors from 3D Shared World
+                
+                const accBuf = node.accBuffer;
+                const accRawBuf = node.accRawBuffer;
+                if (!accBuf || accBuf.length === 0) return;
+                
+                const aSmp = accBuf.getLast() || { time: 0, x: 0, y: 0, z: -1000 };
+                const aRawSmp = accRawBuf?.getLast() || { time: 0, x: 0, y: 0, z: -1000 };
+                const gSmp = node.gyroBuffer?.getLast() || { time: 0, x: 0, y: 0, z: 0 };
+                const gRawSmp = node.gyroRawBuffer?.getLast() || { time: 0, x: 0, y: 0, z: 0 };
+                
+                const colorHex = window.SENSOR_COLORS?.[idx % window.SENSOR_COLORS.length] || "#FFFFFF";
+                const colorNum = parseInt(colorHex.replace('#', '0x'), 16);
+                
+                multiNodesData.push({
+                    ip: node.ip,
+                    isTarget: (node.ip === targetIp),
+                    color: colorNum,
+                    raw: aRawSmp,
+                    calibrated: aSmp,
+                    calibratedCut: aSmp,
+                    gyroRaw: gRawSmp,
+                    gyroCalibrated: gSmp,
+                    gyroCalibratedCut: gSmp,
+                    trail: (node.ip === targetIp && window.globalMotionState) ? window.globalMotionState.trail : [],
+                    velocity: (node.ip === targetIp && window.globalMotionState) ? window.globalMotionState.velocity : {x:0, y:0, z:0},
+                    linearAcc: (node.ip === targetIp && window.globalMotionState) ? window.globalMotionState.acceleration : {x:0, y:0, z:0}
+                });
+            });
+        }
+        
+        if (typeof accVectorViewport.setMultiNodeSamples === 'function') {
+            accVectorViewport.setMultiNodeSamples(multiNodesData);
+        } else {
+            accVectorViewport.setAccelerationSamples(buildViewportAccelerationSamples(lastAccRawSample, lastAccSample));
+            accVectorViewport.setGyroSamples(buildViewportGyroSamples(gyroRawBuffer.getLast(), lastGyroSample));
+        }
+
+        if (typeof motionViewport.setMultiNodeSamples === 'function') {
+            motionViewport.setMultiNodeSamples(multiNodesData);
+        }
+        
+        
         const accLatestTimestamp = lastAccSample.time;
         const gyroLatestTimestamp = lastGyroSample?.time || accLatestTimestamp;
         const desiredRangeUs = displayDurationSeconds * 1000000;
@@ -4857,50 +5293,65 @@ function updateDashboard() {
 
             if (accFilterEnabled) {
                 const filteredWindow = computeFilteredWindowForDisplay('acc', accMinTime, accMaxTime);
-                const yMinBefore = chart.scales.y.min;
-                const yMaxBefore = chart.scales.y.max;
-                chart.setData([filteredWindow.times, filteredWindow.xs, filteredWindow.ys, filteredWindow.zs, filteredWindow.totals]);
-                window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: accLatestTimestamp } }));
-                if (yMinBefore !== undefined && yMaxBefore !== undefined) {
-                    chart.setScale("y", { min: yMinBefore, max: yMaxBefore });
+                if (filteredWindow.times.length > 0) {
+                    preserveAllYScales(chart, () => {
+                        chart.setData(alignPlotDataToSeriesCount(chart, [filteredWindow.times, filteredWindow.xs, filteredWindow.ys, filteredWindow.zs, filteredWindow.totals]));
+                        window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: accLatestTimestamp } }));
+                    });
                 }
             } else {
-                const { times, xs, ys, zs, totals } = getAccWindowData(displayDurationSeconds, accMinTime);
-                const yMinBefore = chart.scales.y.min;
-                const yMaxBefore = chart.scales.y.max;
-                chart.setData([times, xs, ys, zs, totals]);
-
-                window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: accLatestTimestamp } }));
-
-                if (yMinBefore !== undefined && yMaxBefore !== undefined) {
-                    chart.setScale("y", { min: yMinBefore, max: yMaxBefore });
+                let chartUpdateData;
+                if (window.activeSensors && window.activeSensors.length > 0) {
+                    chartUpdateData = normalizeMultiChartDataForPlot(window.getMultiChartDataWindow(accMinTime));
+                } else {
+                    const { times, xs, ys, zs, totals } = getAccWindowData(displayDurationSeconds, accMinTime);
+                    chartUpdateData = [times, xs, ys, zs, totals];
+                }
+                
+                if (chartUpdateData && chartUpdateData.length > 0) {
+                    preserveAllYScales(chart, () => {
+                        chart.setData(alignPlotDataToSeriesCount(chart, chartUpdateData));
+                        window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: accLatestTimestamp } }));
+                    });
                 }
             }
 
         }
 
-        if (gyroChart && gyroChartVisible && !gyroChartPaused && gyroBuffer.length > 0) {
+        if (gyroChart && gyroChartVisible && !gyroChartPaused && (gyroBuffer.length > 0 || (window.activeSensors && window.activeSensors.length > 0))) {
             if (gyroFilterEnabled) {
-                const gyroWindow = computeFilteredWindowForDisplay('gyro', gyroMinTime, gyroMaxTime);
-                const gyroYMinBefore = gyroChart.scales.y.min;
-                const gyroYMaxBefore = gyroChart.scales.y.max;
-                gyroChart.setData([gyroWindow.times, gyroWindow.xs, gyroWindow.ys, gyroWindow.zs]);
-                if (!accChartVisible && gyroWindow.times.length > 0) {
-                    window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: gyroLatestTimestamp } }));
+                let chartUpdateData;
+                if (window.activeSensors && window.activeSensors.length > 0) {
+                    chartUpdateData = normalizeMultiChartDataForPlot(window.getMultiGyroChartDataWindow(gyroMinTime));
+                } else {
+                    const gyroWindow = computeFilteredWindowForDisplay('gyro', gyroMinTime, gyroMaxTime);
+                    chartUpdateData = [gyroWindow.times, gyroWindow.xs, gyroWindow.ys, gyroWindow.zs];
                 }
-                if (gyroYMinBefore !== undefined && gyroYMaxBefore !== undefined) {
-                    gyroChart.setScale("y", { min: gyroYMinBefore, max: gyroYMaxBefore });
+                
+                if (chartUpdateData && chartUpdateData.length > 0) {
+                    preserveAllYScales(gyroChart, () => {
+                        gyroChart.setData(alignPlotDataToSeriesCount(gyroChart, chartUpdateData));
+                        if (!accChartVisible && chartUpdateData[0] && chartUpdateData[0].length > 0) {
+                            window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: gyroLatestTimestamp } }));
+                        }
+                    });
                 }
             } else {
-                const gyroWindow = getGyroWindowData(displayDurationSeconds, gyroMinTime);
-                const gyroYMinBefore = gyroChart.scales.y.min;
-                const gyroYMaxBefore = gyroChart.scales.y.max;
-                gyroChart.setData([gyroWindow.times, gyroWindow.xs, gyroWindow.ys, gyroWindow.zs]);
-                if (!accChartVisible && gyroWindow.times.length > 0) {
-                    window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: gyroLatestTimestamp } }));
+                let chartUpdateData;
+                if (window.activeSensors && window.activeSensors.length > 0) {
+                    chartUpdateData = normalizeMultiChartDataForPlot(window.getMultiGyroChartDataWindow(gyroMinTime));
+                } else {
+                    const gyroWindow = getGyroWindowData(displayDurationSeconds, gyroMinTime);
+                    chartUpdateData = [gyroWindow.times, gyroWindow.xs, gyroWindow.ys, gyroWindow.zs];
                 }
-                if (gyroYMinBefore !== undefined && gyroYMaxBefore !== undefined) {
-                    gyroChart.setScale("y", { min: gyroYMinBefore, max: gyroYMaxBefore });
+                
+                if (chartUpdateData && chartUpdateData.length > 0) {
+                    preserveAllYScales(gyroChart, () => {
+                        gyroChart.setData(alignPlotDataToSeriesCount(gyroChart, chartUpdateData));
+                        if (!accChartVisible && chartUpdateData[0] && chartUpdateData[0].length > 0) {
+                            window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: gyroLatestTimestamp } }));
+                        }
+                    });
                 }
             }
         }
@@ -5011,6 +5462,50 @@ function getYRange() {
     };
 }
 
+function resizeLiveCharts() {
+    chart?.setSize(getSize());
+    gyroChart?.setSize(getGyroChartSize());
+}
+
+function resizeFftRmsCharts() {
+    fftPlot?.setSize(getFftChartSize());
+    rmsPlot?.setSize(getRmsChartSize());
+}
+
+function resizeGyroFftRmsCharts() {
+    gyroFftPlot?.setSize(getGyroFftChartSize());
+    gyroRmsPlot?.setSize(getGyroRmsChartSize());
+}
+
+function updateAllChartPanelHeights() {
+    updateLiveChartPanelHeights();
+    updateFftRmsPanelHeights();
+    updateGyroFftRmsPanelHeights();
+}
+
+function getSharedXScale(sourceChart = chart) {
+    const sourceScale = sourceChart?.scales?.x;
+    if (sourceScale && Number.isFinite(sourceScale.min) && Number.isFinite(sourceScale.max)) {
+        return sourceScale;
+    }
+
+    const fallbackScale = chart?.scales?.x;
+    if (fallbackScale && Number.isFinite(fallbackScale.min) && Number.isFinite(fallbackScale.max)) {
+        return fallbackScale;
+    }
+
+    return null;
+}
+
+function getCurrentSharedXWindow() {
+    const scale = getSharedXScale(chart);
+    if (scale && Number.isFinite(scale.min) && Number.isFinite(scale.max)) {
+        return { min: scale.min, max: scale.max };
+    }
+
+    return null;
+}
+
 // === UI Button-Events ===
 function setupUIListeners() {
     const recordBtn = document.getElementById("recordBtn");
@@ -5055,12 +5550,16 @@ function setupUIListeners() {
         const rmsRecordBtn = document.getElementById('rmsRecordBtn');
         const gyroRmsRecordBtn = document.getElementById('gyroRmsRecordBtn');
 
-        if (recordBtn) {
-            recordBtn.innerHTML = isRecording
-                ? '<i class="fas fa-stop"></i> Stop'
-                : '<i class="fas fa-circle"></i> Record';
-            recordBtn.classList.toggle("active", isRecording);
-        }
+        const setRecordingButtonState = (button, activeContent, idleContent) => {
+            if (!button) {
+                return;
+            }
+
+            button.innerHTML = isRecording ? activeContent : idleContent;
+            button.classList.toggle('active', isRecording);
+        };
+
+        setRecordingButtonState(recordBtn, '<i class="fas fa-stop"></i> Stop', '<i class="fas fa-circle"></i> Record');
 
         if (!document.getElementById('recordingPulseStyle')) {
             const style = document.createElement('style');
@@ -5129,20 +5628,9 @@ function setupUIListeners() {
         }
         document.body.classList.remove('recording-active-border'); // Cleanup legacy class
 
-        if (recBtn2) {
-            recBtn2.textContent = isRecording ? "⏹" : "🔴";
-            recBtn2.classList.toggle("active", isRecording);
-        }
-
-        if (rmsRecordBtn) {
-            rmsRecordBtn.innerHTML = isRecording ? '⏹' : '🔴';
-            rmsRecordBtn.classList.toggle('active', isRecording);
-        }
-
-        if (gyroRmsRecordBtn) {
-            gyroRmsRecordBtn.innerHTML = isRecording ? '⏹' : '🔴';
-            gyroRmsRecordBtn.classList.toggle('active', isRecording);
-        }
+        setRecordingButtonState(recBtn2, '⏹', '🔴');
+        setRecordingButtonState(rmsRecordBtn, '⏹', '🔴');
+        setRecordingButtonState(gyroRmsRecordBtn, '⏹', '🔴');
     }
 
     window.toggleRecording = function() {
@@ -5164,13 +5652,9 @@ function setupUIListeners() {
         syncRecordingButtons();
     };
 
-    if (recordBtn) {
-        recordBtn.addEventListener("click", window.toggleRecording);
-    }
-
-    if (recBtn2) {
-        recBtn2.addEventListener("click", window.toggleRecording);
-    }
+    [recordBtn, recBtn2].forEach(button => {
+        button?.addEventListener("click", window.toggleRecording);
+    });
 
     if (downloadBtn) {
         downloadBtn.addEventListener("click", () => {
@@ -5216,109 +5700,160 @@ function setupUIListeners() {
         });
     }
 
+    const syncYAxesBtn = document.getElementById("syncYAxesBtn");
+    const syncGyroYAxesBtn = document.getElementById("syncGyroYAxesBtn");
+
+    if (syncYAxesBtn) {
+        syncYAxesBtn.addEventListener("click", () => {
+            window.isAccYAxisSynced = !window.isAccYAxisSynced;
+            syncYAxesBtn.classList.toggle("active", window.isAccYAxisSynced);
+            syncYAxesBtn.textContent = window.isAccYAxisSynced ? "🔗 Sync: ON" : "🔗 Sync: OFF";
+            
+            if (window.isAccYAxisSynced && chart && chart.scales && chart.scales.y) {
+                const yMin = chart.scales.y.min;
+                const yMax = chart.scales.y.max;
+                if (Number.isFinite(yMin) && Number.isFinite(yMax)) {
+                    for (let key in chart.scales) {
+                        if (key.startsWith("y") && key !== "y") {
+                            chart.setScale(key, { min: yMin, max: yMax });
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    if (syncGyroYAxesBtn) {
+        syncGyroYAxesBtn.addEventListener("click", () => {
+            window.isGyroYAxisSynced = !window.isGyroYAxisSynced;
+            syncGyroYAxesBtn.classList.toggle("active", window.isGyroYAxisSynced);
+            syncGyroYAxesBtn.textContent = window.isGyroYAxisSynced ? "🔗 Sync: ON" : "🔗 Sync: OFF";
+            
+            if (window.isGyroYAxisSynced && gyroChart && gyroChart.scales && gyroChart.scales.y) {
+                const yMin = gyroChart.scales.y.min;
+                const yMax = gyroChart.scales.y.max;
+                if (Number.isFinite(yMin) && Number.isFinite(yMax)) {
+                    for (let key in gyroChart.scales) {
+                        if (key.startsWith("y") && key !== "y") {
+                            gyroChart.setScale(key, { min: yMin, max: yMax });
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     syncRecordingButtons();
 }
 
 function initFFTChart() {
-    const fftHost = document.getElementById("fftChart");
-    const fftLegendHost = document.getElementById("fftChartLegendHost");
-    const fftSize = getFftChartSize();
-    const fftWidth = Math.max(320, fftSize.width || Math.round(fftHost?.clientWidth || 800));
-    const fftHeight = Math.max(250, fftSize.height || 500);
-
-    const fftopts = {
+    fftPlot = initFftLikeChart({
+        hostId: "fftChart",
+        legendHostId: "fftChartLegendHost",
         title: 'ACC FFT',
-        width: fftWidth,
-        height: fftHeight,
-        scales: {
-            x: {
-                time: false,
-                label: "Frequenz (Hz)",
-            },
-            y: {
-                auto: true,
-                label: "Magnitude"
-            }
-        },
-        axes: [
-            {
-                stroke: () => dark ? "white" : "black"
-            },
-            {
-                stroke: () => dark ? "white" : "black"
-            },
-        ],
-        series: [
-            { label: "Freq (Hz)" },
-            {
-                label: "Max Magnitude",
-                stroke: null,
-                width: 0,
-                fill: "rgba(200,210,223,0.08)",
-                points: { show: false }
-            },
-            {
-                label: "Average Magnitude",
-                stroke: "#FFD600",
-                width: 2,
-                fill: "rgba(255, 213, 0, 0.5)",
-                points: { show: false }
-            },
-            {
-                label: "Current Magnitude",
-                stroke: "rgba(110,190,255,0.45)",
-                width: 1,
-                points: { show: false }
-            },
-        ],
-        legend: {
-            mount: (u, table) => {
-                fftLegendHost?.replaceChildren(table);
-            },
-        },
-    };
+        getChartSize: getFftChartSize,
+        averageStroke: "#FFD600",
+        averageFill: "rgba(255, 213, 0, 0.5)",
+        currentStroke: "rgba(110,190,255,0.45)",
+        peakBadgeId: 'fftPeakBadge'
+    });
 
-    fftPlot = new uPlot(fftopts, [[], [], [], []], fftHost);
-    installManualLegendToggle(fftPlot, "fftChartLegendHost");
-    updatePeakFrequencyBadge('fftPeakBadge', null, null);
+    bindFftTooltip(fftPlot, document.getElementById("fftChart"), "Hz");
+}
+
+function bindFftTooltip(plot, hostEl, unit) {
+    if (!plot || !hostEl) return;
+
+    let tooltip = document.getElementById("fft-custom-tooltip");
+    if (!tooltip) {
+        tooltip = document.createElement("div");
+        tooltip.id = "fft-custom-tooltip";
+        tooltip.style.position = "absolute";
+        tooltip.style.background = "rgba(24, 28, 36, 0.95)";
+        tooltip.style.color = "#FFD600";
+        tooltip.style.padding = "4px 8px";
+        tooltip.style.borderRadius = "4px";
+        tooltip.style.fontSize = "13px";
+        tooltip.style.fontFamily = "monospace";
+        tooltip.style.border = "1px solid rgba(255, 214, 0, 0.5)";
+        tooltip.style.pointerEvents = "none";
+        tooltip.style.display = "none";
+        tooltip.style.zIndex = "999999";
+        tooltip.style.whiteSpace = "nowrap";
+        tooltip.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+        document.body.appendChild(tooltip);
+    }
+
+    hostEl.addEventListener("mousemove", (e) => {
+        // Fix for orphaned plot instances: always use the latest module-scoped reference
+        const activePlot = hostEl.id === "gyroFftChart" ? gyroFftPlot : fftPlot;
+        if (!activePlot) return;
+
+        const over = hostEl.querySelector(".u-over");
+        if (!over) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        const rect = over.getBoundingClientRect();
+        
+        // Check if mouse is strictly inside the chart area
+        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        const left = e.clientX - rect.left;
+        const top = e.clientY - rect.top;
+
+        // Force uPlot to update its internal cursor state (this calculates the closest data index)
+        activePlot.setCursor({ left, top });
+
+        const idx = activePlot.cursor.idx;
+        if (idx == null || idx < 0 || !activePlot.data[0] || idx >= activePlot.data[0].length) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        const valX = activePlot.data[0][idx];
+
+        if (valX == null || !Number.isFinite(valX)) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        tooltip.textContent = valX.toFixed(2) + " " + unit;
+        tooltip.style.display = "block";
+
+        const tooltipWidth = tooltip.offsetWidth || 100;
+        const tooltipHeight = tooltip.offsetHeight || 30;
+        let posX = e.clientX + 15;
+        let posY = e.clientY - tooltipHeight / 2;
+
+        if (posX + tooltipWidth > window.innerWidth) posX = e.clientX - tooltipWidth - 15;
+        if (posY < 0) posY = 10;
+        if (posY + tooltipHeight > window.innerHeight) posY = window.innerHeight - tooltipHeight - 10;
+
+        tooltip.style.left = Math.round(posX) + "px";
+        tooltip.style.top = Math.round(posY) + "px";
+    });
+
+    hostEl.addEventListener("mouseleave", () => {
+        tooltip.style.display = "none";
+    });
 }
 
 function initRMSChart() {
     const rmsSize = getRmsChartSize();
-    const rmsLegendHost = document.getElementById("rmsChartLegendHost");
 
-    const rmsopts = {
-        ...rmsSize,
+    const rmsopts = createRmsChartOptions({
+        size: rmsSize,
         title: 'ACC RMS',
-        width: Math.max(320, rmsSize.width || 800),
-        height: Math.max(250, rmsSize.height || 500),
-        scales: {
-            x: {
-                time: false,
-                auto: false,
-                values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
-            },
-            y: { auto: true, range: (s, min, max) => [0, Math.max(250, (max == null ? 250 : max * 1.1))] }
+        yRange: (s, min, max) => {
+            // Symmetrisch: CH2 ist gespiegelt (negativ), daher beide Seiten gleich groß
+            const absMax = Math.max(250, Math.abs(min ?? 0) * 1.1, Math.abs(max ?? 0) * 1.1);
+            return [-absMax, absMax];
         },
-        axes: [
-            {
-                space: 100,
-                scale: "x",
-                label: "Zeit",
-                grid: { show: true },
-                values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
-                stroke: "white"
-            },
-            {
-                scale: "y",
-                label: "Wert",
-                grid: { show: true },
-                ticks: {
-                    format: v => v.toFixed(2)
-                },
-                stroke: "white",
-            }
-        ],
         series: [
             {label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 2) },
             { label: "Acc X (mg)", stroke: "#FFD600" },
@@ -5326,15 +5861,9 @@ function initRMSChart() {
             { label: "Acc Z (mg)", stroke: "#7a96e2ff" },
             { label: "Acc Total (mg)", stroke: "#14c53bff", fill: "rgba(20,197,59,0.2)" },
         ],
-        cursor: {
-            drag: { x: true, y: true, setScale: true }
-        },
-        legend: {
-            mount: (u, table) => {
-                rmsLegendHost?.replaceChildren(table);
-            },
-        },
-    };
+        legendHostId: "rmsChartLegendHost",
+        formatMicrosecondsToHMS,
+    });
 
     rmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById("rmsChart"));
     installManualLegendToggle(rmsPlot, "rmsChartLegendHost");
@@ -5342,10 +5871,9 @@ function initRMSChart() {
     // Bind overlays immediately after chart is defined
     bindYAxisOverlay("rms-y-axis-overlay", rmsPlot, true);
     bindRmsXAxisOverlay("rms-x-axis-overlay", rmsPlot, false);
+    syncAxisOverlayPositions(rmsPlot, "rmsPanel", "rms-y-axis-overlay", "rms-x-axis-overlay");
 
-
-
-
+    bindRmsTooltip("rmsChart", "mg");
     /* 
     
     
@@ -5417,149 +5945,108 @@ function initRMSChart() {
 }
 
 function initGyroFFTChart() {
-    const fftHost = document.getElementById('gyroFftChart');
-    const gyroFftLegendHost = document.getElementById('gyroFftChartLegendHost');
-    const fftSize = getGyroFftChartSize();
-    const fftWidth = Math.max(320, fftSize.width || Math.round(fftHost?.clientWidth || 800));
-    const fftHeight = Math.max(250, fftSize.height || 500);
-
-    const fftopts = {
+    gyroFftPlot = initFftLikeChart({
+        hostId: 'gyroFftChart',
+        legendHostId: 'gyroFftChartLegendHost',
         title: 'Gyro FFT',
-        width: fftWidth,
-        height: fftHeight,
-        scales: {
-            x: {
-                time: false,
-                label: 'Frequenz (Hz)',
-            },
-            y: {
-                auto: true,
-                label: 'Magnitude'
-            }
-        },
-        axes: [
-            {
-                stroke: () => dark ? 'white' : 'black'
-            },
-            {
-                stroke: () => dark ? 'white' : 'black'
-            },
-        ],
-        series: [
-            { label: 'Freq (Hz)' },
-            {
-                label: 'Max Magnitude',
-                stroke: null,
-                width: 0,
-                fill: 'rgba(200,210,223,0.08)',
-                points: { show: false }
-            },
-            {
-                label: 'Average Magnitude',
-                stroke: '#4dd0e1',
-                width: 2,
-                fill: 'rgba(77,208,225,0.22)',
-                points: { show: false }
-            },
-            {
-                label: 'Current Magnitude',
-                stroke: 'rgba(255,183,77,0.5)',
-                width: 1,
-                points: { show: false }
-            },
-        ],
-        legend: {
-            mount: (u, table) => {
-                gyroFftLegendHost?.replaceChildren(table);
-            },
-        },
-    };
-
-    gyroFftPlot = new uPlot(fftopts, [[], [], [], []], fftHost);
-    installManualLegendToggle(gyroFftPlot, 'gyroFftChartLegendHost');
-    updatePeakFrequencyBadge('gyroFftPeakBadge', null, null);
+        getChartSize: getGyroFftChartSize,
+        averageStroke: '#4dd0e1',
+        averageFill: 'rgba(77,208,225,0.22)',
+        currentStroke: 'rgba(255,183,77,0.5)',
+        peakBadgeId: 'gyroFftPeakBadge'
+    });
+    bindFftTooltip(gyroFftPlot, document.getElementById("gyroFftChart"), "Hz");
 }
 
-function updatePeakFrequencyBadge(elementId, freqs, mags) {
+function initFftLikeChart({ hostId, legendHostId, title, getChartSize, averageStroke, averageFill, currentStroke, peakBadgeId }) {
+    const fftHost = document.getElementById(hostId);
+    const fftSize = getChartSize();
+    const fftWidth = Math.max(320, fftSize.width || Math.round(fftHost?.clientWidth || 800));
+    const fftHeight = Math.max(250, fftSize.height || 500);
+    const fftOptions = createFftChartOptions({
+        width: fftWidth,
+        height: fftHeight,
+        title,
+        averageStroke,
+        averageFill,
+        currentStroke,
+        legendHostId,
+        axisStrokeFactory: "white",
+        cursorUnit: "Hz",
+        createCursorPlugin: createCursorXPlugin,
+    });
+
+    const plot = new uPlot(fftOptions, [[0, 1], [0, 0], [0, 0], [0, 0]], fftHost);
+    installManualLegendToggle(plot, legendHostId);
+    updatePeakFrequencyBadge(peakBadgeId, null, null);
+    return plot;
+}
+
+function updatePeakFrequencyBadge(elementId, freqs, data) {
     const badge = document.getElementById(elementId);
     if (!badge) {
         return;
     }
 
-    if (!freqs || !mags || freqs.length === 0 || mags.length === 0) {
+    if (!freqs || !data || freqs.length === 0 || data.length === 0) {
         badge.textContent = 'Peak -- Hz | Amp --';
         return;
     }
 
-    let bestIndex = -1;
-    let bestMagnitude = -Infinity;
+    // Check if `data` is multiFftData (Array of Arrays)
+    const isMulti = Array.isArray(data) && data.length > 1 && Array.isArray(data[1]);
+    let textParts = [];
+
+    const numChannels = isMulti ? Math.floor((data.length - 1) / 3) : 1;
     const startIndex = freqs.length > 1 ? 1 : 0;
 
-    for (let index = startIndex; index < freqs.length && index < mags.length; index++) {
-        const frequency = Number(freqs[index]);
-        const magnitude = Number(mags[index]);
-        if (!Number.isFinite(frequency) || !Number.isFinite(magnitude)) {
-            continue;
+    for (let ch = 0; ch < numChannels; ch++) {
+        const mags = isMulti ? data[1 + ch * 3] : data; // Use "Current" series
+        if (!mags || !mags.length) continue;
+
+        let bestIndex = -1;
+        let bestMagnitude = -Infinity;
+
+        for (let index = startIndex; index < freqs.length && index < mags.length; index++) {
+            const frequency = Number(freqs[index]);
+            const magnitude = Number(mags[index]);
+            if (!Number.isFinite(frequency) || !Number.isFinite(magnitude)) {
+                continue;
+            }
+
+            if (magnitude > bestMagnitude) {
+                bestMagnitude = magnitude;
+                bestIndex = index;
+            }
         }
 
-        if (magnitude > bestMagnitude) {
-            bestMagnitude = magnitude;
-            bestIndex = index;
+        if (bestIndex >= 0) {
+            const peakFreq = Number(freqs[bestIndex]);
+            const peakMag = Number(mags[bestIndex]);
+            const formattedFreq = peakFreq >= 100 ? peakFreq.toFixed(0) : peakFreq.toFixed(1);
+            if (numChannels > 1) {
+                textParts.push(`CH${ch+1} ${formattedFreq}Hz`);
+            } else {
+                const formattedMag = peakMag >= 1000 ? peakMag.toFixed(0) : peakMag.toFixed(1);
+                textParts.push(`Peak ${formattedFreq} Hz | Amp ${formattedMag}`);
+            }
         }
     }
 
-    if (bestIndex < 0) {
+    if (textParts.length === 0) {
         badge.textContent = 'Peak -- Hz | Amp --';
-        return;
+    } else {
+        badge.textContent = textParts.join('  |  ');
     }
-
-    const peakFrequency = Number(freqs[bestIndex]);
-    const peakMagnitude = Number(mags[bestIndex]);
-    const formattedFrequency = peakFrequency >= 100
-        ? peakFrequency.toFixed(0)
-        : peakFrequency.toFixed(1);
-    const formattedMagnitude = peakMagnitude >= 1000
-        ? peakMagnitude.toFixed(0)
-        : peakMagnitude.toFixed(1);
-    badge.textContent = `Peak ${formattedFrequency} Hz | Amp ${formattedMagnitude}`;
 }
 
 function initGyroRMSChart() {
     const rmsSize = getGyroRmsChartSize();
-    const gyroRmsLegendHost = document.getElementById('gyroRmsChartLegendHost');
 
-    const rmsopts = {
-        ...rmsSize,
+    const rmsopts = createRmsChartOptions({
+        size: rmsSize,
         title: 'Gyro RMS',
-        width: Math.max(320, rmsSize.width || 800),
-        height: Math.max(250, rmsSize.height || 500),
-        scales: {
-            x: {
-                time: false,
-                auto: false,
-                values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
-            },
-            y: { auto: true, range: (s, min, max) => [0, Math.max(1.0, (max == null ? 1 : max * 1.1))] }
-        },
-        axes: [
-            {
-                space: 100,
-                scale: 'x',
-                label: 'Zeit',
-                grid: { show: true },
-                values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
-                stroke: 'white'
-            },
-            {
-                scale: 'y',
-                label: 'Wert',
-                grid: { show: true },
-                ticks: {
-                    format: v => v.toFixed(2)
-                },
-                stroke: 'white',
-            }
-        ],
+        yRange: (s, min, max) => [0, Math.max(1.0, (max == null ? 1 : max * 1.1))],
         series: [
             { label: 'Zeit', value: (u, v) => formatMicrosecondsToHMS(v, 2) },
             { label: 'Gyro X (m°/s)', stroke: '#4dd0e1' },
@@ -5567,15 +6054,9 @@ function initGyroRMSChart() {
             { label: 'Gyro Z (m°/s)', stroke: '#81c784' },
             { label: 'Gyro Total (m°/s)', stroke: '#ce93d8', fill: 'rgba(206,147,216,0.18)' },
         ],
-        cursor: {
-            drag: { x: true, y: true, setScale: true }
-        },
-        legend: {
-            mount: (u, table) => {
-                gyroRmsLegendHost?.replaceChildren(table);
-            },
-        },
-    };
+        legendHostId: 'gyroRmsChartLegendHost',
+        formatMicrosecondsToHMS,
+    });
 
     gyroRmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById('gyroRmsChart'));
     installManualLegendToggle(gyroRmsPlot, 'gyroRmsChartLegendHost');
@@ -5583,6 +6064,85 @@ function initGyroRMSChart() {
     // Bind overlays immediately after chart is defined
     bindYAxisOverlay("gyro-rms-y-axis-overlay", gyroRmsPlot, true);
     bindRmsXAxisOverlay("gyro-rms-x-axis-overlay", gyroRmsPlot, true);
+    syncAxisOverlayPositions(gyroRmsPlot, "gyroRmsPanel", "gyro-rms-y-axis-overlay", "gyro-rms-x-axis-overlay");
+
+    bindRmsTooltip("gyroRmsChart", "m°/s");
+}
+
+function bindRmsTooltip(hostId, unit) {
+    const hostEl = document.getElementById(hostId);
+    if (!hostEl) return;
+
+    let tooltip = document.getElementById("rms-custom-tooltip");
+    if (!tooltip) {
+        tooltip = document.createElement("div");
+        tooltip.id = "rms-custom-tooltip";
+        tooltip.style.position = "absolute";
+        tooltip.style.background = "rgba(24, 28, 36, 0.95)";
+        tooltip.style.color = "#FFD600";
+        tooltip.style.padding = "4px 8px";
+        tooltip.style.borderRadius = "4px";
+        tooltip.style.fontSize = "13px";
+        tooltip.style.fontFamily = "monospace";
+        tooltip.style.border = "1px solid rgba(255, 214, 0, 0.5)";
+        tooltip.style.pointerEvents = "none";
+        tooltip.style.display = "none";
+        tooltip.style.zIndex = "999999";
+        tooltip.style.whiteSpace = "nowrap";
+        tooltip.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+        document.body.appendChild(tooltip);
+    }
+
+    hostEl.addEventListener("mousemove", (e) => {
+        // Module-scoped robust reference
+        const activePlot = hostEl.id === "gyroRmsChart" ? gyroRmsPlot : rmsPlot;
+        if (!activePlot) return;
+
+        const over = hostEl.querySelector(".u-over");
+        if (!over) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        const rect = over.getBoundingClientRect();
+        
+        // Check if mouse is strictly inside the chart area
+        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        const top = e.clientY - rect.top;
+        const left = e.clientX - rect.left;
+
+        activePlot.setCursor({ left, top });
+
+        const valY = activePlot.posToVal(top, "y");
+
+        if (valY == null || !Number.isFinite(valY)) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        tooltip.textContent = valY.toFixed(2) + " " + unit;
+        tooltip.style.display = "block";
+
+        const tooltipWidth = tooltip.offsetWidth || 100;
+        const tooltipHeight = tooltip.offsetHeight || 30;
+        let posX = e.clientX + 15;
+        let posY = e.clientY - tooltipHeight / 2;
+
+        if (posX + tooltipWidth > window.innerWidth) posX = e.clientX - tooltipWidth - 15;
+        if (posY < 0) posY = 10;
+        if (posY + tooltipHeight > window.innerHeight) posY = window.innerHeight - tooltipHeight - 10;
+
+        tooltip.style.left = Math.round(posX) + "px";
+        tooltip.style.top = Math.round(posY) + "px";
+    });
+
+    hostEl.addEventListener("mouseleave", () => {
+        tooltip.style.display = "none";
+    });
 }
 
 // FFT Worker initialisieren
@@ -5596,36 +6156,44 @@ function setupFFTWorker() {
     console.log("FFT WORKER STARTED");
 
     fftWorker.onmessage = (e) => {
+        fftWorkerBusy = false;
         const { freqs, mags, timestamp, timeString } = e.data;
-        //console.log("[DEBUG] empfangene freqs:", freqs);
-        // console.log("[DEBUG] empfangene mags:", mags);
 
         if (!freqs || !mags) {
             console.warn("[Worker] Ungültige Daten empfangen:", e.data);
             return;
         }
 
-        //const skipBins = 0;
-        // NEU: Bereich für x-Achse berechnen
-        const minFreq = Math.min(...freqs);
         const maxFreq = Math.max(...freqs);
 
-        if (window.waterfallRenderer && window.waterfallRenderer.active) {
-            const hzFilter = document.getElementById('waterfallMaxHz');
-            const userMax = hzFilter ? parseInt(hzFilter.value, 10) : maxFreq;
-            const actualMax = Math.min(maxFreq, userMax);
-            window.waterfallRenderer.setFrequencyBounds(maxFreq, actualMax);
-            window.waterfallRenderer.pushData(mags, timestamp, timeString, e.data.clockTimeStr);
-            
-            // Labels aktualisieren (ohne ständiges reflow)
-            if (window.waterfallLastMax !== actualMax) {
-                window.waterfallLastMax = actualMax;
-                const wfLblMax = document.getElementById('wfLblMax');
-                const wfLblMid = document.getElementById('wfLblMid');
-                if (wfLblMax) wfLblMax.textContent = actualMax + " Hz";
-                if (wfLblMid) wfLblMid.textContent = Math.round(actualMax / 2) + " Hz";
-            }
+        window.latestWaterfallMags = window.latestWaterfallMags || [];
+        window.latestWaterfallMags[0] = mags;
+
+        let combinedMags = [mags];
+        if (window.activeSensors && window.activeSensors.length > 0) {
+            combinedMags = window.activeSensors
+                .map((node, i) => (!node.isHiddenFromUI && !node.wasDisconnected) ? (window.latestWaterfallMags[i] || new Float32Array(mags.length)) : null)
+                .filter(mag => mag !== null);
+            if (combinedMags.length === 0) combinedMags = [new Float32Array(mags.length)];
         }
+
+        if (window.waterfallRenderer && window.waterfallRenderer._lastChannelCount !== undefined && window.waterfallRenderer._lastChannelCount !== combinedMags.length) {
+            window.waterfallRenderer.clear();
+        }
+        if (window.waterfallRenderer) window.waterfallRenderer._lastChannelCount = combinedMags.length;
+
+        syncWaterfallRenderer({
+            renderer: window.waterfallRenderer,
+            maxHzInputId: 'waterfallMaxHz',
+            maxFreq,
+            magnitudes: combinedMags,
+            timestamp,
+            timeString,
+            clockTimeStr: e.data.clockTimeStr,
+            lastMaxWindowKey: 'waterfallLastMax',
+            labelMaxId: 'wfLblMax',
+            labelMidId: 'wfLblMid',
+        });
 
         // MAX PUFFER
         bufferFFTResult(mags); // Magnitudenpuffer für die letzten 5 Sekunden
@@ -5635,44 +6203,25 @@ function setupFFTWorker() {
         const meanValues = computeAverageFFT();
 
         // setData erwartet ein Array: [x, serie1, serie2]
+        updateSharedMultiFftData({
+            multiFftData: window.multiFftData,
+            freqs,
+            maxValues,
+            meanValues,
+            magnitudes: mags,
+            channelIndex: 0,
+        });
 
-
-        let maxAmp = Math.max(...meanValues);
-        let maxAmpMax = Math.max(...maxValues);
-        let maxAmpCurrent = Math.max(...mags);
-
-        let totalmax = Math.max(maxAmp * 1.2, maxAmpMax * 1.2, maxAmpCurrent * 1.2);
-
-        if (totalmax < 2000) {
-            totalmax = 2000;
-        }
-
-        // X-Achse dynamisch setzen
-        if (fftPlot && !window.isFftHistoryScrubbing) {
-
-
-            fftPlot.setScale('y', {
-                min: 0,
-                max: totalmax
-            })
-
-
-
-            if (fftDBoutput) {
-                // Logarithmische Skala für dB-Ausgabe
-                fftPlot.setScale("y", [0.0, 100.0]);
-            }
-
-
-            //fftPlot.setData([plotFreqs, maxValues, plotMags]);
-            fftPlot.setData([toRegularArray(freqs), maxValues, toRegularArray(meanValues), toRegularArray(mags)]);
-            updatePeakFrequencyBadge('fftPeakBadge', freqs, mags);
-            if (fftDBoutput) {
-                // Logarithmische Skala für dB-Ausgabe
-                fftPlot.setScale("y", [0.0, 100.0]);
-            } //fftPlot.setData([plotFreqs, meanValues]);
-            //fftPlot.redraw();
-        }
+        updateSharedFftPlot({
+            plot: fftPlot,
+            multiFftData: window.multiFftData,
+            isScrubbing: window.isFftHistoryScrubbing,
+            fftDbOutput: fftDBoutput,
+            peakBadgeId: 'fftPeakBadge',
+            freqs,
+            magnitudes: mags,
+            updatePeakFrequencyBadge,
+        });
 
     };
 }
@@ -5686,6 +6235,7 @@ function setupGyroFFTWorker() {
     console.log('[Main] Gyro FFT Worker:', gyroFftWorker);
 
     gyroFftWorker.onmessage = (e) => {
+        gyroFftWorkerBusy = false;
         const { freqs, mags, timestamp, timeString } = e.data;
 
         if (!freqs || !mags) {
@@ -5693,212 +6243,116 @@ function setupGyroFFTWorker() {
             return;
         }
 
-        const minFreq = Math.min(...freqs);
         const maxFreq = Math.max(...freqs);
 
-        if (window.gyroWaterfallRenderer && window.gyroWaterfallRenderer.active) {
-            const hzFilter = document.getElementById('gyroWaterfallMaxHz');
-            const userMax = hzFilter ? parseInt(hzFilter.value, 10) : maxFreq;
-            const actualMax = Math.min(maxFreq, userMax);
-            window.gyroWaterfallRenderer.setFrequencyBounds(maxFreq, actualMax);
-            window.gyroWaterfallRenderer.pushData(mags, timestamp, timeString, e.data.clockTimeStr);
-            
-            // Labels aktualisieren (ohne ständiges reflow)
-            if (window.gyroWaterfallLastMax !== actualMax) {
-                window.gyroWaterfallLastMax = actualMax;
-                const wfLblMax = document.getElementById('gwfLblMax');
-                const wfLblMid = document.getElementById('gwfLblMid');
-                if (wfLblMax) wfLblMax.textContent = actualMax + " Hz";
-                if (wfLblMid) wfLblMid.textContent = Math.round(actualMax / 2) + " Hz";
-            }
+        window.latestGyroWaterfallMags = window.latestGyroWaterfallMags || [];
+        window.latestGyroWaterfallMags[0] = mags;
+
+        let combinedGyroMags = [mags];
+        if (window.activeSensors && window.activeSensors.length > 0) {
+            combinedGyroMags = window.activeSensors
+                .map((node, i) => (!node.isHiddenFromUI && !node.wasDisconnected) ? (window.latestGyroWaterfallMags[i] || new Float32Array(mags.length)) : null)
+                .filter(mag => mag !== null);
+            if (combinedGyroMags.length === 0) combinedGyroMags = [new Float32Array(mags.length)];
         }
+
+        if (window.gyroWaterfallRenderer && window.gyroWaterfallRenderer._lastChannelCount !== undefined && window.gyroWaterfallRenderer._lastChannelCount !== combinedGyroMags.length) {
+            window.gyroWaterfallRenderer.clear();
+        }
+        if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer._lastChannelCount = combinedGyroMags.length;
+
+        syncWaterfallRenderer({
+            renderer: window.gyroWaterfallRenderer,
+            maxHzInputId: 'gyroWaterfallMaxHz',
+            maxFreq,
+            magnitudes: combinedGyroMags,
+            timestamp,
+            timeString,
+            clockTimeStr: e.data.clockTimeStr,
+            lastMaxWindowKey: 'gyroWaterfallLastMax',
+            labelMaxId: 'gwfLblMax',
+            labelMidId: 'gwfLblMid',
+        });
 
         bufferFFTResult(mags, gyroFftMaxBuffer, GYRO_FFT_RING_SIZE);
         const maxValues = computeMaxFFTValues(gyroFftMaxBuffer);
         bufferAverageFFT(mags, gyroAvgFFTBuffer, gyroN_AVG);
         const meanValues = computeAverageFFT(gyroAvgFFTBuffer);
 
-        let maxAmp = Math.max(...meanValues);
-        let maxAmpMax = Math.max(...maxValues);
-        let maxAmpCurrent = Math.max(...mags);
-        let totalmax = Math.max(maxAmp * 1.2, maxAmpMax * 1.2, maxAmpCurrent * 1.2);
+        updateSharedMultiFftData({
+            multiFftData: window.multiGyroFftData,
+            freqs,
+            maxValues,
+            meanValues,
+            magnitudes: mags,
+            channelIndex: 0,
+        });
 
-        if (totalmax < 2000) {
-            totalmax = 2000;
-        }
-
-        if (gyroFftPlot && !window.isGyroFftHistoryScrubbing) {
-            gyroFftPlot.setScale('y', {
-                min: 0,
-                max: totalmax
-            });
-
-            if (fftDBoutput) {
-                gyroFftPlot.setScale('y', [0.0, 100.0]);
-            }
-
-            gyroFftPlot.setData([toRegularArray(freqs), maxValues, toRegularArray(meanValues), toRegularArray(mags)]);
-            updatePeakFrequencyBadge('gyroFftPeakBadge', freqs, mags);
-
-            if (fftDBoutput) {
-                gyroFftPlot.setScale('y', [0.0, 100.0]);
-            }
-        }
+        updateSharedFftPlot({
+            plot: gyroFftPlot,
+            multiFftData: window.multiGyroFftData,
+            isScrubbing: window.isGyroFftHistoryScrubbing,
+            fftDbOutput: fftDBoutput,
+            peakBadgeId: 'gyroFftPeakBadge',
+            freqs,
+            magnitudes: mags,
+            updatePeakFrequencyBadge,
+        });
     };
 }
 
 function setupRMSWorker() {
-    if (rmsWorker) {
-        rmsWorker.terminate();
-    }
-
-    rmsWorker = new Worker("rms-worker.js");
-    console.log("[Main] RMS Worker:", rmsWorker);
-    // console.log("RMS     WORKER STARTED");
-
-    rmsWorker.onmessage = (e) => {
-        if(rmsPaused) return;
-
-        const { rmsX, rmsY, rmsZ, rmsTotal, time } = e.data;
-
-        rmsBuffer.push([time, rmsX, rmsY, rmsZ, rmsTotal]);
-
-        const updatesPerSecond = 1000 / RMS_UPDATE_INTERVAL;
-        const requiredDuration = displayDurationSecondsRMS + Math.max(0, Math.abs(rmsPanOffset / 1000000));
-        let N = Math.ceil(updatesPerSecond * requiredDuration);
-        if (N < 10) N = 10;
-
-        const rmsx = rmsBuffer.getFieldTypedArray("x", N);
-        const rmsy = rmsBuffer.getFieldTypedArray("y", N);
-        const rmsz = rmsBuffer.getFieldTypedArray("z", N);
-        const rmstotal = rmsBuffer.getFieldTypedArray("total", N);
-        const rmst = rmsBuffer.getFieldTypedArray("time", N);
-
-        const yMinBefore = rmsPlot?.scales?.y?.min;
-        const yMaxBefore = rmsPlot?.scales?.y?.max;
-
-        rmsPlot.setData([rmst, rmsx, rmsy, rmsz, rmstotal]);
-
-        if (rmsPlot._yLocked && yMinBefore !== undefined && yMaxBefore !== undefined) {
-            rmsPlot.setScale("y", { min: yMinBefore, max: yMaxBefore });
-        }
-
-        if (rmst.length > 0) {
-            window.dispatchEvent(new CustomEvent("rmsDataUpdate", { detail: { latestTimestamp: rmst[rmst.length - 1] } }));
-        }
-    };
+    rmsWorker = createRmsWorkerRuntime({
+        workerScript: 'rms-worker.js?v=27',
+        existingWorker: rmsWorker,
+        logLabel: '[Main] RMS Worker:',
+        isPaused: () => rmsPaused,
+        targetBuffer: rmsBuffer,
+        getPlot: () => rmsPlot,
+        getDurationSeconds: () => displayDurationSecondsRMS,
+        getPanOffsetUs: () => rmsPanOffset,
+        updateIntervalMs: RMS_UPDATE_INTERVAL,
+        eventName: 'rmsDataUpdate',
+    });
 }
 
 function setupGyroRMSWorker() {
-    if (gyroRmsWorker) {
-        gyroRmsWorker.terminate();
-    }
-
-    gyroRmsWorker = new Worker('rms-worker.js');
-    console.log('[Main] Gyro RMS Worker:', gyroRmsWorker);
-
-    gyroRmsWorker.onmessage = (e) => {
-        if (gyroRmsPaused) return;
-
-        const { rmsX, rmsY, rmsZ, rmsTotal, time } = e.data;
-
-        gyroRmsBuffer.push([time, rmsX, rmsY, rmsZ, rmsTotal]);
-
-        const updatesPerSecond = 1000 / RMS_UPDATE_INTERVAL;
-        const requiredDuration = gyroDisplayDurationSecondsRMS + Math.max(0, Math.abs(gyroRmsPanOffset / 1000000));
-        let N = Math.ceil(updatesPerSecond * requiredDuration);
-        if (N < 10) N = 10;
-
-        const rmsx = gyroRmsBuffer.getFieldTypedArray('x', N);
-        const rmsy = gyroRmsBuffer.getFieldTypedArray('y', N);
-        const rmsz = gyroRmsBuffer.getFieldTypedArray('z', N);
-        const rmstotal = gyroRmsBuffer.getFieldTypedArray('total', N);
-        const rmst = gyroRmsBuffer.getFieldTypedArray('time', N);
-
-        const yMinBefore = gyroRmsPlot?.scales?.y?.min;
-        const yMaxBefore = gyroRmsPlot?.scales?.y?.max;
-
-        gyroRmsPlot?.setData([rmst, rmsx, rmsy, rmsz, rmstotal]);
-
-        if (gyroRmsPlot?._yLocked && yMinBefore !== undefined && yMaxBefore !== undefined) {
-             gyroRmsPlot?.setScale("y", { min: yMinBefore, max: yMaxBefore });
-        }
-
-        if (rmst.length > 0) {
-            window.dispatchEvent(new CustomEvent("gyroRmsDataUpdate", { detail: { latestTimestamp: rmst[rmst.length - 1] } }));
-        }
-    };
+    gyroRmsWorker = createRmsWorkerRuntime({
+        workerScript: 'rms-worker.js',
+        existingWorker: gyroRmsWorker,
+        logLabel: '[Main] Gyro RMS Worker:',
+        isPaused: () => gyroRmsPaused,
+        targetBuffer: gyroRmsBuffer,
+        getPlot: () => gyroRmsPlot,
+        getDurationSeconds: () => gyroDisplayDurationSecondsRMS,
+        getPanOffsetUs: () => gyroRmsPanOffset,
+        updateIntervalMs: RMS_UPDATE_INTERVAL,
+        eventName: 'gyroRmsDataUpdate',
+    });
 }
 
 
 let displayDurationSecondsRMS = 20;
+let gyroDisplayDurationSecondsRMS = 20;
 let rmsPaused = false;
+let gyroRmsPaused = false;
 
 function bindRMSControls({ sliderId, valueId, pauseButtonId, recordButtonId, screenshotButtonId, chartId, getDuration, setDuration, getPaused, setPaused }) {
-    const timeSlider = document.getElementById(sliderId);
-    const timeValue = document.getElementById(valueId);
-    const pauseBtn = document.getElementById(pauseButtonId);
-    const recordBtn = document.getElementById(recordButtonId);
-    const screenshotBtn = document.getElementById(screenshotButtonId);
-    const chartContainer = document.getElementById(chartId);
-
-    if (timeSlider && timeValue) {
-        timeSlider.value = String(Math.round(getDuration()));
-        timeValue.textContent = String(Math.round(getDuration()));
-
-        timeSlider.addEventListener('input', () => {
-            const nextDuration = parseInt(timeSlider.value, 10);
-            setDuration(nextDuration);
-            timeValue.textContent = String(nextDuration);
-        });
-    }
-
-    if (pauseBtn) {
-        pauseBtn.textContent = getPaused() ? '▶' : 'Pause';
-        pauseBtn.addEventListener('click', () => {
-            const nextPaused = !getPaused();
-            setPaused(nextPaused);
-            pauseBtn.textContent = nextPaused ? '▶' : 'Pause';
-        });
-    }
-
-    if (recordBtn) {
-        recordBtn.innerHTML = isRecording ? '⏹' : '🔴';
-        recordBtn.addEventListener('click', () => {
-            if (typeof window.toggleRecording === 'function') {
-                window.toggleRecording();
-            }
-        });
-    }
-
-    if (screenshotBtn && chartContainer) {
-        screenshotBtn.addEventListener('click', () => {
-            html2canvas(chartContainer).then((canvas) => {
-                const link = document.createElement('a');
-                link.download = `${chartId}_${new Date().toISOString()}.png`;
-                link.href = canvas.toDataURL();
-                link.click();
-            });
-        });
-    }
-
-    if (chartContainer) {
-        chartContainer.addEventListener('wheel', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-
-            const factor = event.deltaY < 0 ? 0.85 : 1.15;
-            let nextDuration = getDuration() * factor;
-
-            if (nextDuration < 1) nextDuration = 1;
-            if (nextDuration > 300) nextDuration = 300;
-
-            setDuration(nextDuration);
-
-            if (timeSlider) timeSlider.value = String(Math.round(nextDuration));
-            if (timeValue) timeValue.textContent = String(Math.round(nextDuration));
-        }, { passive: false, capture: true });
-    }
+    bindRmsControlsRuntime({
+        sliderId,
+        valueId,
+        pauseButtonId,
+        recordButtonId,
+        screenshotButtonId,
+        chartId,
+        getDuration,
+        setDuration,
+        getPaused,
+        setPaused,
+        isRecording: () => isRecording,
+        toggleRecording: window.toggleRecording,
+        html2canvasRef: globalThis.html2canvas,
+    });
 }
 
 function setupRMSControls() {
@@ -5907,7 +6361,6 @@ function setupRMSControls() {
         valueId: 'rmsTimeValue',
         pauseButtonId: 'rmsPauseBtn',
         recordButtonId: 'rmsRecordBtn',
-        screenshotButtonId: 'rmsSSBtn',
         chartId: 'rmsChart',
         getDuration: () => displayDurationSecondsRMS,
         setDuration: (value) => {
@@ -5926,7 +6379,6 @@ function setupGyroRMSControls() {
         valueId: 'gyroRmsTimeValue',
         pauseButtonId: 'gyroRmsPauseBtn',
         recordButtonId: 'gyroRmsRecordBtn',
-        screenshotButtonId: 'gyroRmsSSBtn',
         chartId: 'gyroRmsChart',
         getDuration: () => gyroDisplayDurationSecondsRMS,
         setDuration: (value) => {
@@ -5951,89 +6403,39 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
 function startRMSUpdates() {
-    // Falls das Intervall schon läuft, abbrechen
-    if (rmsUpdateTimerId !== null) {
-        clearInterval(rmsUpdateTimerId);
-    }
-
-    rmsUpdateTimerId = setInterval(() => {
-        if (!rmsWorker || !rmsPlot) return;
-        const lastAccSample = accBuffer.getLast();
-        if (!lastAccSample) return;
-
-        const arrx = accBuffer.getFieldTypedArray('x', RMS_WINDOW_SIZE);
-        const arry = accBuffer.getFieldTypedArray('y', RMS_WINDOW_SIZE);
-        const arrz = accBuffer.getFieldTypedArray('z', RMS_WINDOW_SIZE);
-        const arrtotal = accBuffer.getFieldTypedArray('total', RMS_WINDOW_SIZE);
-
-        const t = lastAccSample.time;
-
-
-        const rmsXInput = new Float32Array(arrx);
-        const rmsYInput = new Float32Array(arry);
-        const rmsZInput = new Float32Array(arrz);
-        const rmsTotalInput = new Float32Array(arrtotal);
-
-        rmsWorker.postMessage({
-            x: rmsXInput,
-            y: rmsYInput,
-            z: rmsZInput,
-            total: rmsTotalInput,
-            time: t
-        }, [
-            rmsXInput.buffer,
-            rmsYInput.buffer,
-            rmsZInput.buffer,
-            rmsTotalInput.buffer,
-        ]);
-
-
-
-        //fftWorker.postMessage({ buffer: buf.buffer, sampleRate: frq }, [buf.buffer]);
-    }, RMS_UPDATE_INTERVAL);
+    rmsUpdateTimerId = startMultiSensorRmsUpdatesRuntime({
+        existingTimerId: rmsUpdateTimerId,
+        getPlot: () => rmsPlot,
+        getNodesToProcess: () => (window.activeSensors && window.activeSensors.length > 0)
+            ? window.activeSensors
+            : [{ channelIndex: 0, _isFallback: true }],
+        updateIntervalMs: RMS_UPDATE_INTERVAL,
+        windowSize: RMS_WINDOW_SIZE,
+        getDurationSeconds: () => displayDurationSecondsRMS,
+        getPanOffsetUs: () => rmsPanOffset,
+        eventName: 'rmsDataUpdate',
+    });
 }
 
 function startGyroRMSUpdates() {
-    if (gyroRmsUpdateTimerId !== null) {
-        clearInterval(gyroRmsUpdateTimerId);
-    }
-
-    gyroRmsUpdateTimerId = setInterval(() => {
-        if (!gyroRmsWorker || !gyroRmsPlot) return;
-
-        const lastGyroSample = gyroBuffer.getLast();
-        if (!lastGyroSample) return;
-
-        const arrx = gyroBuffer.getFieldTypedArray('x', RMS_WINDOW_SIZE);
-        const arry = gyroBuffer.getFieldTypedArray('y', RMS_WINDOW_SIZE);
-        const arrz = gyroBuffer.getFieldTypedArray('z', RMS_WINDOW_SIZE);
-
-        const arrtotal = new Float32Array(arrx.length);
-        for (let index = 0; index < arrx.length; index++) {
-            arrtotal[index] = Math.hypot(arrx[index] || 0, arry[index] || 0, arrz[index] || 0);
-        }
-
-        const rmsXInput = new Float32Array(arrx);
-        const rmsYInput = new Float32Array(arry);
-        const rmsZInput = new Float32Array(arrz);
-        const rmsTotalInput = new Float32Array(arrtotal);
-
-        gyroRmsWorker.postMessage({
-            x: rmsXInput,
-            y: rmsYInput,
-            z: rmsZInput,
-            total: rmsTotalInput,
-            time: lastGyroSample.time
-        }, [
-            rmsXInput.buffer,
-            rmsYInput.buffer,
-            rmsZInput.buffer,
-            rmsTotalInput.buffer,
-        ]);
-    }, RMS_UPDATE_INTERVAL);
+    gyroRmsUpdateTimerId = startGyroRmsUpdatesRuntime({
+        existingTimerId: gyroRmsUpdateTimerId,
+        getPlot: () => gyroRmsPlot,
+        getNodesToProcess: () => (window.activeSensors && window.activeSensors.length > 0)
+            ? window.activeSensors
+            : [{ channelIndex: 0, _isFallback: true }],
+        updateIntervalMs: RMS_UPDATE_INTERVAL,
+        windowSize: RMS_WINDOW_SIZE,
+        getDurationSeconds: () => displayDurationSecondsRMS,
+        getPanOffsetUs: () => rmsPanOffset,
+        eventName: 'gyroRmsDataUpdate',
+    });
 }
 
 function bufferFFTResult(magArray, targetBuffer = fftMaxBuffer, ringSize = FFT_RING_SIZE) {
+    if (targetBuffer.length > 0 && targetBuffer[0].length !== magArray.length) {
+        targetBuffer.length = 0; // Clear the buffer due to size change
+    }
     if (targetBuffer.length >= ringSize)
         targetBuffer.shift();
     targetBuffer.push(magArray);
@@ -6053,154 +6455,211 @@ function computeMaxFFTValues(targetBuffer = fftMaxBuffer) {
     return maxValues;
 }
 
-window.generateStaticWaterfalls = function(accData, gyroData, sampleRate, accTimes, gyroTimes) {
-    console.log(`[Offline FFT] Generiere statischen Waterfall mit ${sampleRate}Hz (Async-Batch)...`);
+window.generateStaticWaterfalls = async function(accData, gyroData, sampleRate, accTimes, gyroTimes) {
+    console.log(`[Offline FFT] Generiere statischen Waterfall mit ${sampleRate}Hz (Async Multi-Channel Batch)...`);
     
-    // Set up global sampleRate so scrubbers can use it
     if (sampleRate > 0 && typeof currentSampleRate !== "undefined") {
         currentSampleRate = sampleRate;
+        window.currentSampleRate = sampleRate;
     }
     
-    if (accData && accData.length > 0 && fftWorker) {
-        if (window.waterfallRenderer) window.waterfallRenderer.clear();
-    }
-    if (gyroData && gyroData.length > 0 && gyroFftWorker) {
-        if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.clear();
-    }
+    const hasAcc = accData && accData.some(ch => ch && ch.length > 0);
+    const hasGyro = gyroData && gyroData.some(ch => ch && ch.length > 0);
+    
+    if (hasAcc && window.waterfallRenderer) window.waterfallRenderer.clear();
+    if (hasGyro && window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.clear();
     
     const frq = sampleRate > 0 ? sampleRate : (typeof currentSampleRate !== 'undefined' ? currentSampleRate : 1000);
     let step = Math.floor(frq * (FFT_UPDATE_INTERVAL / 1000));
     if (step < 10) step = 10;
     
+    // Create temporary workers
+    const accWorkers = [];
+    const gyroWorkers = [];
+    for(let ch=0; ch<4; ch++) {
+        if (hasAcc && accData[ch] && accData[ch].length > 0) accWorkers[ch] = new Worker("fft-worker.js");
+        if (hasGyro && gyroData[ch] && gyroData[ch].length > 0) gyroWorkers[ch] = new Worker("fft-worker.js");
+    }
+
+    function computeFftAsync(worker, windowArr) {
+        return new Promise(resolve => {
+            worker.onmessage = (e) => resolve(e.data.mags);
+            const buf = Float32Array.from(windowArr);
+            worker.postMessage({
+                buffer: buf.buffer,
+                sampleRate: frq,
+                windowType: typeof FFT_WINDOW_TYPE !== 'undefined' ? FFT_WINDOW_TYPE : 'BLACKMAN',
+                highpassCutoff: typeof fftHighPass !== 'undefined' ? fftHighPass : 0,
+                dcCutoff: typeof DC_CUTOFF !== 'undefined' ? DC_CUTOFF : true,
+                fftDBoutput: typeof fftDBoutput !== 'undefined' ? fftDBoutput : false
+            }, [buf.buffer]);
+        });
+    }
+
     let accI = 0;
     let gyroI = 0;
-    const BATCH_SIZE = 50;
+    const masterAccData = hasAcc ? accData.find(ch => ch && ch.length > 0) : null;
+    const masterGyroData = hasGyro ? gyroData.find(ch => ch && ch.length > 0) : null;
     
-    function processBatch() {
-        let itemsProcessed = 0;
-        
-        while (itemsProcessed < BATCH_SIZE && accData && accI <= accData.length - FFT_WINDOW_SIZE) {
-            if (fftWorker) {
-                const windowArr = accData.slice(accI, accI + FFT_WINDOW_SIZE);
-                const buf = Float32Array.from(windowArr); 
-                
-                const timestampUs = accTimes ? accTimes[accI + FFT_WINDOW_SIZE - 1] : 0;
-                const tString = typeof formatUsToTime === 'function' ? formatUsToTime(timestampUs) : (timestampUs/1000000).toFixed(2);
-                let clockTimeStr = undefined;
-                if (window.replayData && window.replayData.acc && window.replayData.acc[accI + FFT_WINDOW_SIZE - 1]) {
-                    clockTimeStr = window.replayData.acc[accI + FFT_WINDOW_SIZE - 1].hms;
-                }
-                
-                fftWorker.postMessage({
-                    buffer: buf.buffer,
-                    sampleRate: frq,
-                    windowType: typeof FFT_WINDOW_TYPE !== 'undefined' ? FFT_WINDOW_TYPE : 'BLACKMAN',
-                    highpassCutoff: typeof fftHighPass !== 'undefined' ? fftHighPass : 0,
-                    dcCutoff: typeof DC_CUTOFF !== 'undefined' ? DC_CUTOFF : true,
-                    fftDBoutput: typeof fftDBoutput !== 'undefined' ? fftDBoutput : false,
-                    timestamp: timestampUs,
-                    timeString: tString,
-                    clockTimeStr: clockTimeStr
-                }, [buf.buffer]);
+    while (hasAcc && masterAccData && accI <= masterAccData.length - FFT_WINDOW_SIZE) {
+        const promises = [];
+        const activeChannels = [];
+        for(let ch=0; ch<4; ch++) {
+            if (accWorkers[ch] && accData[ch] && accI <= accData[ch].length - FFT_WINDOW_SIZE) {
+                const arr = accData[ch].slice(accI, accI + FFT_WINDOW_SIZE);
+                promises.push(computeFftAsync(accWorkers[ch], arr));
+                activeChannels.push(ch);
             }
-            accI += step;
-            itemsProcessed++;
         }
         
-        itemsProcessed = 0;
-        while (itemsProcessed < BATCH_SIZE && gyroData && gyroI <= gyroData.length - FFT_WINDOW_SIZE) {
-            if (gyroFftWorker) {
-                const windowArr = gyroData.slice(gyroI, gyroI + FFT_WINDOW_SIZE);
-                const buf = Float32Array.from(windowArr);
-                
-                const timestampUs = gyroTimes ? gyroTimes[gyroI + FFT_WINDOW_SIZE - 1] : 0;
-                const tString = typeof formatUsToTime === 'function' ? formatUsToTime(timestampUs) : (timestampUs/1000000).toFixed(2);
-                let clockTimeStr = undefined;
-                if (window.replayData && window.replayData.gyro && window.replayData.gyro[gyroI + FFT_WINDOW_SIZE - 1]) {
-                    clockTimeStr = window.replayData.gyro[gyroI + FFT_WINDOW_SIZE - 1].hms;
+        if (promises.length > 0) {
+            const results = await Promise.all(promises);
+            let combinedMags = [];
+            // Map results back to channels, inserting empty arrays for missing channels if necessary 
+            // to ensure colors align with the correct strips
+            let resIdx = 0;
+            for(let ch=0; ch<4; ch++) {
+                if (accWorkers[ch]) {
+                    if (activeChannels.includes(ch)) {
+                        let mags = results[resIdx++];
+                        if (typeof getSharedFftCeiling !== 'undefined') {
+                            const arr = new Float32Array(mags);
+                            mags = Array.from(arr).map(v => getSharedFftCeiling(v, 'acc'));
+                        }
+                        combinedMags.push(new Float32Array(mags));
+                    } else {
+                        combinedMags.push(new Float32Array(1)); // dummy empty strip
+                    }
                 }
-                
-                gyroFftWorker.postMessage({
-                    buffer: buf.buffer,
-                    sampleRate: frq,
-                    windowType: typeof FFT_WINDOW_TYPE !== 'undefined' ? FFT_WINDOW_TYPE : 'BLACKMAN',
-                    highpassCutoff: typeof fftHighPass !== 'undefined' ? fftHighPass : 0,
-                    dcCutoff: typeof DC_CUTOFF !== 'undefined' ? DC_CUTOFF : true,
-                    fftDBoutput: typeof fftDBoutput !== 'undefined' ? fftDBoutput : false,
-                    timestamp: timestampUs,
-                    timeString: tString,
-                    clockTimeStr: clockTimeStr
-                }, [buf.buffer]);
             }
-            gyroI += step;
-            itemsProcessed++;
+            
+            const timestampUs = accTimes ? accTimes[accI + FFT_WINDOW_SIZE - 1] : 0;
+            const tString = typeof formatUsToTime === 'function' ? formatUsToTime(timestampUs) : (timestampUs/1000000).toFixed(2);
+            let clockTimeStr = undefined;
+            if (window.replayData && window.replayData.acc && window.replayData.acc[activeChannels[0]] && window.replayData.acc[activeChannels[0]][accI + FFT_WINDOW_SIZE - 1]) {
+                clockTimeStr = window.replayData.acc[activeChannels[0]][accI + FFT_WINDOW_SIZE - 1].hms;
+            }
+            
+            if (window.waterfallRenderer) window.waterfallRenderer.pushData(combinedMags, timestampUs/1000000, tString, clockTimeStr);
         }
         
-        let pending = false;
-        if (accData && accI <= accData.length - FFT_WINDOW_SIZE) pending = true;
-        if (gyroData && gyroI <= gyroData.length - FFT_WINDOW_SIZE) pending = true;
-        
-        if (pending) {
-            setTimeout(processBatch, 0);
-        }
+        accI += step;
+        // Yield to UI to prevent visible freezes
+        await new Promise(r => setTimeout(r, 0));
     }
     
-    processBatch();
+    while (hasGyro && masterGyroData && gyroI <= masterGyroData.length - FFT_WINDOW_SIZE) {
+        const promises = [];
+        const activeChannels = [];
+        for(let ch=0; ch<4; ch++) {
+            if (gyroWorkers[ch] && gyroData[ch] && gyroI <= gyroData[ch].length - FFT_WINDOW_SIZE) {
+                const arr = gyroData[ch].slice(gyroI, gyroI + FFT_WINDOW_SIZE);
+                promises.push(computeFftAsync(gyroWorkers[ch], arr));
+                activeChannels.push(ch);
+            }
+        }
+        
+        if (promises.length > 0) {
+            const results = await Promise.all(promises);
+            let combinedMags = [];
+            let resIdx = 0;
+            for(let ch=0; ch<4; ch++) {
+                if (gyroWorkers[ch]) {
+                    if (activeChannels.includes(ch)) {
+                        let mags = results[resIdx++];
+                        if (typeof getSharedFftCeiling !== 'undefined') {
+                            const arr = new Float32Array(mags);
+                            mags = Array.from(arr).map(v => getSharedFftCeiling(v, 'gyro'));
+                        }
+                        combinedMags.push(new Float32Array(mags));
+                    } else {
+                        combinedMags.push(new Float32Array(1));
+                    }
+                }
+            }
+            
+            const timestampUs = gyroTimes ? gyroTimes[gyroI + FFT_WINDOW_SIZE - 1] : 0;
+            const tString = typeof formatUsToTime === 'function' ? formatUsToTime(timestampUs) : (timestampUs/1000000).toFixed(2);
+            let clockTimeStr = undefined;
+            if (window.replayData && window.replayData.gyro && window.replayData.gyro[activeChannels[0]] && window.replayData.gyro[activeChannels[0]][gyroI + FFT_WINDOW_SIZE - 1]) {
+                clockTimeStr = window.replayData.gyro[activeChannels[0]][gyroI + FFT_WINDOW_SIZE - 1].hms;
+            }
+            
+            if (window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.pushData(combinedMags, timestampUs/1000000, tString, clockTimeStr);
+        }
+        
+        gyroI += step;
+        await new Promise(r => setTimeout(r, 0));
+    }
+    
+    // Cleanup temporary workers
+    for(let ch=0; ch<4; ch++) {
+        if (accWorkers[ch]) accWorkers[ch].terminate();
+        if (gyroWorkers[ch]) gyroWorkers[ch].terminate();
+    }
+    console.log("[Offline FFT] Multi-Channel Waterfall generation complete.");
+
 };
 
 
 
 function startFFTUpdates() {
-    // Falls das Intervall schon läuft, abbrechen
     if (fftUpdateTimerId !== null) {
         clearInterval(fftUpdateTimerId);
     }
 
     fftUpdateTimerId = setInterval(() => {
-        if (!fftWorker || !fftPlot) return;
-
-
-
-        //const arr = accBuffer.getFieldTypedArray('x', FFT_WINDOW_SIZE);
-
-
-        const arr = getSelectedData(FFT_AXIS_MODE, accBuffer, FFT_WINDOW_SIZE);
-
-        // const arr = chartData[1].toArray();
-        const tarr = accBuffer.getFieldTypedArray('time', FFT_WINDOW_SIZE);
-
-        const arrLen = arr.length;
-
-        if (arrLen < FFT_WINDOW_SIZE) return;
-
-        const idx0 = arrLen - 1;
-        const idx1 = arrLen - FFT_WINDOW_SIZE;
-        const t0 = tarr[idx0];
-        const t1 = tarr[idx1];
-        const delta = t0 - t1;
-
-        if (delta <= 0) {
-            console.warn("FFT: Ungültiges Zeitintervall!!!");
-            return;
+        if (!fftPlot) return;
+        
+        let targetSize = currentSampleRate * FFT_WINDOW_TIME_S;
+        let newPow = Math.round(Math.log2(targetSize));
+        let oldPow = Math.log2(FFT_WINDOW_SIZE);
+        if (Math.abs(newPow - oldPow) > 0.6 || isNaN(oldPow) || !window._lastFftTime || window._lastFftTime !== FFT_WINDOW_TIME_S) {
+            FFT_WINDOW_SIZE = Math.pow(2, newPow);
+            window._lastFftTime = FFT_WINDOW_TIME_S;
         }
 
-        const frq = currentSampleRate; //Math.round(FFT_WINDOW_SIZE * (1000000 / delta));
-        const windowArr = arr.slice(idx1, idx0 + 1);
-        const buf = windowArr instanceof Float32Array ? windowArr : Float32Array.from(windowArr);
+        if (FFT_WINDOW_SIZE < 256) FFT_WINDOW_SIZE = 256;
+        if (FFT_WINDOW_SIZE > 8192) FFT_WINDOW_SIZE = 8192; // 12000 Ringsize
+        
+        const nodesToProcess = (window.activeSensors && window.activeSensors.length > 0) 
+            ? window.activeSensors 
+            : [{ channelIndex: 0, _isFallback: true }]; // Fallback für Legacy Startup ohne discovery
+            
+        nodesToProcess.forEach((node) => {
+            const bufferRef = node.channelIndex === 0 ? accBuffer : node.accBuffer;
+            const workerRef = node.channelIndex === 0 ? fftWorker : node.fftWorker;
+            
+            if (!bufferRef || !workerRef) return;
 
+            const arr = getSelectedData(FFT_AXIS_MODE, bufferRef, FFT_WINDOW_SIZE);
+            const tarr = bufferRef.getFieldTypedArray('time', FFT_WINDOW_SIZE);
+            const arrLen = arr.length;
 
+            if (arrLen < FFT_WINDOW_SIZE) return;
 
-        fftWorker.postMessage({
-            buffer: buf.buffer,
-            sampleRate: frq,
-            windowType: FFT_WINDOW_TYPE,// oder 'HANNING', 'HAMMING', 'RECTANGULAR'
-            highpassCutoff: fftHighPass,
-            dcCutoff: DC_CUTOFF,
-            fftDBoutput: fftDBoutput,
-        }, [buf.buffer]);
+            const idx0 = arrLen - 1;
+            const idx1 = arrLen - FFT_WINDOW_SIZE;
+            const t0 = tarr[idx0];
+            const t1 = tarr[idx1];
+            const delta = t0 - t1;
 
+            if (delta <= 0) return;
 
-        //fftWorker.postMessage({ buffer: buf.buffer, sampleRate: frq }, [buf.buffer]);
+            const exactFrq = Math.round((FFT_WINDOW_SIZE - 1) * (1000000 / delta));
+            const frq = (exactFrq > 10) ? exactFrq : currentSampleRate;
+            const windowArr = arr.slice(idx1, idx0 + 1);
+            const buf = windowArr instanceof Float32Array ? windowArr : Float32Array.from(windowArr);
+
+            workerRef.postMessage({
+                buffer: buf.buffer,
+                sampleRate: frq,
+                windowType: typeof FFT_WINDOW_TYPE !== 'undefined' ? FFT_WINDOW_TYPE : 'BLACKMAN',
+                highpassCutoff: typeof fftHighPass !== 'undefined' ? fftHighPass : 0,
+                dcCutoff: typeof DC_CUTOFF !== 'undefined' ? DC_CUTOFF : true,
+                fftDBoutput: typeof fftDBoutput !== 'undefined' ? fftDBoutput : false,
+            }, [buf.buffer]);
+        });
     }, FFT_UPDATE_INTERVAL);
 }
 
@@ -6212,39 +6671,65 @@ function startGyroFFTUpdates() {
     gyroFftUpdateTimerId = setInterval(() => {
         if (!gyroFftWorker || !gyroFftPlot) return;
 
-        const arr = getSelectedData(GYRO_FFT_AXIS_MODE, gyroBuffer, GYRO_FFT_WINDOW_SIZE);
-        const tarr = gyroBuffer.getFieldTypedArray('time', GYRO_FFT_WINDOW_SIZE);
-        const arrLen = arr.length;
-
-        if (arrLen < GYRO_FFT_WINDOW_SIZE) return;
-
-        const idx0 = arrLen - 1;
-        const idx1 = arrLen - GYRO_FFT_WINDOW_SIZE;
-        const t0 = tarr[idx0];
-        const t1 = tarr[idx1];
-        const delta = t0 - t1;
-
-        if (delta <= 0) {
-            console.warn('Gyro FFT: Ungültiges Zeitintervall');
-            return;
+        let targetSize = window.currentSampleRate * GYRO_FFT_WINDOW_TIME_S || currentSampleRate * GYRO_FFT_WINDOW_TIME_S;
+        let newPow = Math.round(Math.log2(targetSize));
+        let oldPow = Math.log2(GYRO_FFT_WINDOW_SIZE);
+        if (Math.abs(newPow - oldPow) > 0.6 || isNaN(oldPow) || !window._lastGyroFftTime || window._lastGyroFftTime !== GYRO_FFT_WINDOW_TIME_S) {
+            GYRO_FFT_WINDOW_SIZE = Math.pow(2, newPow);
+            window._lastGyroFftTime = GYRO_FFT_WINDOW_TIME_S;
         }
 
-        const estimatedSampleRate = Math.round((GYRO_FFT_WINDOW_SIZE - 1) * (1000000 / delta));
-        if (!Number.isFinite(estimatedSampleRate) || estimatedSampleRate <= 0) {
-            return;
-        }
+        if (GYRO_FFT_WINDOW_SIZE < 256) GYRO_FFT_WINDOW_SIZE = 256;
+        if (GYRO_FFT_WINDOW_SIZE > 8192) GYRO_FFT_WINDOW_SIZE = 8192;
 
-        const windowArr = arr.slice(idx1, idx0 + 1);
-        const buf = windowArr instanceof Float32Array ? windowArr : Float32Array.from(windowArr);
+        const nodesToProcess = (window.activeSensors && window.activeSensors.length > 0) 
+            ? window.activeSensors 
+            : [{ channelIndex: 0, _isFallback: true }];
+            
+        nodesToProcess.forEach((node) => {
+            const bufferRef = node.channelIndex === 0 ? gyroBuffer : node.gyroBuffer;
+            const workerRef = node.channelIndex === 0 ? gyroFftWorker : node.gyroFftWorker;
+            
+            if (!bufferRef || !workerRef) return;
 
-        gyroFftWorker.postMessage({
-            buffer: buf.buffer,
-            sampleRate: estimatedSampleRate,
-            windowType: GYRO_FFT_WINDOW_TYPE,
-            highpassCutoff: gyroFftHighPass,
-            dcCutoff: GYRO_DC_CUTOFF,
-            fftDBoutput: fftDBoutput,
-        }, [buf.buffer]);
+            const arr = getSelectedData(GYRO_FFT_AXIS_MODE, bufferRef, GYRO_FFT_WINDOW_SIZE);
+            const tarr = bufferRef.getFieldTypedArray('time', GYRO_FFT_WINDOW_SIZE);
+            const arrLen = arr.length;
+
+            if (arrLen < GYRO_FFT_WINDOW_SIZE) return;
+
+            const idx0 = arrLen - 1;
+            const idx1 = arrLen - GYRO_FFT_WINDOW_SIZE;
+            const t0 = tarr[idx0];
+            const t1 = tarr[idx1];
+
+            if (!Number.isFinite(t0) || !Number.isFinite(t1)) {
+                return;
+            }
+
+            const delta = t0 - t1;
+
+            if (delta <= 0) {
+                return;
+            }
+
+            const estimatedSampleRate = Math.round((GYRO_FFT_WINDOW_SIZE - 1) * (1000000 / delta));
+            if (!Number.isFinite(estimatedSampleRate) || estimatedSampleRate <= 0) {
+                return;
+            }
+
+            const windowArr = arr.slice(idx1, idx0 + 1);
+            const buf = windowArr instanceof Float32Array ? windowArr : Float32Array.from(windowArr);
+
+            workerRef.postMessage({
+                buffer: buf.buffer,
+                sampleRate: estimatedSampleRate,
+                windowType: GYRO_FFT_WINDOW_TYPE,
+                highpassCutoff: gyroFftHighPass,
+                dcCutoff: GYRO_DC_CUTOFF,
+                fftDBoutput: fftDBoutput,
+            }, [buf.buffer]);
+        });
     }, GYRO_FFT_UPDATE_INTERVAL);
 }
 
@@ -6309,6 +6794,9 @@ function getSelectedData(mode, accBuffer, N) {
 // FFT MITTELUNG
 
 function bufferAverageFFT(mags, targetBuffer = avgFFTBuffer, limit = N_AVG) {
+    if (targetBuffer.length > 0 && targetBuffer[0].length !== mags.length) {
+        targetBuffer.length = 0; // Clear the buffer due to size change
+    }
     if (targetBuffer.length >= limit) {
         targetBuffer.shift();
     }
@@ -6318,17 +6806,17 @@ function bufferAverageFFT(mags, targetBuffer = avgFFTBuffer, limit = N_AVG) {
 function computeAverageFFT(targetBuffer = avgFFTBuffer) {
     if (targetBuffer.length === 0) return [];
     const len = targetBuffer[0].length;
-    let avg = new Array(len).fill(0);
+    let avg = new Float32Array(len);
     for (let i = 0; i < targetBuffer.length; i++) {
-        if (targetBuffer[i].length !== len) {
-            console.error(`[ERROR] Abweichende Länge in Buffer bei Index ${i}:`, targetBuffer[i].length, 'erwartet:', len);
-        }
+        const buf = targetBuffer[i];
+        if (buf.length !== len) continue; // Safety check
         for (let j = 0; j < len; j++) {
-            avg[j] += targetBuffer[i][j];
+            avg[j] += buf[j];
         }
     }
+    const count = targetBuffer.length;
     for (let j = 0; j < len; j++) {
-        avg[j] /= targetBuffer.length;
+        avg[j] /= count;
     }
     return avg;
 }
@@ -6402,235 +6890,11 @@ console.log(`[FFT] Effektive Samplerate: ${SAMPLE_RATE.toFixed(1)} Hz`);
 
 
 
-function getSize() {
-    const container = document.getElementById("accChartHost");
-    const rect = container.getBoundingClientRect();
-    return {
-        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
-        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
-    }
-}
-
-function getGyroChartSize() {
-    const container = document.getElementById("gyroChartHost");
-    const rect = container.getBoundingClientRect();
-    return {
-        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
-        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
-    }
-}
-
-function getFftChartSize() {
-    const container = document.getElementById("fftChart");
-    const rect = container.getBoundingClientRect();
-    return {
-        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
-        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
-    };
-}
-
-function getRmsChartSize() {
-    const container = document.getElementById("rmsChart");
-    const rect = container.getBoundingClientRect();
-    return {
-        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
-        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
-    };
-}
-
-function getGyroFftChartSize() {
-    const container = document.getElementById('gyroFftChart');
-    const rect = container.getBoundingClientRect();
-    return {
-        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
-        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
-    };
-}
-
-function getGyroRmsChartSize() {
-    const container = document.getElementById('gyroRmsChart');
-    const rect = container.getBoundingClientRect();
-    return {
-        width: Math.max(0, Math.round(rect.width || container.clientWidth)),
-        height: Math.max(0, Math.round(rect.height || container.clientHeight)),
-    };
-}
-
-function getViewportMetrics() {
-    const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
-    const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
-    return { viewportHeight, viewportWidth };
-}
-
-function updateLiveChartPanelHeights() {
-    const grid = document.getElementById("livechartsGrid");
-    const accPanel = document.getElementById("livechart2");
-    const gyroPanel = document.getElementById("gyrochart");
-    const controls = document.querySelector("#liveChartForm .chart-controls");
-    if (!grid || !accPanel || !gyroPanel || !controls) {
-        return;
-    }
-
-    const { viewportHeight, viewportWidth } = getViewportMetrics();
-    document.documentElement.style.setProperty("--viewport-height", `${viewportHeight}px`);
-    document.documentElement.style.setProperty("--viewport-width", `${viewportWidth}px`);
-
-    const gridRect = grid.getBoundingClientRect();
-    const controlsRect = controls.getBoundingClientRect();
-    const gap = parseFloat(getComputedStyle(grid).gap || "12") || 12;
-    const bottomPadding = 16;
-    const visiblePanels = [accPanel, gyroPanel].filter(panel => getComputedStyle(panel).display !== "none");
-
-    grid.classList.toggle("single-visible", visiblePanels.length === 1);
-
-    accPanel.style.height = "";
-    gyroPanel.style.height = "";
-
-    if (visiblePanels.length === 0) {
-        return;
-    }
-
-    const topAnchor = Math.max(gridRect.top, controlsRect.bottom + 10);
-    const availableHeight = Math.max(220, Math.floor(viewportHeight - topAnchor - bottomPadding));
-    const hasSideBySideLayout = grid.classList.contains("is-side-by-side");
-    const isSingleVisible = visiblePanels.length === 1;
-
-    let panelHeight;
-    if (hasSideBySideLayout && isSingleVisible) {
-        const desiredSingleSideBySideHeight = Math.floor(viewportHeight * 0.70);
-        panelHeight = Math.max(420, Math.min(availableHeight, desiredSingleSideBySideHeight));
-    } else if (hasSideBySideLayout) {
-        const desiredSideBySideHeight = Math.floor(viewportHeight * 0.70);
-        panelHeight = Math.max(380, Math.min(availableHeight, desiredSideBySideHeight));
-    } else if (isSingleVisible) {
-        const desiredSingleStackedHeight = Math.floor(viewportHeight * 0.62);
-        panelHeight = Math.max(360, Math.min(availableHeight, desiredSingleStackedHeight));
-    } else {
-        const availablePerPanel = Math.floor((availableHeight - gap * (visiblePanels.length - 1)) / visiblePanels.length);
-        panelHeight = Math.max(220, availablePerPanel);
-    }
-
-    visiblePanels.forEach(panel => {
-        panel.style.height = `${panelHeight}px`;
-    });
-}
-
-function updateFftRmsPanelHeights() {
-    const grid = document.getElementById("fftRmsGrid");
-    const fftPanel = document.getElementById("fftPanel");
-    const rmsPanel = document.getElementById("rmsPanel");
-    const controls = document.getElementById("fftRmsChartControls");
-    if (!grid || !fftPanel || !rmsPanel || !controls) {
-        return;
-    }
-
-    const { viewportHeight, viewportWidth } = getViewportMetrics();
-    document.documentElement.style.setProperty("--viewport-height", `${viewportHeight}px`);
-    document.documentElement.style.setProperty("--viewport-width", `${viewportWidth}px`);
-
-    const gridRect = grid.getBoundingClientRect();
-    const controlsRect = controls.getBoundingClientRect();
-    const gap = parseFloat(getComputedStyle(grid).gap || "12") || 12;
-    const bottomPadding = 16;
-    const visiblePanels = [fftPanel, rmsPanel].filter(panel => getComputedStyle(panel).display !== "none");
-
-    grid.classList.toggle("single-visible", visiblePanels.length === 1);
-
-    fftPanel.style.height = "";
-    rmsPanel.style.height = "";
-
-    if (visiblePanels.length === 0) {
-        return;
-    }
-
-    const topAnchor = Math.max(gridRect.top, controlsRect.bottom + 10);
-    const availableHeight = Math.max(220, Math.floor(viewportHeight - topAnchor - bottomPadding));
-    const hasSideBySideLayout = grid.classList.contains("is-side-by-side");
-    const isSingleVisible = visiblePanels.length === 1;
-
-    let panelHeight;
-    if (hasSideBySideLayout && isSingleVisible) {
-        const desiredSingleSideBySideHeight = Math.floor(viewportHeight * 0.70);
-        panelHeight = Math.max(420, Math.min(availableHeight, desiredSingleSideBySideHeight));
-    } else if (hasSideBySideLayout) {
-        const desiredSideBySideHeight = Math.floor(viewportHeight * 0.70);
-        panelHeight = Math.max(380, Math.min(availableHeight, desiredSideBySideHeight));
-    } else if (isSingleVisible) {
-        const desiredSingleStackedHeight = Math.floor(viewportHeight * 0.62);
-        panelHeight = Math.max(360, Math.min(availableHeight, desiredSingleStackedHeight));
-    } else {
-        const availablePerPanel = Math.floor((availableHeight - gap * (visiblePanels.length - 1)) / visiblePanels.length);
-        panelHeight = Math.max(220, availablePerPanel);
-    }
-
-    visiblePanels.forEach(panel => {
-        panel.style.height = `${panelHeight}px`;
-    });
-}
-
-function updateGyroFftRmsPanelHeights() {
-    const grid = document.getElementById('gyroFftRmsGrid');
-    const fftPanel = document.getElementById('gyroFftPanel');
-    const rmsPanel = document.getElementById('gyroRmsPanel');
-    const controls = document.getElementById('gyroFftRmsChartControls');
-    if (!grid || !fftPanel || !rmsPanel || !controls) {
-        return;
-    }
-
-    const { viewportHeight, viewportWidth } = getViewportMetrics();
-    document.documentElement.style.setProperty('--viewport-height', `${viewportHeight}px`);
-    document.documentElement.style.setProperty('--viewport-width', `${viewportWidth}px`);
-
-    const gridRect = grid.getBoundingClientRect();
-    const controlsRect = controls.getBoundingClientRect();
-    const gap = parseFloat(getComputedStyle(grid).gap || '12') || 12;
-    const bottomPadding = 16;
-    const visiblePanels = [fftPanel, rmsPanel].filter(panel => getComputedStyle(panel).display !== 'none');
-
-    grid.classList.toggle('single-visible', visiblePanels.length === 1);
-
-    fftPanel.style.height = '';
-    rmsPanel.style.height = '';
-
-    if (visiblePanels.length === 0) {
-        return;
-    }
-
-    const topAnchor = Math.max(gridRect.top, controlsRect.bottom + 10);
-    const availableHeight = Math.max(220, Math.floor(viewportHeight - topAnchor - bottomPadding));
-    const hasSideBySideLayout = grid.classList.contains('is-side-by-side');
-    const isSingleVisible = visiblePanels.length === 1;
-
-    let panelHeight;
-    if (hasSideBySideLayout && isSingleVisible) {
-        const desiredSingleSideBySideHeight = Math.floor(viewportHeight * 0.70);
-        panelHeight = Math.max(420, Math.min(availableHeight, desiredSingleSideBySideHeight));
-    } else if (hasSideBySideLayout) {
-        const desiredSideBySideHeight = Math.floor(viewportHeight * 0.70);
-        panelHeight = Math.max(380, Math.min(availableHeight, desiredSideBySideHeight));
-    } else if (isSingleVisible) {
-        const desiredSingleStackedHeight = Math.floor(viewportHeight * 0.62);
-        panelHeight = Math.max(360, Math.min(availableHeight, desiredSingleStackedHeight));
-    } else {
-        const availablePerPanel = Math.floor((availableHeight - gap * (visiblePanels.length - 1)) / visiblePanels.length);
-        panelHeight = Math.max(220, availablePerPanel);
-    }
-
-    visiblePanels.forEach(panel => {
-        panel.style.height = `${panelHeight}px`;
-    });
-}
-
 window.addEventListener("resize", e => {
-    updateLiveChartPanelHeights();
-    updateFftRmsPanelHeights();
-    updateGyroFftRmsPanelHeights();
-    chart?.setSize(getSize());
-    gyroChart?.setSize(getGyroChartSize());
-    fftPlot?.setSize(getFftChartSize());
-    rmsPlot?.setSize(getRmsChartSize());
-    gyroFftPlot?.setSize(getGyroFftChartSize());
-    gyroRmsPlot?.setSize(getGyroRmsChartSize());
+    updateAllChartPanelHeights();
+    resizeLiveCharts();
+    resizeFftRmsCharts();
+    resizeGyroFftRmsCharts();
 });
 
 
@@ -6774,6 +7038,71 @@ function createCanvasCursorPointsPlugin() {
     };
 }
 
+function createCursorXPlugin(unit) {
+    let tooltip;
+
+    function init(u) {
+        let over = u.root.querySelector(".u-over");
+        tooltip = document.createElement("div");
+        tooltip.className = "u-tooltip-x";
+        tooltip.style.position = "absolute";
+        
+        // DEBUG ALARM: Wenn der User einen Doppelklick macht, zeigen wir den uPlot Status!
+        over.addEventListener("dblclick", () => {
+            alert(
+                "UPLOT STATUS:\n" +
+                "bbox.width: " + u.bbox.width + "\n" +
+                "data[0].length: " + (u.data && u.data[0] ? u.data[0].length : 'null') + "\n" +
+                "cursor.show: " + u.cursor.show + "\n" +
+                "cursor.x: " + u.cursor.x + "\n" +
+                "cursor.left: " + u.cursor.left + "\n" +
+                "cursor.top: " + u.cursor.top
+            );
+        });
+
+        tooltip.style.background = "rgba(24, 28, 36, 0.85)";
+        tooltip.style.color = "#4dd0e1";
+        tooltip.style.padding = "3px 6px";
+        tooltip.style.borderRadius = "4px";
+        tooltip.style.fontSize = "12px";
+        tooltip.style.fontFamily = "monospace";
+        tooltip.style.border = "1px solid rgba(77, 208, 225, 0.3)";
+        tooltip.style.pointerEvents = "none";
+        tooltip.style.display = "none";
+        tooltip.style.zIndex = "100";
+        tooltip.style.whiteSpace = "nowrap";
+        over.appendChild(tooltip);
+    }
+
+    function setCursor(u) {
+        // ALWAYS SHOW TOOLTIP AT FIXED POS FOR DEBUGGING
+        tooltip.style.display = "block";
+        tooltip.style.left = "50px";
+        tooltip.style.top = "50px";
+        tooltip.style.zIndex = "999999";
+        
+        const { left, top } = u.cursor;
+        if (top < 0 || left < 0) {
+            tooltip.textContent = `OUT: left=${left}`;
+            return;
+        }
+
+        const valX = u.posToVal(left, "x");
+        if (valX == null || !Number.isFinite(valX)) {
+            tooltip.textContent = `NaN X! left=${Math.round(left)}`;
+            return;
+        }
+        tooltip.textContent = `VAL: ${valX.toFixed(2)} ${unit}`;
+    }
+
+    return {
+        hooks: {
+            init: [init],
+            setCursor: [setCursor],
+        }
+    };
+}
+
 function createCursorYPlugin(unit) {
     let tooltip;
 
@@ -6829,109 +7158,47 @@ function createCursorYPlugin(unit) {
 }
 
 const container = document.getElementById("livechart2");
-const accChartLegendHost = document.getElementById("accChartLegendHost");
-const options = {
-    ...getSize(),
-    title: "ACC Live-Daten",
+const options = createLiveChartOptions({
+    size: getSize(),
     width: container.clientWidth,
     height: container.clientHeight,
-    padding: [6, 8, 2, 2],
-    axes: [
-        {
-            time: false,
-            scale: "x",
-            space: 64,
-            size: 44,
-            label: "Zeit (s)",
-            grid: { show: true },
-            values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
-            stroke: "white"
-        },
-        {
-            scale: "y",
-            size: 56,
-            label: "Wert",
-            grid: { show: true },
-            ticks: { format: (u, v) => v.toFixed(2) + " mg" },
-            stroke: "white"
-        }
-    ],
-    scales: {
-        x: {},
-        y: { range: [-1100, 1100] }
-    },
-
+    title: "ACC Live-Daten",
+    yRange: [-1100, 1100],
+    yTickSuffix: 'mg',
     series: [
         {label: "Zeit",value: (u, v) => formatMicrosecondsToHMS(v, 5) },
         { label: "Acc X (mg)", stroke: "#FFD600" },
         { label: "Acc Y (mg)", stroke: "#ec3030ff" },
         { label: "Acc Z (mg)", stroke: "#7a96e2ff" },
         { label: "Acc Total (mg)", stroke: "#14c53bff" },
-
     ],
-    cursor: {
-        points: {},
-        drag: { x: true, y: true, setScale: true }
-    },
-    legend: {
-        mount: (u, table) => {
-            accChartLegendHost?.replaceChildren(table);
-        },
-    },
-    plugins: [createCursorYPlugin("mg")],
-};
+    legendHostId: "accChartLegendHost",
+    cursorUnit: 'mg',
+    formatMicrosecondsToHMS,
+    createCursorPlugin: createCursorYPlugin,
+});
 
 chart = new uPlot(options, [timestamps.slice(), values1.slice(), values2.slice(), values3.slice(), values4.slice()], document.getElementById("accChartHost"));
 
 const gyroContainer = document.getElementById("gyrochart");
-const gyroChartLegendHost = document.getElementById("gyroChartLegendHost");
-const gyroOptions = {
-    ...getGyroChartSize(),
-    title: "Gyro Live-Daten",
+const gyroOptions = createLiveChartOptions({
+    size: getGyroChartSize(),
     width: gyroContainer.clientWidth,
     height: gyroContainer.clientHeight,
-    padding: [6, 8, 2, 2],
-    axes: [
-        {
-            time: false,
-            scale: "x",
-            space: 64,
-            size: 44,
-            label: "Zeit (s)",
-            grid: { show: true },
-            values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
-            stroke: "white"
-        },
-        {
-            scale: "y",
-            size: 56,
-            label: "Wert",
-            grid: { show: true },
-            ticks: { format: (u, v) => v.toFixed(2) + " m°/s" },
-            stroke: "white"
-        }
-    ],
-    scales: {
-        x: {},
-        y: { range: [-25000, 25000] }
-    },
+    title: "Gyro Live-Daten",
+    yRange: [-25000, 25000],
+    yTickSuffix: 'm°/s',
     series: [
         { label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 5) },
         { label: "Gyro X (m°/s)", stroke: "#4dd0e1" },
         { label: "Gyro Y (m°/s)", stroke: "#ffb74d" },
         { label: "Gyro Z (m°/s)", stroke: "#81c784" },
     ],
-    cursor: {
-        points: {},
-        drag: { x: true, y: true, setScale: true }
-    },
-    legend: {
-        mount: (u, table) => {
-            gyroChartLegendHost?.replaceChildren(table);
-        },
-    },
-    plugins: [createCursorYPlugin("m°/s")],
-};
+    legendHostId: "gyroChartLegendHost",
+    cursorUnit: 'm°/s',
+    formatMicrosecondsToHMS,
+    createCursorPlugin: createCursorYPlugin,
+});
 
 gyroChart = new uPlot(
     gyroOptions,
@@ -6940,435 +7207,50 @@ gyroChart = new uPlot(
 );
 
 window.applyStaticReplayData = function(accData, gyroData, startTimeUs, endTimeUs) {
-    if (accData && chart) {
-        chart.setData(accData);
-        chart.setScale("x", { min: startTimeUs, max: endTimeUs });
-        
-        if (rmsPlot) {
-            const [t, x, y, z, to] = accData;
-            const N = t.length;
-            const windowSize = RMS_WINDOW_SIZE > 0 ? RMS_WINDOW_SIZE : 100;
-            const step = Math.max(1, Math.floor(N / 3000));
-            
-            const rT = [], rX = [], rY = [], rZ = [], rTo = [];
-            for (let i = 0; i <= N - windowSize; i += step) {
-                let sx = 0, sy = 0, sz = 0, sto = 0;
-                for (let j = 0; j < windowSize; j++) {
-                    const idx = i + j;
-                    sx += x[idx]*x[idx];
-                    sy += y[idx]*y[idx];
-                    sz += z[idx]*z[idx];
-                    sto += to[idx]*to[idx];
-                }
-                rX.push(Math.sqrt(sx / windowSize));
-                rY.push(Math.sqrt(sy / windowSize));
-                rZ.push(Math.sqrt(sz / windowSize));
-                rTo.push(Math.sqrt(sto / windowSize));
-                rT.push(t[i + windowSize - 1]);
-            }
-            if (rT.length > 0) {
-                rmsPlot.setData([
-                    new Float64Array(rT),
-                    new Float32Array(rX),
-                    new Float32Array(rY),
-                    new Float32Array(rZ),
-                    new Float32Array(rTo)
-                ]);
-                rmsPlot.setScale("x", { min: startTimeUs, max: endTimeUs });
-            }
-        }
-    }
-    
-    if (gyroData && gyroChart) {
-        gyroChart.setData(gyroData);
-        gyroChart.setScale("x", { min: startTimeUs, max: endTimeUs });
-        
-        if (gyroRmsPlot) {
-            const [t, x, y, z] = gyroData;
-            const N = t.length;
-            const windowSize = RMS_WINDOW_SIZE > 0 ? RMS_WINDOW_SIZE : 100;
-            const step = Math.max(1, Math.floor(N / 3000));
-            
-            const rT = [], rX = [], rY = [], rZ = [], rTo = [];
-            for (let i = 0; i <= N - windowSize; i += step) {
-                let sx = 0, sy = 0, sz = 0, sto = 0;
-                for (let j = 0; j < windowSize; j++) {
-                    const idx = i + j;
-                    sx += x[idx]*x[idx];
-                    sy += y[idx]*y[idx];
-                    sz += z[idx]*z[idx];
-                    
-                    const toVal = Math.hypot(x[idx]||0, y[idx]||0, z[idx]||0);
-                    sto += toVal * toVal;
-                }
-                rX.push(Math.sqrt(sx / windowSize));
-                rY.push(Math.sqrt(sy / windowSize));
-                rZ.push(Math.sqrt(sz / windowSize));
-                rTo.push(Math.sqrt(sto / windowSize));
-                rT.push(t[i + windowSize - 1]);
-            }
-            if (rT.length > 0) {
-                gyroRmsPlot.setData([
-                    new Float64Array(rT),
-                    new Float32Array(rX),
-                    new Float32Array(rY),
-                    new Float32Array(rZ),
-                    new Float32Array(rTo)
-                ]);
-                gyroRmsPlot.setScale("x", { min: startTimeUs, max: endTimeUs });
-            }
-        }
-    }
+    applyStaticReplayDataHelper({
+        accData,
+        gyroData,
+        startTimeUs,
+        endTimeUs,
+        chart,
+        rmsPlot,
+        gyroChart,
+        gyroRmsPlot,
+        rmsWindowSize: RMS_WINDOW_SIZE,
+    });
     // syncTimeRangeUi(endTimeUs - startTimeUs);  // <-- REMOVED: Auto-expanding to 60s kills the renderer
 };
 
 window.updateReplayDashboard = function(absTimeUs, accSample, gyroSample) {
-    const tsDateEl = document.getElementById('timestampDate');
-    if (tsDateEl) {
-        if (window.replayRecordingDate) {
-            tsDateEl.style.display = 'block';
-            tsDateEl.textContent = window.replayRecordingDate;
-        } else {
-            tsDateEl.style.display = 'none';
-            tsDateEl.textContent = "";
-        }
-    }
-
-    if (accSample) {
-        document.getElementById("accX").textContent = accSample.x.toFixed(1);
-        document.getElementById("accY").textContent = accSample.y.toFixed(1);
-        document.getElementById("accZ").textContent = accSample.z.toFixed(1);
-        if (accVectorViewport) {
-            accVectorViewport.setAccelerationSamples(buildViewportAccelerationSamples(accSample, accSample));
-        }
-    }
-    if (gyroSample) {
-        document.getElementById("gyroX").textContent = gyroSample.x.toFixed(1);
-        document.getElementById("gyroY").textContent = gyroSample.y.toFixed(1);
-        document.getElementById("gyroZ").textContent = gyroSample.z.toFixed(1);
-        if (accVectorViewport) {
-            accVectorViewport.setGyroSamples(buildViewportGyroSamples(gyroSample, gyroSample));
-        }
-    }
-    
-    // Auto-scroll X-Axis limits (mimic Live Mode)
-    const durationUs = (typeof displayDurationSeconds !== 'undefined' ? displayDurationSeconds : 5) * 1000 * 1000;
-    let minX = absTimeUs - durationUs;
-    let maxX = absTimeUs;
-    if (minX < (window.replayStartTimeUs || 0)) {
-        minX = window.replayStartTimeUs || 0;
-        maxX = minX + durationUs;
-    }
-
-    // Sync UI Cursors & Horizons
-    if (chart) {
-        if (!chart.yLocked) {
-            const yMinOriginal = chart.scales.y?.min;
-            const yMaxOriginal = chart.scales.y?.max;
-            chart.setScale("x", { min: minX, max: maxX });
-            if (yMinOriginal !== undefined && yMaxOriginal !== undefined) {
-                chart.setScale("y", { min: yMinOriginal, max: yMaxOriginal });
-            }
-        }
-        const left = chart.valToPos(absTimeUs, "x");
-        if (left > 0) chart.setCursor({ left, top: chart.cursor.top || 10 });
-    }
-    if (gyroChart) {
-        if (!gyroChart.yLocked) {
-            const gyMinOriginal = gyroChart.scales.y?.min;
-            const gyMaxOriginal = gyroChart.scales.y?.max;
-            gyroChart.setScale("x", { min: minX, max: maxX });
-            if (gyMinOriginal !== undefined && gyMaxOriginal !== undefined) {
-                gyroChart.setScale("y", { min: gyMinOriginal, max: gyMaxOriginal });
-            }
-        }
-        const left = gyroChart.valToPos(absTimeUs, "x");
-        if (left > 0) gyroChart.setCursor({ left, top: gyroChart.cursor.top || 10 });
-    }
-    if (typeof rmsPlot !== 'undefined' && rmsPlot) {
-        const rYMinOriginal = rmsPlot.scales.y?.min;
-        const rYMaxOriginal = rmsPlot.scales.y?.max;
-        rmsPlot.setScale("x", { min: minX, max: maxX });
-        if (rYMinOriginal !== undefined && rYMaxOriginal !== undefined) {
-            rmsPlot.setScale("y", { min: rYMinOriginal, max: rYMaxOriginal });
-        }
-        const left = rmsPlot.valToPos(absTimeUs, "x");
-        if (left > 0) rmsPlot.setCursor({ left, top: rmsPlot.cursor.top || 10 });
-    }
-    if (typeof gyroRmsPlot !== 'undefined' && gyroRmsPlot) {
-        const grYMinOriginal = gyroRmsPlot.scales.y?.min;
-        const grYMaxOriginal = gyroRmsPlot.scales.y?.max;
-        gyroRmsPlot.setScale("x", { min: minX, max: maxX });
-        if (grYMinOriginal !== undefined && grYMaxOriginal !== undefined) {
-            gyroRmsPlot.setScale("y", { min: grYMinOriginal, max: grYMaxOriginal });
-        }
-        const left = gyroRmsPlot.valToPos(absTimeUs, "x");
-        if (left > 0) gyroRmsPlot.setCursor({ left, top: gyroRmsPlot.cursor.top || 10 });
-    }
-    
-    // Sync FFT histories
-    if (window.waterfallRenderer && window.waterfallRenderer.timestamps.length > 0) {
-        const ts = window.waterfallRenderer.timestamps;
-        let bestIdx = ts.length - 1;
-        let minDist = Infinity;
-        for (let i = 0; i < ts.length; i++) {
-            const dist = Math.abs(ts[i] - absTimeUs);
-            if (dist <= minDist) {
-                minDist = dist;
-                bestIdx = i;
-            }
-        }
-        const mags = window.waterfallRenderer.history[bestIdx];
-        if (fftPlot && mags) {
-            const freqs = new Array(mags.length);
-            const sr = (typeof currentSampleRate !== 'undefined' && currentSampleRate > 0) ? currentSampleRate : 1000;
-            for(let i=0; i<mags.length; i++) freqs[i] = i * sr / (mags.length * 2); 
-            
-            const numAvg = typeof N_AVG !== 'undefined' ? N_AVG : 10;
-            const startIdx = Math.max(0, bestIdx - numAvg + 1);
-            const avgArr = new Float32Array(mags.length);
-            const maxArr = new Float32Array(mags.length);
-            maxArr.fill(-Infinity);
-            
-            for(let j=0; j<=bestIdx; j++) {
-                const h = window.waterfallRenderer.history[j];
-                for(let i=0; i<mags.length; i++) {
-                    if (h[i] > maxArr[i]) maxArr[i] = h[i];
-                }
-            }
-            
-            let count = 0;
-            for(let j=startIdx; j<=bestIdx; j++) {
-                const h = window.waterfallRenderer.history[j];
-                for(let i=0; i<mags.length; i++) avgArr[i] += h[i];
-                count++;
-            }
-            if(count > 0) {
-                for(let i=0; i<mags.length; i++) avgArr[i] /= count;
-            }
-            
-            fftPlot.setData([freqs, Array.from(avgArr), Array.from(maxArr), Array.from(mags)]);
-            
-            // Optionally update the main UI timestamp with absolute clock time if available
-            const tsEl = document.getElementById('timestamp');
-            if (tsEl && window.waterfallRenderer.clockStrings[bestIdx]) {
-                tsEl.textContent = window.waterfallRenderer.clockStrings[bestIdx];
-            }
-        }
-        
-        if (window.isOfflineReplayMode) {
-            const wR = window.waterfallRenderer;
-            wR.scrollOffset = Math.max(0, wR.history.length - 1 - bestIdx);
-            if (wR.active) {
-                wR.renderHistory();
-                wR.updateLabels();
-                wR.syncScrollbar();
-            }
-        }
-    }
-
-    if (window.gyroWaterfallRenderer && window.gyroWaterfallRenderer.timestamps.length > 0) {
-        const ts = window.gyroWaterfallRenderer.timestamps;
-        let bestIdx = ts.length - 1;
-        let minDist = Infinity;
-        for (let i = 0; i < ts.length; i++) {
-            const dist = Math.abs(ts[i] - absTimeUs);
-            if (dist <= minDist) {
-                minDist = dist;
-                bestIdx = i;
-            }
-        }
-        const mags = window.gyroWaterfallRenderer.history[bestIdx];
-        if (gyroFftPlot && mags) {
-            const freqs = new Array(mags.length);
-            const sr = (typeof currentSampleRate !== 'undefined' && currentSampleRate > 0) ? currentSampleRate : 1000;
-            for(let i=0; i<mags.length; i++) freqs[i] = i * sr / (mags.length * 2); 
-
-            const numAvg = typeof N_AVG !== 'undefined' ? N_AVG : 10;
-            const startIdx = Math.max(0, bestIdx - numAvg + 1);
-            const avgArr = new Float32Array(mags.length);
-            const maxArr = new Float32Array(mags.length);
-            maxArr.fill(-Infinity);
-
-            for(let j=0; j<=bestIdx; j++) {
-                const h = window.gyroWaterfallRenderer.history[j];
-                for(let i=0; i<mags.length; i++) {
-                    if (h[i] > maxArr[i]) maxArr[i] = h[i];
-                }
-            }
-
-            let count = 0;
-            for(let j=startIdx; j<=bestIdx; j++) {
-                const h = window.gyroWaterfallRenderer.history[j];
-                for(let i=0; i<mags.length; i++) avgArr[i] += h[i];
-                count++;
-            }
-            if(count > 0) {
-                for(let i=0; i<mags.length; i++) avgArr[i] /= count;
-            }
-
-            gyroFftPlot.setData([freqs, Array.from(avgArr), Array.from(maxArr), Array.from(mags)]);
-        }
-        
-        if (window.isOfflineReplayMode) {
-            const gwR = window.gyroWaterfallRenderer;
-            gwR.scrollOffset = Math.max(0, gwR.history.length - 1 - bestIdx);
-            if (gwR.active) {
-                gwR.renderHistory();
-                gwR.updateLabels();
-                gwR.syncScrollbar();
-            }
-        }
-    }
+    updateReplayDashboardHelper({
+        absTimeUs,
+        accSample,
+        gyroSample,
+        replayRecordingDate: window.replayRecordingDate,
+        displayDurationSeconds,
+        replayStartTimeUs: window.replayStartTimeUs || 0,
+        chart,
+        gyroChart,
+        rmsPlot,
+        gyroRmsPlot,
+        accVectorViewport,
+        buildViewportAccelerationSamples,
+        buildViewportGyroSamples,
+        waterfallRenderer: window.waterfallRenderer,
+        gyroWaterfallRenderer: window.gyroWaterfallRenderer,
+        fftPlot,
+        gyroFftPlot,
+        currentSampleRate,
+        nAvg: N_AVG,
+        isOfflineReplayMode: window.isOfflineReplayMode,
+    });
 };
 
-function syncAxisOverlayPositions(chartInstance, panelId, yOverlayId, xOverlayId) {
-    const panel = document.getElementById(panelId);
-    const yOverlay = document.getElementById(yOverlayId);
-    const xOverlay = document.getElementById(xOverlayId);
-    const wrap = chartInstance?.root?.querySelector?.(".u-wrap");
-    const bbox = chartInstance?.bbox;
+setupInitialOverlayInteractions();
 
-    if (!panel || !yOverlay || !xOverlay || !wrap || !bbox) {
-        return;
-    }
-
-    const panelRect = panel.getBoundingClientRect();
-    const wrapRect = wrap.getBoundingClientRect();
-    const wrapLeft = wrapRect.left - panelRect.left;
-    const wrapTop = wrapRect.top - panelRect.top;
-
-    yOverlay.style.left = `${Math.max(0, wrapLeft)}px`;
-    yOverlay.style.top = `${Math.max(0, wrapTop + bbox.top)}px`;
-    yOverlay.style.width = `${Math.max(0, bbox.left)}px`;
-    yOverlay.style.height = `${Math.max(0, bbox.height)}px`;
-
-    const xTop = wrapTop + bbox.top + bbox.height;
-    const xHeight = Math.max(0, (wrapRect.bottom - panelRect.top) - xTop);
-    const xOverlayHeight = Math.max(0, Math.min(xHeight, 18));
-    xOverlay.style.left = `${Math.max(0, wrapLeft + bbox.left)}px`;
-    xOverlay.style.top = `${Math.max(0, xTop)}px`;
-    xOverlay.style.width = `${Math.max(0, bbox.width)}px`;
-    xOverlay.style.height = `${xOverlayHeight}px`;
-    xOverlay.style.bottom = "auto";
-}
-
-function preserveScalesOnSeriesToggle(chartInstance) {
-    if (!chartInstance || typeof chartInstance.setSeries !== "function") {
-        return;
-    }
-
-    const originalSetSeries = chartInstance.setSeries.bind(chartInstance);
-    chartInstance.setSeries = (...args) => {
-        const xScale = chartInstance.scales?.x;
-        const yScale = chartInstance.scales?.y;
-        const lockedX = xScale && Number.isFinite(xScale.min) && Number.isFinite(xScale.max)
-            ? { min: xScale.min, max: xScale.max }
-            : null;
-        const lockedY = yScale && Number.isFinite(yScale.min) && Number.isFinite(yScale.max)
-            ? { min: yScale.min, max: yScale.max }
-            : null;
-
-        const restoreScales = () => {
-            if (lockedX) {
-                chartInstance.setScale("x", lockedX);
-            }
-            if (lockedY) {
-                chartInstance.setScale("y", lockedY);
-            }
-        };
-
-        const result = originalSetSeries(...args);
-
-        restoreScales();
-        requestAnimationFrame(restoreScales);
-        setTimeout(restoreScales, 0);
-        setTimeout(restoreScales, 32);
-
-        return result;
-    };
-}
-
-function installManualLegendToggle(chartInstance, legendHostId = null) {
-    const legendRoot = legendHostId
-        ? document.getElementById(legendHostId)?.querySelector?.(".u-legend")
-        : chartInstance?.root?.querySelector?.(".u-legend");
-    if (!legendRoot) {
-        return;
-    }
-
-    legendRoot.addEventListener("click", (event) => {
-        const headerCell = event.target.closest("th");
-        const row = event.target.closest(".u-series");
-        if (!headerCell || !row) {
-            return;
-        }
-
-        const rows = Array.from(legendRoot.querySelectorAll(".u-series"));
-        const seriesIndex = rows.indexOf(row);
-        if (seriesIndex <= 0) {
-            return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-
-        const series = chartInstance.series?.[seriesIndex];
-        if (!series) {
-            return;
-        }
-
-        chartInstance.setSeries(seriesIndex, { show: !series.show });
-    }, true);
-}
-
-preserveScalesOnSeriesToggle(chart);
-preserveScalesOnSeriesToggle(gyroChart);
-installManualLegendToggle(chart, "accChartLegendHost");
-installManualLegendToggle(gyroChart, "gyroChartLegendHost");
-
-syncAxisOverlayPositions(chart, "livechart2", "y-axis-overlay", "x-axis-overlay");
-syncAxisOverlayPositions(gyroChart, "gyrochart", "gyro-y-axis-overlay", "gyro-x-axis-overlay");
-
-if (timestamps.length > 0) {
-    const initialLatestTimestamp = timestamps[timestamps.length - 1];
-    setSharedXScale(
-        initialLatestTimestamp - (displayDurationSeconds * 1000000),
-        initialLatestTimestamp,
-        { preserveY: true, syncUi: true }
-    );
-}
-
-let liveChartResizeObserver = new ResizeObserver(() => {
-    requestAnimationFrame(() => {
-        const accSize = getSize();
-        const gyroSize = getGyroChartSize();
-
-        if (chart && accSize.width > 0 && accSize.height > 0) {
-            chart.setSize(accSize);
-        }
-
-        if (gyroChart && gyroSize.width > 0 && gyroSize.height > 0) {
-            gyroChart.setSize(gyroSize);
-        }
-
-        syncAxisOverlayPositions(chart, "livechart2", "y-axis-overlay", "x-axis-overlay");
-        syncAxisOverlayPositions(gyroChart, "gyrochart", "gyro-y-axis-overlay", "gyro-x-axis-overlay");
-
-        if (typeof rmsPlot !== "undefined" && rmsPlot) {
-            syncAxisOverlayPositions(rmsPlot, "rmsPanel", "rms-y-axis-overlay", "rms-x-axis-overlay");
-        }
-        if (typeof gyroRmsPlot !== "undefined" && gyroRmsPlot) {
-            syncAxisOverlayPositions(gyroRmsPlot, "gyroRmsPanel", "gyro-rms-y-axis-overlay", "gyro-rms-x-axis-overlay");
-        }
-    });
-});
-
-liveChartResizeObserver.observe(document.getElementById("livechart2"));
-liveChartResizeObserver.observe(document.getElementById("gyrochart"));
-if (document.getElementById("rmsPanel")) liveChartResizeObserver.observe(document.getElementById("rmsPanel"));
-if (document.getElementById("gyroRmsPanel")) liveChartResizeObserver.observe(document.getElementById("gyroRmsPanel"));
+let liveChartResizeObserver = createLiveChartResizeObserver();
+observeChartPanels(liveChartResizeObserver);
+registerRuntimeAxisListeners();
 
 let resourcesDisposed = false;
 
@@ -7418,464 +7300,11 @@ pauseBtn2.onclick = () => {
     pauseBtn2.textContent = paused ? "▶" : "⏸";
 };
 
-
-
-let liveChartPanOffset = 0;
-let rmsPanOffset = 0;
-let gyroRmsPanOffset = 0;
-let rmsDisplayDurationSeconds = 20;
-let gyroRmsDisplayDurationSeconds = 20;
-
-const rmsTimeSlider = document.getElementById("rmsTimeSlider");
-const rmsTimeValue = document.getElementById("rmsTimeValue");
-if (rmsTimeSlider && rmsTimeValue) {
-    rmsTimeSlider.addEventListener("input", (e) => {
-        rmsDisplayDurationSeconds = Number(e.target.value);
-        rmsTimeValue.textContent = rmsDisplayDurationSeconds;
-    });
-}
-
-const gyroRmsTimeSlider = document.getElementById("gyroRmsTimeSlider");
-const gyroRmsTimeValue = document.getElementById("gyroRmsTimeValue");
-if (gyroRmsTimeSlider && gyroRmsTimeValue) {
-    gyroRmsTimeSlider.addEventListener("input", (e) => {
-        gyroRmsDisplayDurationSeconds = Number(e.target.value);
-        gyroRmsTimeValue.textContent = gyroRmsDisplayDurationSeconds;
-    });
-}
-
-function syncTimeRangeUi(rangeUs) {
-    let rangeSecs = rangeUs / 1000000;
-    if (rangeSecs < 1) rangeSecs = 1;
-    if (rangeSecs > 60) rangeSecs = 60;
-
-    currentTimeRange = rangeSecs;
-    displayDurationSeconds = rangeSecs;
-
-    const timeSlider = document.getElementById("timeSlider");
-    const timeValue = document.getElementById("timeValue");
-    if (timeSlider) timeSlider.value = Math.round(displayDurationSeconds);
-    if (timeValue) timeValue.textContent = Math.round(displayDurationSeconds);
-}
-
-function setSharedXScale(min, max, options = {}) {
-    const { preserveY = true, syncUi = false } = options;
-    const accYMin = preserveY ? chart?.scales?.y?.min : undefined;
-    const accYMax = preserveY ? chart?.scales?.y?.max : undefined;
-    const gyroYMin = preserveY ? gyroChart?.scales?.y?.min : undefined;
-    const gyroYMax = preserveY ? gyroChart?.scales?.y?.max : undefined;
-
-    chart.setScale("x", { min, max });
-    if (gyroChart) {
-        gyroChart.setScale("x", { min, max });
-    }
-
-    if (preserveY && accYMin !== undefined && accYMax !== undefined) {
-        chart.setScale("y", { min: accYMin, max: accYMax });
-    }
-    if (preserveY && gyroChart && gyroYMin !== undefined && gyroYMax !== undefined) {
-        gyroChart.setScale("y", { min: gyroYMin, max: gyroYMax });
-    }
-    if (syncUi) {
-        syncTimeRangeUi(max - min);
-    }
-}
-
-function getSharedXScale(sourceChart = chart) {
-    const sourceScale = sourceChart?.scales?.x;
-    if (sourceScale && Number.isFinite(sourceScale.min) && Number.isFinite(sourceScale.max)) {
-        return sourceScale;
-    }
-
-    const fallbackScale = chart?.scales?.x;
-    if (fallbackScale && Number.isFinite(fallbackScale.min) && Number.isFinite(fallbackScale.max)) {
-        return fallbackScale;
-    }
-
-    return null;
-}
-
-function getCurrentSharedXWindow() {
-    const scale = getSharedXScale(chart);
-    if (scale && Number.isFinite(scale.min) && Number.isFinite(scale.max)) {
-        return { min: scale.min, max: scale.max };
-    }
-    return null;
-}
-
-function zoomSharedXAxis(factor, pointerPos, sourceChart = chart) {
-    const sc = getSharedXScale(sourceChart);
-    if (!sc) return;
-    const range = sc.max - sc.min;
-    const newRange = range * factor;
-    
-    // Oszilloskop-Modus: Wir nageln die rechte Kante fest
-    const newMax = sc.max;
-    const newMin = newMax - newRange;
-    if (newMax - newMin < 1e-9) return;
-
-    setSharedXScale(newMin, newMax, { preserveY: true, syncUi: true });
-}
-
-function panSharedXAxis(deltaPx, axisPxLength, sourceChart = chart) {
-    if (axisPxLength === 0) return;
-    const sc = getSharedXScale(sourceChart);
-    if (!sc) return;
-    const range = sc.max - sc.min;
-    let deltaUs = -(deltaPx / axisPxLength) * range;
-
-    let targetOffset = liveChartPanOffset + deltaUs;
-    if (targetOffset > 0) {
-        deltaUs -= targetOffset;
-        targetOffset = 0;
-    }
-    liveChartPanOffset = targetOffset;
-    panOffset = liveChartPanOffset;
-
-    setSharedXScale(sc.min + deltaUs, sc.max + deltaUs, { preserveY: true, syncUi: false });
-}
-
-function zoomPlotYAxis(targetChart, factor, pointerPos, nailZero = false) {
-    targetChart._yLocked = true;
-    const sc = targetChart.scales.y;
-    const range = sc.max - sc.min;
-    
-    if (nailZero) {
-        let newMax = sc.max * factor;
-        if (newMax < 1e-9) newMax = 1e-9;
-        targetChart.setScale("y", { min: 0, max: newMax });
-    } else {
-        const newRange = range * factor;
-        const newMin = sc.min + range * pointerPos - newRange * pointerPos;
-        const newMax = newMin + newRange;
-        if (newMax - newMin < 1e-9) return;
-        targetChart.setScale("y", { min: newMin, max: newMax });
-    }
-}
-
-function panPlotYAxis(targetChart, deltaPx, axisPxLength, nailZero = false) {
-    if (axisPxLength === 0) return;
-    targetChart._yLocked = true;
-    const sc = targetChart.scales.y;
-    const range = sc.max - sc.min;
-    const delta = -(deltaPx / axisPxLength) * range;
-    
-    if (nailZero) {
-        // When nailed to 0, dragging acts purely as a scale multiplier
-        let newMax = sc.max + delta * 2;
-        if (newMax < 1e-9) return;
-        targetChart.setScale("y", { min: 0, max: newMax });
-    } else {
-        targetChart.setScale("y", { min: sc.min + delta, max: sc.max + delta });
-    }
-}
-
-function updateCursor(el, dragging, canDrag, axis) {
-    if (dragging) {
-        el.style.cursor = "grabbing";
-    } else if (canDrag) {
-        el.style.cursor = axis === "y" ? "ns-resize" : "ew-resize";
-    } else {
-        el.style.cursor = "default";
-    }
-}
-
-function bindYAxisOverlay(overlayId, targetChart, nailZero = false) {
-    const yOverlay = document.getElementById(overlayId);
-    if (!yOverlay || !targetChart) return;
-
-    let isPanning = false;
-    let lastY = 0;
-
-    yOverlay.addEventListener("wheel", e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const rect = yOverlay.getBoundingClientRect();
-        const pointerPos = (e.clientY - rect.top) / rect.height;
-        const factor = e.deltaY < 0 ? 0.85 : 1.15;
-        zoomPlotYAxis(targetChart, factor, pointerPos, nailZero);
-    }, { passive: false });
-
-    yOverlay.addEventListener("dblclick", () => {
-        targetChart._yLocked = false;
-        // Durch erneutes Setzen der Daten triggern wir das Auto-Scaling
-        if (targetChart.data) {
-            targetChart.setData(targetChart.data);
-        }
-    });
-
-    yOverlay.addEventListener("mousedown", e => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        e.stopPropagation();
-        isPanning = true;
-        lastY = e.clientY;
-        updateCursor(yOverlay, true, true, "y");
-    });
-
-    window.addEventListener("mousemove", e => {
-        if (!isPanning) return;
-        e.preventDefault();
-        const deltaY = lastY - e.clientY;
-        lastY = e.clientY;
-        panPlotYAxis(targetChart, deltaY, yOverlay.getBoundingClientRect().height, nailZero);
-    });
-
-    window.addEventListener("mouseup", () => {
-        if (!isPanning) return;
-        isPanning = false;
-        updateCursor(yOverlay, false, true, "y");
-    });
-
-    yOverlay.addEventListener("mouseenter", () => !isPanning && updateCursor(yOverlay, false, true, "y"));
-    yOverlay.addEventListener("mouseleave", () => !isPanning && updateCursor(yOverlay, false, false, "y"));
-}
-
-function bindSharedXAxisOverlay(overlayId, sourceChart) {
-    const xOverlay = document.getElementById(overlayId);
-    if (!xOverlay) return;
-
-    let isPanning = false;
-    let lastX = 0;
-
-    xOverlay.addEventListener("wheel", e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const rect = xOverlay.getBoundingClientRect();
-        const pointerPos = (e.clientX - rect.left) / rect.width;
-        const factor = e.deltaY < 0 ? 0.85 : 1.15;
-        zoomSharedXAxis(factor, pointerPos, sourceChart);
-    }, { passive: false });
-
-    xOverlay.addEventListener("mousedown", e => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        e.stopPropagation();
-        isPanning = true;
-        lastX = e.clientX;
-        updateCursor(xOverlay, true, true, "x");
-    });
-
-    window.addEventListener("mousemove", e => {
-        if (!isPanning) return;
-        e.preventDefault();
-        const deltaX = e.clientX - lastX;
-        lastX = e.clientX;
-        panSharedXAxis(deltaX, xOverlay.getBoundingClientRect().width, sourceChart);
-    });
-
-    window.addEventListener("mouseup", () => {
-        if (!isPanning) return;
-        isPanning = false;
-        updateCursor(xOverlay, false, true, "x");
-    });
-
-    xOverlay.addEventListener("mouseenter", () => !isPanning && updateCursor(xOverlay, false, true, "x"));
-    xOverlay.addEventListener("mouseleave", () => !isPanning && updateCursor(xOverlay, false, false, "x"));
-}
-
-bindYAxisOverlay("y-axis-overlay", chart);
-bindYAxisOverlay("gyro-y-axis-overlay", gyroChart);
-bindSharedXAxisOverlay("x-axis-overlay", chart);
-bindSharedXAxisOverlay("gyro-x-axis-overlay", gyroChart);
-
-function syncRmsTimeRangeUi(rangeUs, isGyro) {
-    let rangeSecs = rangeUs / 1000000;
-    if (rangeSecs < 1) rangeSecs = 1;
-
-    if (isGyro) {
-        gyroDisplayDurationSecondsRMS = rangeSecs;
-        const timeSlider = document.getElementById("gyroRmsTimeSlider");
-        const timeValue = document.getElementById("gyroRmsTimeValue");
-        if (timeSlider) timeSlider.value = Math.min(300, Math.round(rangeSecs));
-        if (timeValue) timeValue.textContent = Math.round(rangeSecs);
-    } else {
-        displayDurationSecondsRMS = rangeSecs;
-        const timeSlider = document.getElementById("rmsTimeSlider");
-        const timeValue = document.getElementById("rmsTimeValue");
-        if (timeSlider) timeSlider.value = Math.min(300, Math.round(rangeSecs));
-        if (timeValue) timeValue.textContent = Math.round(rangeSecs);
-    }
-}
-
-function bindRmsXAxisOverlay(overlayId, targetChart, isGyro) {
-    const xOverlay = document.getElementById(overlayId);
-    if (!xOverlay || !targetChart) return;
-    let isPanning = false;
-    let lastX = 0;
-
-    const getOffset = () => isGyro ? gyroRmsPanOffset : rmsPanOffset;
-    const setOffset = (val) => { if (isGyro) gyroRmsPanOffset = val; else rmsPanOffset = val; };
-
-    xOverlay.addEventListener("wheel", e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const rect = xOverlay.getBoundingClientRect();
-        const pointerPos = (e.clientX - rect.left) / rect.width;
-        const factor = e.deltaY < 0 ? 0.85 : 1.15;
-        const sc = targetChart.scales.x;
-        const range = sc.max - sc.min;
-        const newRange = range * factor;
-        
-        // Oszilloskop-Modus: Rechte Kante bleibt fest
-        const newMax = sc.max;
-        const newMin = newMax - newRange;
-        if (newMax - newMin < 1e-9) return;
-        
-        syncRmsTimeRangeUi(newRange, isGyro);
-        
-        targetChart.setScale("x", { min: newMin, max: newMax });
-    }, { passive: false });
-
-    xOverlay.addEventListener("mousedown", e => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        e.stopPropagation();
-        isPanning = true;
-        lastX = e.clientX;
-        updateCursor(xOverlay, true, true, "x");
-    });
-
-    window.addEventListener("mousemove", e => {
-        if (!isPanning) return;
-        e.preventDefault();
-        const deltaX = e.clientX - lastX;
-        lastX = e.clientX;
-        const axisPxLength = xOverlay.getBoundingClientRect().width;
-        if (axisPxLength === 0) return;
-        const sc = targetChart.scales.x;
-        const range = sc.max - sc.min;
-        let deltaUs = -(deltaX / axisPxLength) * range;
-
-        let targetOffset = getOffset() + deltaUs;
-        if (targetOffset > 0) {
-            deltaUs -= targetOffset;
-            targetOffset = 0;
-        }
-        setOffset(targetOffset);
-
-        targetChart.setScale("x", { min: sc.min + deltaUs, max: sc.max + deltaUs });
-    });
-
-    window.addEventListener("mouseup", () => {
-        if (!isPanning) return;
-        isPanning = false;
-        updateCursor(xOverlay, false, true, "x");
-    });
-
-    xOverlay.addEventListener("mouseenter", () => !isPanning && updateCursor(xOverlay, false, true, "x"));
-    xOverlay.addEventListener("mouseleave", () => !isPanning && updateCursor(xOverlay, false, false, "x"));
-}
-
-
-window.addEventListener("liveDataUpdate", (e) => {
-    const latest = e.detail.latestTimestamp;
-    const currentVisibleRange = chart.scales.x.max - chart.scales.x.min;
-    const desiredVisibleRange = displayDurationSeconds * 1000000;
-    const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
-        ? currentVisibleRange
-        : desiredVisibleRange;
-    if (!Number.isFinite(visibleRange) || visibleRange <= 0) return;
-
-    if (Number.isFinite(panOffset) && panOffset !== liveChartPanOffset) {
-        liveChartPanOffset = panOffset;
-    }
-
-    if (liveChartPanOffset > -500000) {
-        liveChartPanOffset = 0;
-        panOffset = 0;
-        setSharedXScale(latest - desiredVisibleRange, latest, { preserveY: true, syncUi: false });
-    } else {
-        setSharedXScale(latest - visibleRange + liveChartPanOffset, latest + liveChartPanOffset, { preserveY: true, syncUi: false });
-    }
-});
-
-window.addEventListener("rmsDataUpdate", (e) => {
-    const latest2 = e.detail.latestTimestamp;
-    const currentVisibleRange = rmsPlot.scales.x.max - rmsPlot.scales.x.min;
-    const desiredVisibleRange = displayDurationSecondsRMS * 1000000;
-    const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
-        ? currentVisibleRange
-        : desiredVisibleRange;
-
-    if (rmsPanOffset > -0.5) {
-        rmsPanOffset = 0;
-        rmsPlot.setScale("x", { min: latest2 - desiredVisibleRange, max: latest2 });
-    } else {
-        rmsPlot.setScale("x", {
-            min: latest2 - visibleRange + rmsPanOffset,
-            max: latest2 + rmsPanOffset
-        });
-    }
-});
-
-window.addEventListener("gyroRmsDataUpdate", (e) => {
-    const latest2 = e.detail.latestTimestamp;
-    if (!gyroRmsPlot) return;
-    const currentVisibleRange = gyroRmsPlot.scales.x.max - gyroRmsPlot.scales.x.min;
-    const desiredVisibleRange = gyroDisplayDurationSecondsRMS * 1000000;
-    const visibleRange = Number.isFinite(currentVisibleRange) && currentVisibleRange > 0
-        ? currentVisibleRange
-        : desiredVisibleRange;
-
-    if (gyroRmsPanOffset > -0.5) {
-        gyroRmsPanOffset = 0;
-        gyroRmsPlot.setScale("x", { min: latest2 - desiredVisibleRange, max: latest2 });
-    } else {
-        gyroRmsPlot.setScale("x", {
-            min: latest2 - visibleRange + gyroRmsPanOffset,
-            max: latest2 + gyroRmsPanOffset
-        });
-    }
-});
-
 window.getPanOffset = () => liveChartPanOffset;
 window.setPanOffset = (offset) => {
     liveChartPanOffset = Number.isFinite(offset) ? offset : 0;
     panOffset = liveChartPanOffset;
 };
-
-// Doppelklick reset
-chart.over.addEventListener("dblclick", () => {
-    window.setPanOffset(0);
-    if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
-        setSharedXScale(lastTimestamp - (displayDurationSeconds * 1000000), lastTimestamp, { preserveY: false, syncUi: true });
-    } else {
-        chart.setScale("x", { auto: true });
-    }
-    chart.setScale("y", { min: -1100, max: 1100 });
-    if (gyroChart) {
-        gyroChart.setScale("y", { auto: true });
-    }
-});
-
-gyroChart.over.addEventListener("dblclick", () => {
-    window.setPanOffset(0);
-    if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
-        setSharedXScale(lastTimestamp - (displayDurationSeconds * 1000000), lastTimestamp, { preserveY: false, syncUi: true });
-    } else {
-        if (chart) {
-            chart.setScale("x", { auto: true });
-        }
-        gyroChart.setScale("x", { auto: true });
-    }
-    if (chart) {
-        chart.setScale("y", { min: -1100, max: 1100 });
-    }
-    gyroChart.setScale("y", { auto: true });
-});
-
-[rmsPlot, gyroRmsPlot].forEach((p, idx) => {
-    if (!p || !p.over) return;
-    p.over.addEventListener("dblclick", () => {
-        const isGyro = idx === 1;
-        if (isGyro) gyroRmsPanOffset = 0;
-        else rmsPanOffset = 0;
-        
-        p.setScale("y", { auto: true });
-        // X-axis will snap back on next data update due to panOffset = 0
-    });
-});
 
 
 
@@ -7904,7 +7333,7 @@ function addLiveDataPoint() {
     const yMinBefore = chart.scales.y.min;
     const yMaxBefore = chart.scales.y.max;
 
-    chart.setData([timestamps.slice(), values1.slice(), values2.slice(), values3.slice()]);
+    chart.setData(alignPlotDataToSeriesCount(chart, [timestamps.slice(), values1.slice(), values2.slice(), values3.slice()]));
 
     // Wenn Nutzer den Pan-Bereich manuell gesetzt hat, übernehmen wir den Offset
     // Sonst automatisch weiter scollen (xPanOffset wird intern im Overlay verwaltet)
@@ -7928,19 +7357,143 @@ const CHART_WINDOW_SECONDS = 5;
 const sampleRate = 6666; // z.B. 100 Hz
 
 
-function saveUplotAsPNG(uplotInstance, filename = 'chart.png') {
-    // uPlot rendert auf dem Canvas im Container (erstes Canvas im Container)
-    const canvas = uplotInstance.root.querySelector('canvas');
-
-    if (!canvas) {
-        console.error('Kein Canvas-Element gefunden');
+async function saveUplotAsPNG(uplotInstance, filename = 'chart.png') {
+    if (!uplotInstance || !uplotInstance.root) {
+        console.error('Ungültige uPlot-Instanz');
         return;
     }
 
-    // Canvas-Bild als Data-URL (PNG) holen
-    const dataURL = canvas.toDataURL('image/png');
+    // Aktuelle Größe merken
+    const parent = uplotInstance.root.parentElement;
+    const originalWidth = parent ? parent.clientWidth : uplotInstance.width;
+    const originalHeight = parent ? parent.clientHeight : uplotInstance.height;
 
-    // Erzeuge Link und simuliere Klick zum Herunterladen
+    // Auf 1920x1080 (FullHD) hochskalieren
+    uplotInstance.setSize({ width: 1920, height: 1080 });
+
+    // Warten auf uPlots interne Microtask-Queue (Draw cycle)
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const canvas = uplotInstance.root.querySelector('canvas');
+    if (!canvas) {
+        console.error('Kein Canvas-Element in uPlot gefunden');
+        uplotInstance.setSize({ width: originalWidth, height: originalHeight });
+        return;
+    }
+
+    const titleEl = uplotInstance.root.querySelector('.u-title');
+    const titleText = titleEl ? titleEl.textContent : '';
+    const titleHeight = titleText ? 70 : 0;
+
+    const finalCanvas = document.createElement('canvas');
+    finalCanvas.width = canvas.width;
+    finalCanvas.height = canvas.height + titleHeight;
+    const ctx = finalCanvas.getContext('2d');
+
+    if (titleText) {
+        ctx.fillStyle = '#eef6ff';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(titleText, finalCanvas.width / 2, titleHeight / 2);
+    }
+
+    ctx.drawImage(canvas, 0, titleHeight);
+
+    const dataURL = finalCanvas.toDataURL('image/png');
+
+    // Sofort zurücksetzen
+    uplotInstance.setSize({ width: originalWidth, height: originalHeight });
+
+    const link = document.createElement('a');
+    link.href = dataURL;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+async function saveCombinedUplotsAsPNG(chart1, chart2, filename = 'combined-chart-screenshot.png') {
+    if (!chart1 && !chart2) {
+        console.error('Keine uPlot-Instanzen für Kombi-Screenshot vorhanden');
+        return;
+    }
+    
+    if (!chart1) return saveUplotAsPNG(chart2, filename);
+    if (!chart2) return saveUplotAsPNG(chart1, filename);
+
+    const p1 = chart1.root.parentElement;
+    const p2 = chart2.root.parentElement;
+    const origW1 = p1 ? p1.clientWidth : chart1.width;
+    const origH1 = p1 ? p1.clientHeight : chart1.height;
+    const origW2 = p2 ? p2.clientWidth : chart2.width;
+    const origH2 = p2 ? p2.clientHeight : chart2.height;
+
+    // Auf Einzel-FullHD hochskalieren
+    chart1.setSize({ width: 1920, height: 1080 });
+    chart2.setSize({ width: 1920, height: 1080 });
+
+    // Microtask Wait
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const canvas1 = chart1.root.querySelector('canvas');
+    const canvas2 = chart2.root.querySelector('canvas');
+
+    if (!canvas1 || !canvas2) {
+        chart1.setSize({ width: origW1, height: origH1 });
+        chart2.setSize({ width: origW2, height: origH2 });
+        return;
+    }
+
+    const titleEl1 = chart1.root.querySelector('.u-title');
+    const titleText1 = titleEl1 ? titleEl1.textContent : '';
+    const titleHeight1 = titleText1 ? 70 : 0;
+
+    const titleEl2 = chart2.root.querySelector('.u-title');
+    const titleText2 = titleEl2 ? titleEl2.textContent : '';
+    const titleHeight2 = titleText2 ? 70 : 0;
+
+    const combinedCanvas = document.createElement('canvas');
+    const gap = 40;
+    combinedCanvas.width = Math.max(canvas1.width, canvas2.width);
+    combinedCanvas.height = canvas1.height + canvas2.height + gap + titleHeight1 + titleHeight2;
+    const ctx = combinedCanvas.getContext('2d');
+
+    ctx.clearRect(0, 0, combinedCanvas.width, combinedCanvas.height);
+    let currentY = 0;
+
+    if (titleText1) {
+        ctx.fillStyle = '#eef6ff';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(titleText1, combinedCanvas.width / 2, currentY + (titleHeight1 / 2));
+        currentY += titleHeight1;
+    }
+
+    ctx.drawImage(canvas1, 0, currentY);
+    currentY += canvas1.height + gap;
+
+    if (titleText2) {
+        ctx.fillStyle = '#eef6ff';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(titleText2, combinedCanvas.width / 2, currentY + (titleHeight2 / 2));
+        currentY += titleHeight2;
+    }
+
+    ctx.drawImage(canvas2, 0, currentY);
+
+    const dataURL = combinedCanvas.toDataURL('image/png');
+
+    chart1.setSize({ width: origW1, height: origH1 });
+    chart2.setSize({ width: origW2, height: origH2 });
+
     const link = document.createElement('a');
     link.href = dataURL;
     link.download = filename;
@@ -7951,9 +7504,67 @@ function saveUplotAsPNG(uplotInstance, filename = 'chart.png') {
 
 // Button-Eventlistener setzen
 const screenshotButton = document.getElementById('SSBtn2');
-screenshotButton.addEventListener('click', () => {
-    saveUplotAsPNG(chart, 'uplot-screenshot.png');
-});
+if (screenshotButton) {
+    screenshotButton.addEventListener('click', () => {
+        saveUplotAsPNG(chart, 'acc-screenshot.png');
+    });
+}
+
+const gyroScreenshotButton = document.getElementById('gyroSSBtn');
+if (gyroScreenshotButton) {
+    gyroScreenshotButton.addEventListener('click', () => {
+        saveUplotAsPNG(gyroChart, 'gyro-screenshot.png');
+    });
+}
+
+const comboScreenshotButton = document.getElementById('comboSSBtn');
+if (comboScreenshotButton) {
+    comboScreenshotButton.addEventListener('click', () => {
+        saveCombinedUplotsAsPNG(chart, gyroChart, 'combined-screenshot.png');
+    });
+}
+
+const fftScreenshotButton = document.getElementById('fftSSBtn');
+if (fftScreenshotButton) {
+    fftScreenshotButton.addEventListener('click', () => {
+        saveUplotAsPNG(fftPlot, 'acc-fft-screenshot.png');
+    });
+}
+
+const comboFftRmsScreenshotButton = document.getElementById('comboFftRmsSSBtn');
+if (comboFftRmsScreenshotButton) {
+    comboFftRmsScreenshotButton.addEventListener('click', () => {
+        saveCombinedUplotsAsPNG(fftPlot, rmsPlot, 'acc-fft-rms-shot.png');
+    });
+}
+
+const gyroFftScreenshotButton = document.getElementById('gyroFftSSBtn');
+if (gyroFftScreenshotButton) {
+    gyroFftScreenshotButton.addEventListener('click', () => {
+        saveUplotAsPNG(gyroFftPlot, 'gyro-fft-screenshot.png');
+    });
+}
+
+const comboGyroFftRmsScreenshotButton = document.getElementById('comboGyroFftRmsSSBtn');
+if (comboGyroFftRmsScreenshotButton) {
+    comboGyroFftRmsScreenshotButton.addEventListener('click', () => {
+        saveCombinedUplotsAsPNG(gyroFftPlot, gyroRmsPlot, 'gyro-fft-rms-shot.png');
+    });
+}
+
+const rmsScreenshotButton = document.getElementById('rmsSSBtn');
+if (rmsScreenshotButton) {
+    rmsScreenshotButton.addEventListener('click', () => {
+        saveUplotAsPNG(rmsPlot, 'acc-rms-screenshot.png');
+    });
+}
+
+const gyroRmsScreenshotButton = document.getElementById('gyroRmsSSBtn');
+if (gyroRmsScreenshotButton) {
+    gyroRmsScreenshotButton.addEventListener('click', () => {
+        saveUplotAsPNG(gyroRmsPlot, 'gyro-rms-screenshot.png');
+    });
+}
 
 // POPUP
 
@@ -7984,7 +7595,7 @@ const result1 = document.getElementById("result1");
 const result2 = document.getElementById("result2");
 const result3 = document.getElementById("result3");
 
-document.getElementById("openBtn").addEventListener("click", openPopup);
+document.getElementById("openBtn")?.addEventListener("click", openPopup);
 document.getElementById("cancelBtn").addEventListener("click", closePopup);
 document.getElementById("okBtn").addEventListener("click", closePopup);
 
@@ -8011,12 +7622,23 @@ function closePopup() {
 
 
 function startCalibWorldSimple(button, progressBar, statusText) {
-    console.log("Starte Kalibrierung der Welt (einfach)...  kkk");
+    console.log("Starte Kalibrierung der Welt (einfach)...");
     accBufferCALIB.clear(); // Buffer leeren für Kalibrierung
     gyroBufferCALIB.clear();
     worldSimpleGyroCaptureActive = true;
-    // START-Kommando senden
-    decodeWorker.postMessage({
+    
+    // Dynamisches Worker-Routing basierend auf Klick-Herkunft (CH1 vs CH2+)
+    let targetWorker = decodeWorker; // Fallback auf globale Pipeline
+    let pendingIp = window.pendingCalibrationIp;
+    let targetNode = pendingIp ? window.getNodeByIp(pendingIp) : null;
+    
+    if (targetNode && targetNode.decodeWorker && !targetNode.isMaster) {
+        targetWorker = targetNode.decodeWorker;
+        console.log(`[Calibration] Routing START command to Node ${pendingIp}`);
+    }
+
+    // START-Kommando senden an den korrekten Worker
+    targetWorker.postMessage({
         type: "calibcommand",
         payload: {
             calib1: true,
@@ -8041,7 +7663,7 @@ function startCalibWorldSimple(button, progressBar, statusText) {
             if (button.id === "btn2") document.getElementById("btn3").disabled = false;
 
             // STOP-Kommando erst hier senden
-            decodeWorker.postMessage({
+            targetWorker.postMessage({
                 type: "calibcommand",
                 payload: {
                     calib1: false,
@@ -8087,35 +7709,83 @@ function startCalibWorldSimple(button, progressBar, statusText) {
             okBtn.style.display = "flex"; // OK-Button anzeigen
             cancelBtn.style.display = "none"; // Reset-Button ausblenden
             // KALIBRIERUNG DURCHFÜHREN
-
             const quatsimple = simpleZCalibration(accelIdleData);
-
-            setOrientationCalibrationQuaternion(quatsimple, { persistState: false });
-            decodeWorker.postMessage({
-                type: 'calibmode',
-                payload: {
-                    mode: 2,
-                }
-            });
-            decodeWorker.postMessage({
-                type: 'gravity',
-                payload: {
-                    gravity: tempgravity,
-                }
-            });
-            setAccelCalibrationScale(accelCalibrationScale, { persistState: false });
-            setWorldSimpleGyroState(gyroZeroState, { persistState: false });
-            persistCalibrationCookie();
-
-
-
             console.log('Kalibrierungsquaternion Variante World + Axis:', quatsimple);
+            
+            // ACC-Rauschen berechnen (5 Sigma der am stärksten rauschenden Achse für starkes Deadband)
+            // Fallback auf 2mg, falls das Signal wegen Float-Auflösung exakt starr ist!
+            const accNoiseStdDevRaw = Math.max(accStats.x.stdDev, accStats.y.stdDev, accStats.z.stdDev);
+            const accNoiseThreshold = Math.max(2, accNoiseStdDevRaw * 5);
+            console.log(`[Calibration] Ermitteltes ACC Grundrauschen (Noise-Gate 5 Sigma): ${accNoiseThreshold.toFixed(2)} mg`);
+
+            if (targetNode && !targetNode.isMaster) {
+                // Dezentral an Sensor koppeln
+                targetNode.calibrationState = { scale: accelCalibrationScale, quat: quatsimple, gyroZero: gyroZeroState, accNoise: accNoiseThreshold };
+                targetNode.orientationMode = 2; // Auto-Select World Simple
+                
+                // Unmittelbar auf den aktiven Worker anwenden!
+                if (targetNode.decodeWorker) {
+                    targetNode.decodeWorker.postMessage({ type: 'accelCalibrationScale', payload: { scale: accelCalibrationScale }});
+                    targetNode.decodeWorker.postMessage({ type: 'worldSimpleGyroState', payload: gyroZeroState });
+                    if (quatsimple) targetNode.decodeWorker.postMessage({ type: 'calibdata', payload: { type: 2, quaternion: quatsimple }});
+                    targetNode.decodeWorker.postMessage({ type: 'calibmode', payload: { mode: 2 }});
+                }
+                
+                // Update UI Dropdown
+                const safeIp = targetNode.ip.replace(/\\./g, "_");
+                const csddDropdown = document.getElementById(`CSDD_${safeIp}`);
+                if (csddDropdown) {
+                    csddDropdown.value = "0"; // Note: value "0" in CSDD corresponds to World Simple UI label for some reason
+                    // Actually, let's trigger the onchange safely if we use the helper
+                    if (window.nodeDropdowns && window.nodeDropdowns[targetNode.ip] && window.nodeDropdowns[targetNode.ip].csdd) {
+                       window.nodeDropdowns[targetNode.ip].csdd.setValue("0", true);
+                    }
+                }
+                
+                console.log(`[Calibration] Gespeichert für Node ${pendingIp}`);
+                window.persistNodeCalibration(targetNode);
+            } else {
+                // Global (CH1) - Finde expliziten Node, um State zu verknüpfen
+                if (window.activeSensors) {
+                    const masterNode = window.activeSensors.find(n => n.isMaster);
+                    if (masterNode) {
+                        masterNode.calibrationState = masterNode.calibrationState || {};
+                        masterNode.calibrationState.scale = accelCalibrationScale;
+                        masterNode.calibrationState.quat = quatsimple;
+                        masterNode.calibrationState.gyroZero = gyroZeroState;
+                        masterNode.calibrationState.accNoise = accNoiseThreshold;
+                        window.persistNodeCalibration(masterNode);
+                    }
+                }
+                
+                setOrientationCalibrationQuaternion(quatsimple, { persistState: false });
+                setAccelCalibrationScale(accelCalibrationScale, { persistState: false });
+                setWorldSimpleGyroState(gyroZeroState, { persistState: false });
+                persistCalibrationCookie();
+                applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World Simple' });
+            }
+
+            if (targetWorker) {
+                targetWorker.postMessage({
+                    type: 'accelCalibrationScale',
+                    payload: { scale: accelCalibrationScale }
+                });
+                targetWorker.postMessage({
+                    type: 'calibdata',
+                    payload: { type: 2, quaternion: quatsimple }
+                });
+                targetWorker.postMessage({
+                    type: 'calibmode',
+                    payload: { mode: 2 }
+                });
+                targetWorker.postMessage({
+                    type: 'gravity',
+                    payload: { gravity: tempgravity }
+                });
+            }
 
             document.getElementById("btn1").disabled = false; // Button wieder aktivieren
 
-            document.getElementById("btn1").disabled = false; // Button wieder aktivieren
-        // Prüfe, ob "World Simple" schon existiert
-            applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World Simple' });
             console.log("CALIBRATION DONE");
         }
     }, 30);
@@ -8147,8 +7817,19 @@ let accelIdleData = null;
 function startCalibWorldAxis(button, progressBar, statusText) {
     console.log("Starte Kalibrierung der Welt (einfach)...");
     accBufferCALIB.clear(); // Buffer leeren für Kalibrierung
+    
+    // Dynamisches Worker-Routing basierend auf Klick-Herkunft (CH1 vs CH2+)
+    let targetWorker = decodeWorker; // Fallback auf globale Pipeline
+    let pendingIp = window.pendingCalibrationIp;
+    let targetNode = pendingIp ? window.getNodeByIp(pendingIp) : null;
+    
+    if (targetNode && targetNode.decodeWorker && !targetNode.isMaster) {
+        targetWorker = targetNode.decodeWorker;
+        console.log(`[Calibration] Routing START command to Node ${pendingIp}`);
+    }
+
     // START-Kommando senden
-    decodeWorker.postMessage({
+    targetWorker.postMessage({
         type: "calibcommand",
         payload: {
             calib1: true,
@@ -8174,7 +7855,7 @@ function startCalibWorldAxis(button, progressBar, statusText) {
             if (button.id === "btn2") document.getElementById("btn3").disabled = false;
 
             // STOP-Kommando erst hier senden
-            decodeWorker.postMessage({
+            targetWorker.postMessage({
                 type: "calibcommand",
                 payload: {
                     calib1: false,
@@ -8246,8 +7927,19 @@ let accelmotiondata = null;
 function startCalibWorldAxisSTEP2(button, progressBar, statusText) {
     console.log("Starte Kalibrierung der Welt (einfach)...");
     accBufferCALIB.clear(); // Buffer leeren für Kalibrierung
+    
+    // Dynamisches Worker-Routing basierend auf Klick-Herkunft (CH1 vs CH2+)
+    let targetWorker = decodeWorker; // Fallback auf globale Pipeline
+    let pendingIp = window.pendingCalibrationIp;
+    let targetNode = pendingIp ? window.getNodeByIp(pendingIp) : null;
+    
+    if (targetNode && targetNode.decodeWorker && !targetNode.isMaster) {
+        targetWorker = targetNode.decodeWorker;
+        console.log(`[Calibration] Routing START command to Node ${pendingIp}`);
+    }
+
     // START-Kommando senden
-    decodeWorker.postMessage({
+    targetWorker.postMessage({
         type: "calibcommand",
         payload: {
             calib1: true,
@@ -8273,7 +7965,7 @@ function startCalibWorldAxisSTEP2(button, progressBar, statusText) {
             if (button.id === "btn2") document.getElementById("btn3").disabled = false;
 
             // STOP-Kommando erst hier senden
-            decodeWorker.postMessage({
+            targetWorker.postMessage({
                 type: "calibcommand",
                 payload: {
                     calib1: false,
@@ -8312,35 +8004,51 @@ function startCalibWorldAxisSTEP2(button, progressBar, statusText) {
 
 
             const quatsimple = calibrateWithZPlusXYFixed(accelIdleData, accCorrected, calibaxis1);
-
-            setOrientationCalibrationQuaternion(quatsimple, { persistState: false });
             console.log('Kalibrierungsquaternion Variante World + Axis:', quatsimple);
+            
+            let targetWorker = decodeWorker;
+            let targetNode = pendingIp ? window.getNodeByIp(pendingIp) : null;
+            if (targetNode && !targetNode.isMaster && targetNode.decodeWorker) {
+                targetWorker = targetNode.decodeWorker;
+            }
+
+            if (targetNode && !targetNode.isMaster) {
+                if (!targetNode.calibrationState) targetNode.calibrationState = {};
+                targetNode.calibrationState.quat = quatsimple;
+                targetNode.orientationMode = 2; // "World + Axis" (World Simple with yaw)
+                
+                // Update UI Dropdown
+                const safeIp = targetNode.ip.replace(/\./g, "_");
+                const csddDropdown = document.getElementById(`CSDD_${safeIp}`);
+                if (csddDropdown) {
+                    csddDropdown.value = "0"; // Map UI representation
+                    if (window.nodeDropdowns && window.nodeDropdowns[targetNode.ip] && window.nodeDropdowns[targetNode.ip].csdd) {
+                       window.nodeDropdowns[targetNode.ip].csdd.setValue("0", true);
+                    }
+                }
+                
+                console.log(`[Calibration] Gespeichert für Node ${pendingIp}`);
+                window.persistNodeCalibration(targetNode);
+            } else {
+                setOrientationCalibrationQuaternion(quatsimple, { persistState: false });
+                applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World + Axis' });
+                persistCalibrationCookie();
+            }
+
+            if (targetWorker) {
+                targetWorker.postMessage({
+                    type: 'calibdata',
+                    payload: { type: 2, quaternion: quatsimple }
+                });
+                targetWorker.postMessage({
+                    type: 'calibmode',
+                    payload: { mode: 2 }
+                });
+            }
 
             document.getElementById("btn1").disabled = false; // Button wieder aktivieren
-
-            applyOrientationMode(2, { syncDropdown: true, optionLabel: 'World + Axis' });
-            //action2.style.display = "none";
-            //const quatsimple = simpleZCalibration(accelIdleData);
-            //decodeWorker.postMessage({
-            //   type: "calibdata",
-            //   payload: {
-            //       quaternion: quatsimple,
-            //    }
-            // });
-
-            // AKTUELLE BIAS-WERTE
-            //biasX = accBufferCALIB.getMean("x");
-            //biasY = accBufferCALIB.getMean("y");
-            //biasZ = accBufferCALIB.getMean("z");
-
-            //console.log("Bias X [mg]:", biasX.toFixed(2));
-            //console.log("Bias Y [mg]:", biasY.toFixed(2));
-            //console.log("Bias Z [mg]:", biasZ.toFixed(2));
+            
             btn2.disabled = false; // Button wieder aktivieren
-
-            //calibrationMemory[1] = quatsimple;
-            //CSDD2.addSelectItem({ label: "World + Axis", value: "2" }, 1)
-            //CSDD2.setValue(1, true);
         }
     }, 30);
 }
@@ -8556,13 +8264,168 @@ document.getElementById("btnReferenceState").addEventListener("click", () => {
 
 // GRAVITY
 
-const btn = document.getElementById('gravityBtn');
-btn?.classList.toggle('toggle-on', gravityCutEnabled);
+// ================= FFT UI SETUP =================
+new UniDropdown(document.getElementById("dropdown1"), {
+    type: "select",
+    label: "Time (s)",
+    items: [
+        { value: 0.1, label: "0.1 s" },
+        { value: 0.25, label: "0.25 s" },
+        { value: 0.5, label: "0.5 s" },
+        { value: 1.0, label: "1.0 s" },
+        { value: 2.0, label: "2.0 s" }
+    ],
+    defaultValue: FFT_WINDOW_TIME_S,
+    onChange: (value) => { FFT_WINDOW_TIME_S = Number(value); }
+});
+new UniDropdown(document.getElementById("dropdown2"), {
+    type: "select",
+    label: "Rate",
+    items: [
+      { value: 1000/60, label: "60 fps" },
+      { value: 1000/30, label: "30 fps" },
+      { value: 1000/20, label: "20 fps" },
+      { value: 1000/10, label: "10 fps" },
+      { value: 1000/5, label: "5 fps" }
+    ],
+    defaultValue: FFT_UPDATE_INTERVAL,
+    onChange: (value) => { FFT_UPDATE_INTERVAL = Number(value); }
+});
+new UniDropdown(document.getElementById("dropdown3"), {
+    type: "select",
+    label: "Avg",
+    items: [5,10,15,20,25,50,100,150,300].map(v => ( { value: v, label: `${v}` } )),
+    defaultValue: N_AVG,
+    onChange: (value) => { N_AVG = Number(value); }
+});
+new UniDropdown(document.getElementById("dropdown6"), {
+    type: "select",
+    label: "AXIS",
+    items: [
+      { value: "COMBI", label: "KOMBINIERT" },
+      { value: "ONLYX", label: "X" },
+      { value: "ONLYY", label: "Y" },
+      { value: "ONLYZ", label: "Z" }
+    ],
+    defaultValue: FFT_AXIS_MODE,
+    onChange: (value) => { FFT_AXIS_MODE = value; }
+});
+new UniDropdown(document.getElementById("dropdown4"), {
+    type: "select",
+    label: "Window",
+    items: [
+      { value: "BLACKMAN", label: "BLACKMAN" },
+      { value: "HANNING", label: "HANNING" },
+      { value: "HAMMING", label: "HAMMING" },
+      { value: "RECTANGULAR", label: "RECTANGULAR" }
+    ],
+    defaultValue: FFT_WINDOW_TYPE,
+    onChange: (value) => { FFT_WINDOW_TYPE = value; }
+});
+new UniDropdown(document.getElementById("dropdown5"), {
+    type: "select",
+    label: "DC",
+    items: [
+      { value: true, label: "YES" },
+      { value: false, label: "NO" }
+    ],
+    defaultValue: DC_CUTOFF,
+    onChange: (value) => { DC_CUTOFF = (value === "true" || value === true); }
+});
+new UniDropdown(document.getElementById("sliderDropdown"), {
+    type: "logslider",
+    label: "HPF",
+    minValue: 0.001,
+    maxValue: 100,
+    defaultValue: fftHighPass,
+    alpha: 0.3,
+    onChange: (value) => { fftHighPass = value; }
+});
+
+// GYRO FFT
+new UniDropdown(document.getElementById("gyroDropdown1"), {
+    type: "select",
+    label: "Time (s)",
+    items: [
+        { value: 0.1, label: "0.1 s" },
+        { value: 0.25, label: "0.25 s" },
+        { value: 0.5, label: "0.5 s" },
+        { value: 1.0, label: "1.0 s" },
+        { value: 2.0, label: "2.0 s" }
+    ],
+    defaultValue: GYRO_FFT_WINDOW_TIME_S,
+    onChange: (value) => { GYRO_FFT_WINDOW_TIME_S = Number(value); }
+});
+new UniDropdown(document.getElementById("gyroDropdown2"), {
+    type: "select",
+    label: "Rate",
+    items: [
+      { value: 1000/60, label: "60 fps" },
+      { value: 1000/30, label: "30 fps" },
+      { value: 1000/20, label: "20 fps" },
+      { value: 1000/10, label: "10 fps" },
+      { value: 1000/5, label: "5 fps" }
+    ],
+    defaultValue: GYRO_FFT_UPDATE_INTERVAL,
+    onChange: (value) => { GYRO_FFT_UPDATE_INTERVAL = Number(value); }
+});
+new UniDropdown(document.getElementById("gyroDropdown3"), {
+    type: "select",
+    label: "Avg",
+    items: [5,10,15,20,25,50,100,150,300].map(v => ( { value: v, label: `${v}` } )),
+    defaultValue: gyroN_AVG,
+    onChange: (value) => { gyroN_AVG = Number(value); }
+});
+new UniDropdown(document.getElementById("gyroDropdown6"), {
+    type: "select",
+    label: "AXIS",
+    items: [
+      { value: "COMBI", label: "KOMBINIERT" },
+      { value: "ONLYX", label: "X" },
+      { value: "ONLYY", label: "Y" },
+      { value: "ONLYZ", label: "Z" }
+    ],
+    defaultValue: GYRO_FFT_AXIS_MODE,
+    onChange: (value) => { GYRO_FFT_AXIS_MODE = value; }
+});
+new UniDropdown(document.getElementById("gyroDropdown4"), {
+    type: "select",
+    label: "Window",
+    items: [
+      { value: "BLACKMAN", label: "BLACKMAN" },
+      { value: "HANNING", label: "HANNING" },
+      { value: "HAMMING", label: "HAMMING" },
+      { value: "RECTANGULAR", label: "RECTANGULAR" }
+    ],
+    defaultValue: GYRO_FFT_WINDOW_TYPE,
+    onChange: (value) => { GYRO_FFT_WINDOW_TYPE = value; }
+});
+new UniDropdown(document.getElementById("gyroDropdown5"), {
+    type: "select",
+    label: "DC",
+    items: [
+      { value: true, label: "YES" },
+      { value: false, label: "NO" }
+    ],
+    defaultValue: GYRO_DC_CUTOFF,
+    onChange: (value) => { GYRO_DC_CUTOFF = (value === "true" || value === true); }
+});
+new UniDropdown(document.getElementById("gyroSliderDropdown"), {
+    type: "logslider",
+    label: "HPF",
+    minValue: 0.001,
+    maxValue: 100,
+    defaultValue: gyroFftHighPass,
+    alpha: 0.3,
+    onChange: (value) => { gyroFftHighPass = value; }
+});
+
+document.getElementById('gravityBtn')?.classList.toggle('toggle-on', gravityCutEnabled);
 
 function setGravityCutEnabled(enabled, { persistState = true, notifyWorker = true } = {}) {
     const normalizedEnabled = Boolean(enabled);
     gravityCutEnabled = normalizedEnabled;
-    btn?.classList.toggle('toggle-on', normalizedEnabled);
+    document.getElementById('gravityBtn')?.classList.toggle('toggle-on', normalizedEnabled);
 
     if (notifyWorker) {
         decodeWorker.postMessage({
@@ -8577,8 +8440,9 @@ function setGravityCutEnabled(enabled, { persistState = true, notifyWorker = tru
         persistAppSettingsCookie();
     }
 }
+window.setGravityCutEnabled = setGravityCutEnabled;
 
-btn?.addEventListener('click', function () {
+document.getElementById('gravityBtn')?.addEventListener('click', function () {
     setGravityCutEnabled(!gravityCutEnabled);
 });
 
@@ -8663,17 +8527,84 @@ window.toggleSonification = function() {
     }
 };
 
+// ====== UI WATCHDOG ======
+// Überwacht die SensorNodes auf fehlende Daten (> 5s) und blendet sie aus.
+setInterval(() => {
+    if (window.isOfflineReplayMode) return;
+    if (!window.activeSensors || window.activeSensors.length <= 1) return;
+    
+    const now = performance.now();
+    let uiChanged = false;
 
+    for (let i = 1; i < window.activeSensors.length; i++) {
+        const node = window.activeSensors[i];
+        if (!node) continue;
+        
+        // Timeout nach 5 Sekunden ohne Daten (oder Verbindungsaufbau)
+        if (!window.isOfflineReplayMode && node.lastDataMs && (now - node.lastDataMs > 5000)) {
+            if (!node.isHiddenFromUI && !node.isMaster) {
+                node.isHiddenFromUI = true;
+                
+                // 1) Aus Verbundene Sensoren-Liste entfernen
+                const listRow = document.getElementById(`sensorNodeListRow_${i}`);
+                if (listRow) listRow.style.display = 'none';
+                
+                // 2) Tab-Button verstecken
+                const tabBtn = document.getElementById(`sensorTabBtn_${i}`);
+                if (tabBtn) tabBtn.style.display = 'none';
+                
+                // Falls dieser Tab gerade aktiv war, auf Master switchen
+                if (tabBtn && tabBtn.classList.contains("active-sensor-tab")) {
+                    const masterTab = document.getElementById("sensorTabBtn_0");
+                    if (masterTab) masterTab.click();
+                }
+                
+                // 3) Settings-Spalte verstecken
+                const multiNodeSettingsHost = document.getElementById("multiNodeSettingsHost");
+                if (multiNodeSettingsHost && multiNodeSettingsHost.children[i]) {
+                    multiNodeSettingsHost.children[i].style.display = 'none';
+                }
+                
+                console.warn(`[Watchdog] Node CH${i+1} aus UI ausgeblendet (timeout)`);
+                uiChanged = true;
+            }
+        } else if (window.isOfflineReplayMode || (node.lastDataMs && (now - node.lastDataMs <= 5000))) {
+            if (node.isHiddenFromUI) {
+                node.isHiddenFromUI = false;
+                
+                // Wieder einblenden
+                const listRow = document.getElementById(`sensorNodeListRow_${i}`);
+                if (listRow) listRow.style.display = 'flex';
+                
+                const tabBtn = document.getElementById(`sensorTabBtn_${i}`);
+                if (tabBtn) tabBtn.style.display = ''; // default block/inline
+                
+                const multiNodeSettingsHost = document.getElementById("multiNodeSettingsHost");
+                if (multiNodeSettingsHost && multiNodeSettingsHost.children[i]) {
+                    multiNodeSettingsHost.children[i].style.display = ''; // default
+                }
+                
+                console.info(`[Watchdog] Node CH${i+1} wieder in UI eingeblendet (neue Daten)`);
+                uiChanged = true;
+            }
+        }
+    }
 
+    if (uiChanged && typeof updateRelativeAnalysisNodeSelector === 'function') {
+         updateRelativeAnalysisNodeSelector(window.activeSensors);
+    }
+    if (uiChanged && typeof accVectorViewport !== 'undefined' && accVectorViewport && typeof accVectorViewport.updateNodeSelector === 'function') {
+         accVectorViewport.updateNodeSelector(window.activeSensors);
+    }
+}, 2000);
 
+// Initialize Relativ-Tab Sub-Navigation & Charts
+initRelativeAnalysisUI();
+initRelativeDiffRmsChart();
+initRelativeTranslationChart();
+initRelativeKinematicViewport();
+initRelativeLissajousChart();
+startRelativeDiffRmsRuntime();
 
-
-
-
-
-
-
-
-
-
-
+// Bind UI event listeners (SYNC ALL, Identify etc)
+setupButtons();

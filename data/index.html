@@ -82,13 +82,20 @@
       100% { transform: translateX(-80px); }
     }
 
-    #telemetryPanel {
+    #telemetryWrapper {
       position: fixed;
       right: 18px;
       bottom: 18px;
       z-index: 1200;
+      display: flex;
+      flex-direction: row;
+      gap: 12px;
+      pointer-events: none;
+      align-items: flex-end;
+    }
+
+    .telemetry-panel {
       min-width: 228px;
-      max-width: min(300px, calc(100vw - 36px));
       padding: 10px 12px;
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 14px;
@@ -174,15 +181,15 @@
       color: #ff8a8a;
     }
 
-    #telemetryPanel.is-hidden {
+    #telemetryWrapper.is-hidden {
       display: none;
     }
 
-    #telemetryPanel.is-collapsed .telemetry-grid {
+    .telemetry-panel.is-collapsed .telemetry-grid {
       display: none;
     }
 
-    #telemetryPanel.is-collapsed .telemetry-thresholds {
+    .telemetry-panel.is-collapsed .telemetry-thresholds {
       display: none;
     }
 
@@ -243,6 +250,48 @@
       padding: 8px 16px;
       border-radius: 6px;
       cursor: pointer;
+    }
+
+    #replayLoadingOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 5000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(5px);
+      color: #fff;
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      opacity: 0;
+      visibility: hidden;
+    }
+    #replayLoadingOverlay.is-visible {
+      opacity: 1;
+      visibility: visible;
+    }
+    .replay-spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid rgba(255, 255, 255, 0.2);
+      border-top-color: #00bcd4;
+      border-radius: 50%;
+      animation: replay-spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes replay-spin {
+      to { transform: rotate(360deg); }
+    }
+    .replay-loading-text {
+      font-size: 1.2rem;
+      font-weight: 500;
+      letter-spacing: 1px;
+    }
+    .replay-loading-filename {
+      margin-top: 8px;
+      font-size: 0.9rem;
+      color: #aaa;
     }
   </style>
   <script>
@@ -307,6 +356,49 @@
           String(message)
         );
       });
+
+      window.uploadFirmware = function(file) {
+        if (!file) return;
+        const overlay = document.getElementById('bootOverlayStatus');
+        const overlayHint = document.getElementById('bootOverlayHint');
+        const progressContainer = document.querySelector('.boot-progress');
+        
+        if (overlay) overlay.textContent = 'Lade Firmware hoch (0%)...';
+        if (overlayHint) overlayHint.textContent = 'Bitte warten und das Gerät nicht ausschalten.';
+        if (progressContainer) progressContainer.style.display = 'none';
+
+        const xhr = new XMLHttpRequest();
+        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+        let apiHost = window.location.hostname;
+        if (!apiHost || apiHost === "localhost" || apiHost === "127.0.0.1") apiHost = "192.168.4.1";
+        
+        xhr.open('POST', `${protocol}//${apiHost}/update`, true);
+        
+        xhr.upload.onprogress = function(e) {
+          if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            if (overlay) overlay.textContent = `Lade Firmware hoch (${percent}%)...`;
+          }
+        };
+        
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            if (overlay) overlay.textContent = 'Firmware-Update erfolgreich!';
+            if (overlayHint) overlayHint.textContent = 'Das Gerät startet in Kürze neu...';
+            setTimeout(() => window.location.reload(), 5000);
+          } else {
+            if (overlay) overlay.textContent = 'Update fehlgeschlagen!';
+            if (overlayHint) overlayHint.textContent = `Server meldet: ${xhr.status} ${xhr.responseText}`;
+          }
+        };
+        
+        xhr.onerror = function() {
+          if (overlay) overlay.textContent = 'Netzwerkfehler!';
+          if (overlayHint) overlayHint.textContent = 'Die Verbindung zum Gerät ist abgerissen.';
+        };
+        
+        xhr.send(file);
+      };
     }());
   </script>
   <!--link rel="stylesheet" href="all.min.css"> -->
@@ -316,13 +408,8 @@
   <script defer src="fili.min.js"></script>
   <script defer src="three.min.js"></script>
   <script defer src="OrbitControls.min.js"></script>
-
-
   <script defer src="CSS2DRenderer.js"></script>
-
-
-
-
+  <script defer src="livechart.js"></script>
   <!--<script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>-->
 
   <style>
@@ -365,10 +452,15 @@
         </div>
       </div>
       <div id="bootOverlayHint" class="boot-hint">Der ESP bereitet Weboberfläche und Sensorverbindung vor.</div>
-      <button id="btnStartOfflineReplay" onclick="if(window.initOfflineReplay) window.initOfflineReplay()" style="margin-top: 24px; padding: 10px 20px; background: rgba(255, 214, 0, 0.15); border: 1px solid #FFD600; color: #FFD600; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;">
-        Offline Replay (CSV)
-      </button>
     </div>
+    
+    <button id="btnStartOfflineReplay" onclick="if(window.initOfflineReplay) window.initOfflineReplay()" style="position: absolute; bottom: 20px; left: 20px; padding: 10px 20px; background: rgba(255, 214, 0, 0.15); border: 1px solid #FFD600; color: #FFD600; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;">
+      Offline Replay (CSV)
+    </button>
+    <button id="btnFirmwareUpload" onclick="document.getElementById('firmwareFileInput').click()" style="position: absolute; bottom: 20px; right: 20px; padding: 10px 20px; background: rgba(0, 150, 255, 0.15); border: 1px solid #0096ff; color: #0096ff; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;">
+      Firmware Update
+    </button>
+    <input type="file" id="firmwareFileInput" style="display: none;" accept=".bin" onchange="if(window.uploadFirmware) window.uploadFirmware(this.files[0])">
   </div>
 
   <div id="shutdownConfirmOverlay">
@@ -382,9 +474,10 @@
     </div>
   </div>
 
-  <aside id="telemetryPanel" aria-live="polite">
+  <div id="telemetryWrapper">
+  <aside id="telemetryPanel" class="telemetry-panel" aria-live="polite">
     <div class="telemetry-header">
-      <div class="telemetry-title">ESP Telemetrie</div>
+      <div class="telemetry-title">Telemetrie (Master)</div>
     </div>
     <div class="telemetry-grid">
       <div class="telemetry-key">WS</div><div class="telemetry-value" id="telemetryWsState">offline</div>
@@ -414,13 +507,48 @@
         <li>CPU Last: Warnung ab 75 %, kritisch ab 90 %</li>
         <li>CPU Temp: Warnung ab 70 C, kritisch ab 80 C</li>
         <li>Heap frei: Warnung unter 16 KB, kritisch unter 8 KB</li>
-        <li>Heap min: Warnung unter 8 KB, kritisch unter 2 KB</li>
-        <li>Heap größter Block: Warnung unter 8 KB, kritisch unter 4 KB</li>
-        <li>PSRAM frei: Warnung unter 128 KB</li>
-        <li>Backlog Peak: Warnung über 8 KB</li>
       </ul>
     </div>
   </aside>
+
+  <aside id="telemetryPanel2" class="telemetry-panel" aria-live="polite">
+    <div class="telemetry-header">
+      <div class="telemetry-title">Telemetrie (Node)</div>
+    </div>
+    <div class="telemetry-grid">
+      <div class="telemetry-key">WS</div><div class="telemetry-value" id="telemetryWsState2">offline</div>
+      <div class="telemetry-key">ESP Clients</div><div class="telemetry-value" id="telemetryActiveClients2">0</div>
+      <div class="telemetry-key">Sensor Pakete/s</div><div class="telemetry-value" id="telemetrySensorPackets2">0</div>
+      <div class="telemetry-key">Frames/s</div><div class="telemetry-value" id="telemetryFramesPerSecond2">0</div>
+      <div class="telemetry-key">WS Fehler/s</div><div class="telemetry-value" id="telemetryWsErrors2">0</div>
+      <div class="telemetry-key">Raw Bytes/s</div><div class="telemetry-value" id="telemetryRawBytes2">0 B</div>
+      <div class="telemetry-key">Frame-Limit</div><div class="telemetry-value" id="telemetryFrameLimit2">-</div>
+      <div class="telemetry-key">Inflight WS</div><div class="telemetry-value" id="telemetryInflightWs2">-</div>
+      <div class="telemetry-key">CPU Last</div><div class="telemetry-value" id="telemetryCpuLoad2">-</div>
+      <div class="telemetry-key">CPU Temp</div><div class="telemetry-value" id="telemetryCpuTemp2">-</div>
+      <div class="telemetry-key">Heap frei</div><div class="telemetry-value" id="telemetryFreeHeap2">-</div>
+      <div class="telemetry-key">Heap min</div><div class="telemetry-value" id="telemetryMinHeap2">-</div>
+      <div class="telemetry-key">Heap größter Block</div><div class="telemetry-value" id="telemetryLargestHeap2">-</div>
+      <div class="telemetry-key">PSRAM gesamt</div><div class="telemetry-value" id="telemetryPsramTotal2">-</div>
+      <div class="telemetry-key">PSRAM frei</div><div class="telemetry-value" id="telemetryFreePsram2">-</div>
+      <div class="telemetry-key">PSRAM min</div><div class="telemetry-value" id="telemetryMinPsram2">-</div>
+      <div class="telemetry-key">PSRAM größter Block</div><div class="telemetry-value" id="telemetryLargestPsram2">-</div>
+      <div class="telemetry-key">Drops/s</div><div class="telemetry-value" id="telemetryDrops2">0</div>
+      <div class="telemetry-key">Backlog Peak</div><div class="telemetry-value" id="telemetryBacklogPeak2">0</div>
+    </div>
+    <div class="telemetry-thresholds" aria-label="Telemetrie-Grenzwerte">
+      <div class="telemetry-thresholds-title">Grenzwerte</div>
+      <ul class="telemetry-thresholds-list">
+        <li>WS Fehler, Inflight WS, Drops: Ziel 0</li>
+        <li>CPU Last: Warnung ab 75 %, kritisch ab 90 %</li>
+        <li>CPU Temp: Warnung ab 70 C, kritisch ab 80 C</li>
+        <li>Heap frei: Warnung unter 16 KB, kritisch unter 8 KB</li>
+      </ul>
+    </div>
+  </aside>
+  </div>
+
+
 
 
 
@@ -499,6 +627,12 @@
     </div>
   </div>
 
+  <div id="replayLoadingOverlay">
+    <div class="replay-spinner"></div>
+    <div class="replay-loading-text">Datei wird geladen...</div>
+    <div id="replayLoadingFilename" class="replay-loading-filename">Analysiere Datenpakete</div>
+  </div>
+
   <div class="sidebar" id="sidebar">
     <ul class="sidebar-content">
       <li class="sidebar-item sidebar-item-action" id="sidebarToggleWrapper">
@@ -553,16 +687,41 @@
         <span class="sidebar-label">3D Align</span>
       </li>
 
-      <li class="sidebar-item" id="navMotionViewport" title="3D Vibration">
+      <li class="sidebar-item" id="navImpactTest" title="Modal Analysis">
         <span class="sidebar-icon">
-          <img src="icons/vibration3d.svg" alt="3D Vibration" />
+          <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+            <!-- Äußerer Kreis passend zu den anderen Icons -->
+            <circle cx="12" cy="12" r="11"></circle>
+            <!-- Stimmgabel (Resonanz / Modal Analysis) -->
+            <path d="M9 7 v5 c0 3.5 6 3.5 6 0 v-5"></path>
+            <!-- Griff der Stimmgabel -->
+            <line x1="12" y1="14.5" x2="12" y2="19"></line>
+            <!-- Schwingungswellen -->
+            <path d="M6 8 q-2.5 2.5 0 5"></path>
+            <path d="M18 8 q2.5 2.5 0 5"></path>
+          </svg>
         </span>
-        <span class="sidebar-label">3D Vibration</span>
+        <span class="sidebar-label">Impact Test</span>
       </li>
 
-      <li class="sidebar-item sidebar-item-bottom" id="navReplayMode" title="Offline Replay" onclick="if(window.initOfflineReplay) window.initOfflineReplay(); document.getElementById('replayCsvInput').click();">
+      <li class="sidebar-item" id="navRelativAnalysis" title="Motion Analyse">
         <span class="sidebar-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="1.2rem" height="1.2rem" style="margin-top: 5px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+          <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+            <!-- Äußerer Kreis wie bei den anderen Haupt-Icons -->
+            <circle cx="12" cy="12" r="11"></circle>
+            <!-- Inneres Kinematik/Motion Design -->
+            <circle cx="8" cy="16" r="1.5"></circle>
+            <circle cx="16" cy="8" r="1.5"></circle>
+            <line x1="9" y1="15" x2="15" y2="9"></line>
+            <path d="M10 7 A 6 6 0 0 1 17 14" stroke-dasharray="2 2"></path>
+          </svg>
+        </span>
+        <span class="sidebar-label">Motion</span>
+      </li>
+
+      <li class="sidebar-item sidebar-item-bottom" id="navReplayMode" title="Offline Replay" onclick="if(window.initOfflineReplay) window.initOfflineReplay(); window.triggerReplayLoad();">
+        <span class="sidebar-icon">
+          <svg width="70%" height="70%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
         </span>
         <span class="sidebar-label">Offline Replay</span>
       </li>
@@ -570,7 +729,7 @@
       <li class="sidebar-item sidebar-item-action">
         <button id="telemetryToggle" class="sidebar-action-button" type="button" aria-pressed="false" aria-label="Telemetrie ein- oder ausblenden" title="Telemetrie ein- oder ausblenden" style="outline: none !important; border: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent;">
           <span class="sidebar-icon" aria-hidden="true">
-            <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
+            <svg width="70%" height="70%" viewBox="0 0 24 24" focusable="false">
               <path fill="currentColor" d="M4 19h16v2H2V3h2v16zm2-2V9h3v8H6zm5 0V5h3v12h-3zm5 0v-6h3v6h-3z"/>
             </svg>
           </span>
@@ -581,7 +740,7 @@
       <li class="sidebar-item sidebar-item-action">
         <button id="sidebarShutdownBtn" class="sidebar-action-button" type="button" aria-pressed="false" title="System Shutdown" style="outline: none !important; border: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent;">
           <span class="sidebar-icon" aria-hidden="true">
-            <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
+            <svg width="70%" height="70%" viewBox="0 0 24 24" focusable="false">
               <path fill="currentColor" d="M12 2v10h2V2h-2zm4.5 2.5c2.6 1.6 4.5 4.5 4.5 8.5 0 5.5-4.5 10-10 10S1 18.5 1 13c0-4 1.9-6.9 4.5-8.5l1.5 1.5C5 7.2 3.5 9.5 3.5 13c0 4.1 3.4 7.5 7.5 7.5s7.5-3.4 7.5-7.5c0-3.5-1.5-5.8-3.5-7l1.5-1.5z"/>
             </svg>
           </span>
@@ -609,99 +768,30 @@
         <button id="closeRightPanel" class="close-arrow">←</button>
         <h2>SENSOR</h2>
       </div>
-      <div class="right-settings-content">
+      <div class="right-settings-content" style="display: flex; flex-direction: column; gap: 15px;">
 
-
-        <div class="label1">COORDINATESYSTEM</div>
-        <div class="dropdown" id="CSDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
+        <!-- MULTI-SENSOR CONTROLS -->
+        <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:10px;">
+          
+          <div style="display:none;">
+            <!-- Hidden Select preserves compatibility with existing JS logic -->
+            <select id="settingsSensorTarget">
+              <option value="192.168.4.1">Master (CH1)</option>
+            </select>
           </div>
+          
+          <div style="display:flex; gap:8px;">
+            <button id="btnSyncSettingsAll" style="flex:1; background:rgba(0, 150, 255, 0.2); border:1px solid #0096ff; color:#0096ff; padding:6px; border-radius:4px; cursor:pointer; font-weight:bold; transition:all 0.2s; white-space:nowrap; font-size:0.8rem;" onmouseover="this.style.background='rgba(0,150,255,0.4)'" onmouseout="this.style.background='rgba(0,150,255,0.2)'">🔄 SYNC ALL</button>
+          </div>
+          
         </div>
 
-        <button id="openBtn">Kalibrieren</button>
-        <button class="toggle-button" id="gravityBtn">Cut Gravity</button>
-
-        <div class="label1">ACC SETTINGS</div>
-        <div class="dropdown" id="accelSampleRateDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
-          </div>
+        <div id="multiNodeSettingsHost" style="display:flex; gap:15px; overflow-x:auto; padding-bottom:10px; width:max-content; min-width:100%;">
+          <!-- Node Settings Columns will be dynamically generated here by ui-setup.js -->
         </div>
 
-        <div class="dropdown" id="accelRangeDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
-          </div>
-        </div>
-
-
-
-        <div class="dropdown" id="accelFilterDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
-          </div>
-        </div>
-        <div class="label1">GYRO SETTINGS</div>
-
-        <div class="dropdown" id="gyroSampleRateDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
-          </div>
-        </div>
-
-        <div class="dropdown" id="gyroRangeDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
-          </div>
-        </div>
-
-
-
-        <div class="dropdown" id="gyroFilterDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
-          </div>
-        </div>
-
-        <div class="label1">TEMP SETTINGS</div>
-        <div class="dropdown" id="tempSampleRateDD2">
-          <button class="dropdown-button">
-            <span class="label"></span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="dropdown-content">
-            <!-- Optionen werden dynamisch eingefügt -->
-          </div>
-        </div>
+        <div class="label1" style="margin-top:20px; display:none;">LED SIGNALE</div>
+        <button id="btnOpenLedConfigOverlay" style="display:none; padding:8px 12px; margin-bottom:12px; background:#386596; color:#fff; border:none; border-radius:4px; cursor:pointer;">LEDs konfigurieren</button>
 
       </div>
 
@@ -746,14 +836,14 @@
         </div>
 
         <div class="imu-tile">
-          <div class="label">Time:</div>
-          <div class="value" id="timestamp">0.00</div>
-          <div id="timestampDate" class="unit" style="display: none; font-size: 0.7em; margin-top: 2px;"></div>
+          <div class="label">ACC Rate:</div>
+          <div class="value" id="samplerate">0.00</div>
+          <div class="unit">Hz</div>
         </div>
 
         <div class="imu-tile">
-          <div class="label">Samplerate:</div>
-          <div class="value" id="samplerate">0.00</div>
+          <div class="label">GYRO Rate:</div>
+          <div class="value" id="gyrosamplerate">0.00</div>
           <div class="unit">Hz</div>
         </div>
 
@@ -761,6 +851,12 @@
           <div class="label">Temperature:</div>
           <div class="value" id="temperature">0.00</div>
           <div class="unit">°C</div>
+        </div>
+
+        <div class="imu-tile">
+          <div class="label">Time:</div>
+          <div class="value" id="timestamp">0.00</div>
+          <div id="timestampDate" class="unit" style="display: none; font-size: 0.7em; margin-top: 2px;"></div>
         </div>
 
 
@@ -829,6 +925,7 @@
                 <button id="downloadBtn" style="display:none;" title="CSV herunterladen"><i class="fas fa-download"></i>
                   Download CSV</button>
                 <button id="chartLayoutToggle" title="Charts nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+                <button id="comboSSBtn" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
                 <label for="fpsSlider">FPS: <span id="fpsValue">33</span></label>
                 <input id="fpsSlider" type="range" min="1" max="100" value="33" step="1" />
                 <label for="timeSlider">Anzeigezeit: <span id="timeValue">5</span>s</label>
@@ -842,18 +939,25 @@
                 <div id="accChartHost" class="chart-plot-host"></div>
                 <div id="accChartLegendHost" class="chart-legend-host"></div>
                 <div id="inchartcontrols" class="chart-overlay-controls">
+                  <button id="syncYAxesBtn" class="sync-axes-btn" title="Beide Y-Achsen synchronisieren" style="display:none;">🔗 Sync</button>
                   <button id="pauseBtn2" title="Liveanzeige pausieren">Pause</button>
                   <button id="recBtn2" title="CSV erzeugen">🔴</button>
                   <button id="SSBtn2" title="Screenshot speichern">⎙</button>
                 </div>
                 <div id="y-axis-overlay" title="Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+                <div id="y2-axis-overlay" title="Y2-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 <div id="x-axis-overlay" title="X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
               </div>
 
               <div id="gyrochart" class="livechart-panel">
                 <div id="gyroChartHost" class="chart-plot-host"></div>
                 <div id="gyroChartLegendHost" class="chart-legend-host"></div>
+                <div class="chart-overlay-controls gyro-controls">
+                  <button id="syncGyroYAxesBtn" class="sync-axes-btn" title="Beide Gyro-Y-Achsen synchronisieren" style="display:none;">🔗 Sync</button>
+                  <button id="gyroSSBtn" title="Screenshot speichern">⎙</button>
+                </div>
                 <div id="gyro-y-axis-overlay" title="Gyro Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
+                <div id="gyro-y2-axis-overlay" title="Gyro Y2-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 <div id="gyro-x-axis-overlay" title="Gyro X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
               </div>
               </div>
@@ -946,6 +1050,7 @@
 
               <div class="chart-controls" id="fftRmsChartControls">
                 <button id="fftRmsLayoutToggle" title="FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+                <button id="comboFftRmsSSBtn" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
                 <label for="rmsTimeSlider" style="margin-left:auto;">Zeit: <span id="rmsTimeValue">20</span>s</label>
                 <input id="rmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
               </div>
@@ -954,13 +1059,16 @@
                 <div id="fftPanel" class="livechart-panel">
                   <div id="fftChart" class="chart-plot-host"></div>
                   <div id="fftChartLegendHost" class="chart-legend-host"></div>
+                  <div id="fftInChartControls" class="chart-overlay-controls rms-controls">
+                    <button id="fftSSBtn" title="Screenshot speichern">⎙</button>
+                  </div>
                   <div id="fftPeakBadge" class="chart-info-badge">Peak -- Hz</div>
                 </div>
 
                 <div id="rmsPanel" class="livechart-panel">
                   <div id="rmsChart" class="chart-plot-host"></div>
                   <div id="rmsChartLegendHost" class="chart-legend-host"></div>
-                  <div id="rmsInChartControls" class="chart-overlay-controls">
+                  <div id="rmsInChartControls" class="chart-overlay-controls rms-controls">
                     <button id="rmsPauseBtn" title="RMS-Anzeige pausieren">Pause</button>
                     <button id="rmsRecordBtn" title="CSV erzeugen">🔴</button>
                     <button id="rmsSSBtn" title="Screenshot speichern">⎙</button>
@@ -1034,6 +1142,7 @@
 
               <div class="chart-controls" id="gyroFftRmsChartControls">
                 <button id="gyroFftRmsLayoutToggle" title="Gyro FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+                <button id="comboGyroFftRmsSSBtn" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
 
                 <label for="gyroRmsTimeSlider" style="margin-left:auto;">Zeit: <span id="gyroRmsTimeValue">20</span>s</label>
                 <input id="gyroRmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
@@ -1043,13 +1152,16 @@
                 <div id="gyroFftPanel" class="livechart-panel">
                   <div id="gyroFftChart" class="chart-plot-host"></div>
                   <div id="gyroFftChartLegendHost" class="chart-legend-host"></div>
+                  <div id="gyroFftInChartControls" class="chart-overlay-controls rms-controls">
+                    <button id="gyroFftSSBtn" title="Screenshot speichern">⎙</button>
+                  </div>
                   <div id="gyroFftPeakBadge" class="chart-info-badge">Peak -- Hz</div>
                 </div>
 
                 <div id="gyroRmsPanel" class="livechart-panel">
                   <div id="gyroRmsChart" class="chart-plot-host"></div>
                   <div id="gyroRmsChartLegendHost" class="chart-legend-host"></div>
-                  <div id="gyroRmsInChartControls" class="chart-overlay-controls">
+                  <div id="gyroRmsInChartControls" class="chart-overlay-controls rms-controls">
                     <button id="gyroRmsPauseBtn" title="Gyro RMS-Anzeige pausieren">Pause</button>
                     <button id="gyroRmsRecordBtn" title="CSV erzeugen">🔴</button>
                     <button id="gyroRmsSSBtn" title="Screenshot speichern">⎙</button>
@@ -1096,7 +1208,11 @@
                      <input type="range" id="waterfallMagFilter" min="10" max="5000" value="1000" step="10" style="vertical-align: middle; width: 80px;">
                      <span id="waterfallMagValue" style="color: #FFD600; font-weight: bold; min-width: 65px; text-align: right; display: inline-block;">1000</span>
                    </div>
-                   <div style="margin-left: 10px;">
+                   <div style="display: flex; gap: 5px; align-items: center; margin-left: 5px; background: rgba(0,0,0,0.5); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
+                     <input type="checkbox" id="waterfallDiffMode" style="cursor: pointer; margin:0;" onchange="if(window.waterfallRenderer) window.waterfallRenderer.diffMode = this.checked;">
+                     <label for="waterfallDiffMode" style="color: #FFD600; cursor: pointer; font-family: monospace; font-size: 13px;">Diff Mode</label>
+                   </div>
+                   <div style="margin-left: 5px;">
                      <button id="wfBtnScreenshot" title="Screenshot speichern (Taste P)" onclick="if(window.waterfallRenderer) window.waterfallRenderer.downloadScreenshot();" style="background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.2); height: 26px; width: 32px; border-radius: 4px; outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)';" onmouseout="this.style.background='rgba(255,255,255,0.15)';">⎙</button>
                    </div>
                 </div>
@@ -1194,7 +1310,11 @@
                      <input type="range" id="gyroWaterfallMagFilter" min="100" max="2000000" value="100000" step="1000" style="vertical-align: middle; width: 80px;">
                      <span id="gyroWaterfallMagValue" style="color: #FFD600; font-weight: bold; min-width: 65px; text-align: right; display: inline-block;">100000</span>
                    </div>
-                   <div style="margin-left: 10px;">
+                   <div style="display: flex; gap: 5px; align-items: center; margin-left: 5px; background: rgba(0,0,0,0.5); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
+                     <input type="checkbox" id="gyroWaterfallDiffMode" style="cursor: pointer; margin:0;" onchange="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.diffMode = this.checked;">
+                     <label for="gyroWaterfallDiffMode" style="color: #FFD600; cursor: pointer; font-family: monospace; font-size: 13px;">Diff Mode</label>
+                   </div>
+                   <div style="margin-left: 5px;">
                      <button id="gwfBtnScreenshot" title="Screenshot speichern (Taste P)" onclick="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.downloadScreenshot();" style="background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.2); height: 26px; width: 32px; border-radius: 4px; outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)';" onmouseout="this.style.background='rgba(255,255,255,0.15)';">⎙</button>
                    </div>
                 </div>
@@ -1233,9 +1353,76 @@
                 <span id="gwfLblTimeMid"></span>
                 <span id="gwfLblTimeRight"></span>
               </div>
-              <div style="padding: 10px 15px; background: rgba(0,0,0,0.3); border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
-                <input type="range" id="gwfScrollbar" min="0" max="0" value="0" style="width: 100%; margin: 0; padding: 0; cursor: pointer; display: block; accent-color: #2196F3;">
-              </div>
+            </div>
+          </div>
+          
+          <!-- ================= MOTION-ANALYSE ================= -->
+          <div id="relativeAnalysisArea" style="display:none; flex-direction: column; width: 100%; height: calc(100vh - 155px); max-height: calc(100vh - 155px); padding: 15px 20px; box-sizing: border-box; overflow: hidden; background: rgba(22, 27, 34, 0.2);">
+            
+            <div class="filter-toolbar" style="margin-bottom: 20px; background: rgba(22, 27, 34, 0.6); padding: 10px 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); display: flex; flex-wrap: wrap; align-items: center; gap: 15px;">
+                <label style="font-weight: bold; color: #ffd600; font-size: 16px;"><i class="fas fa-project-diagram" style="margin-right:8px;"></i>Motion-Analyse</label>
+                
+                <!-- Sub-Navigation Pills -->
+                <div class="relativ-nav-pills" style="display: flex; gap: 8px; flex-grow: 1;">
+                    <button class="filter-toggle" id="btnRelativKinematic" style="padding: 6px 16px; border-radius: 20px; border: 1px solid #0096ff; background: rgba(0, 150, 255, 0.2); color: #fff; cursor: pointer; font-weight: bold; transition: all 0.2s;">1. Kinematik (3D)</button>
+                    <button class="filter-toggle" id="btnRelativTranslation" style="padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #aaa; cursor: pointer; transition: all 0.2s;">2. Translation (Chart)</button>
+                    <button class="filter-toggle" id="btnRelativLissajous" style="padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #aaa; cursor: pointer; transition: all 0.2s;">3. Phasen-Lissajous</button>
+                    <button class="filter-toggle" id="btnRelativDiffRms" style="padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #aaa; cursor: pointer; transition: all 0.2s;">4. Diff Vibration (RMS)</button>
+                </div>
+                
+                <!-- Target Selector -->
+                <div style="display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                    <span style="font-size: 0.85rem; color: #a3aab3;">Differenz bilden:</span>
+                    <span style="font-size: 0.85rem; color: white; opacity:0.8;">CH1 (Master) minus</span>
+                    <select id="relativSecondaryNodeSelect" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold;">
+                        <option value="none">- Warten auf CH2 -</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- TAB 4: Differential RMS -->
+            <div id="relativDiffRmsTab" style="flex-grow: 1; display: none; flex-direction: column;">
+                <div class="livechart-panel" style="flex-grow: 1; position: relative; margin-top: 5px;">
+                    <div class="chart-controls" style="position: absolute; top: 10px; right: 20px; z-index: 10; padding: 0; margin: 0; background: transparent; border: none; display: flex; gap: 8px;">
+                        <button id="relativDiffRmsPauseBtn" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);" title="Diff-RMS pausieren"><i class="fas fa-pause"></i> Pause</button>
+                        <button id="relativDiffRmsSSBtn" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);" title="Screenshot speichern"><i class="fas fa-camera"></i> Screenshot</button>
+                    </div>
+                    <div id="relativDiffRmsChart" class="chart-plot-host" style="flex: 1 1 0; min-height: 0; position: relative; overflow: hidden;"></div>
+                    <div id="relativDiffRmsChartLegendHost" class="chart-legend-host"></div>
+                    <div id="relativ-diff-y-axis-overlay" title="Y-Achse zoomen"></div>
+                    <div id="relativ-diff-x-axis-overlay" title="X-Achse zoomen"></div>
+                </div>
+            </div>
+            
+            <!-- TAB 1: Kinematik 3D -->
+            <div id="relativKinematicTab" style="display: block; flex-grow: 1; align-items: center; justify-content: center;">
+                <h3 style="color: rgba(255,255,255,0.3);"><i class="fas fa-tools"></i> Modus 2 (Kinematik) ist noch nicht implementiert</h3>
+            </div>
+            
+            <!-- TAB 2: Translation Chart -->
+            <div id="relativTranslationTab" style="display: none; flex-grow: 1; flex-direction: column;">
+                <div class="livechart-panel" style="flex-grow: 1; display: flex; flex-direction: column; position: relative; margin-top: 5px;">
+                    <div class="chart-controls" style="position: absolute; top: 10px; right: 20px; z-index: 10; padding: 0; margin: 0; background: transparent; border: none; display: flex; gap: 8px;">
+                        <select id="relativTranslationTimespan" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2); outline: none; cursor: pointer;">
+                            <option value="1">1s</option>
+                            <option value="5">5s</option>
+                            <option value="10" selected>10s</option>
+                            <option value="30">30s</option>
+                            <option value="60">60s</option>
+                            <option value="all">All</option>
+                        </select>
+                        <button id="relativTranslationPauseBtn" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);" title="Translation Chart pausieren"><i class="fas fa-pause"></i> Pause</button>
+                    </div>
+                    <div id="relativTranslationChart" class="chart-plot-host" style="flex: 1 1 0; min-height: 0; position: relative; overflow: hidden;"></div>
+                    <div id="relativTranslationChartLegendHost" class="chart-legend-host" style="flex-shrink: 0; min-height: 60px; display: flex; justify-content: center; align-items: center; overflow: hidden; font-size: 0.9em; background: rgba(0,0,0,0.3); border-radius: 6px; margin-top: 10px;"></div>
+                    <div id="relativ-translation-y-axis-overlay" title="Y-Achse zoomen"></div>
+                    <div id="relativ-translation-x-axis-overlay" title="X-Achse zoomen"></div>
+                </div>
+            </div>
+            
+            <!-- TAB 4: Lissajous -->
+            <div id="relativLissajousTab" style="display: none; flex-grow: 1; align-items: center; justify-content: center;">
+                <h3 style="color: rgba(255,255,255,0.3);"><i class="fas fa-tools"></i> Modus 4 (Phasen-Lissajous) ist noch nicht implementiert</h3>
             </div>
           </div>
 
@@ -1245,6 +1432,9 @@
                 <div class="vector-align-toolbar">
                   <div class="vector-align-toolbar-primary">
                     <div class="vector-align-source-switch" role="group" aria-label="ACC Datenquelle">
+                      <select id="alignNodeSelect" class="vector-align-source-btn" style="background:#555; color:#fff; border-color: rgba(255,255,255,0.2); outline: none; cursor: pointer; border-radius: 4px; padding: 4px 8px; font-weight: bold; margin-right: 15px;">
+                        <option value="master">Master (CH1)</option>
+                      </select>
                       <button id="alignSourceRawBtn" class="vector-align-source-btn active" type="button">Rohwerte</button>
                       <button id="alignSourceCalibratedBtn" class="vector-align-source-btn" type="button">Kalibriert</button>
                       <button id="alignSourceCalibratedCutBtn" class="vector-align-source-btn" type="button">Kalibriert - g</button>
@@ -1473,6 +1663,7 @@
             </div>
           </div>
 
+          <!-- MOTION VIEWPORT DISABLED
           <div id="motionViewportArea" style="display:none;">
             <div id="motionViewportTab" class="vector-align-layout">
               <div class="vector-align-stage">
@@ -1700,13 +1891,378 @@
               </div>
             </div>
           </div>
+          END MOTION VIEWPORT DISABLED -->
+
+          <div id="impactTestArea" style="display:none; padding: 20px; color: white;">
+            <style>
+              .impact-card { background: rgba(20,25,30,0.8); border: 1px solid rgba(255,214,0,0.2); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+              .impact-btn { background: #ffd600; color: #111; border: none; padding: 10px 20px; font-weight:bold; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+              .impact-btn:hover { background: #ffea00; }
+              .impact-btn.armed { background: #ff4a4a !important; color: white; animation: pulse 1.5s infinite; }
+              @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,74,74, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(255,74,74, 0); } 100% { box-shadow: 0 0 0 0 rgba(255,74,74, 0); } }
+              .impact-result-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+              .impact-result-table th, .impact-result-table td { border: 1px solid rgba(255,255,255,0.1); padding: 8px; text-align: center; }
+              .impact-result-table th { background: rgba(255,214,0,0.1); color: #ffd600; }
+              .danger-rpm { color: #ff6b6b; font-weight: bold; }
+            </style>
+            <h1 style="color:#ffd600; font-size:1.5rem; margin-top:0; margin-bottom:15px; display:flex; align-items:center; justify-content:space-between;">
+                <span>Modal Analysis (Impact Test)</span>
+                <div style="font-size:0.9rem;">
+                    <button id="btnSaveSession" style="background:#333; color:#fff; border:1px solid #555; padding:6px 12px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:0.9em; margin-right:5px;">💾 Save</button>
+                    <button id="btnLoadSession" style="background:#333; color:#fff; border:1px solid #555; padding:6px 12px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:0.9em;">📂 Load</button>
+                    <input type="file" id="impactFileInput" accept=".json" style="display:none;">
+                </div>
+            </h1>
+            <div class="impact-card">
+              <!-- ZENTRALER PROZESSPARAMETER-BLOCK -->
+              <div id="processParamsBlock" style="background:#111; border:1px solid #444; border-left:4px solid #ff4a4a; border-radius:8px; padding:15px; margin-bottom:20px;">
+                <span style="display:block; font-size:0.85em; color:#ff4a4a; margin-bottom:15px; text-transform:uppercase; font-weight:bold;">🔧 Maschinendaten & Prozessparameter</span>
+                
+                <!-- Zeile 1: Prozess & Schnittdaten -->
+                <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end; margin-bottom:15px; border-bottom:1px solid #333; padding-bottom:15px;">
+                  <div>
+                    <label style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Modus</label>
+                    <div style="display:flex; gap:10px; padding-bottom: 4px;">
+                      <label style="cursor:pointer; color:#fff;"><input type="radio" name="impactMode" value="fraesen" checked style="accent-color:#ffd600;"> Fräsen</label>
+                      <label style="cursor:pointer; color:#fff;"><input type="radio" name="impactMode" value="drehen" style="accent-color:#ffd600;"> Drehen</label>
+                    </div>
+                  </div>
+                  
+                  <div id="unifiedFrasenConfig" style="display:flex; flex-wrap:wrap; gap:15px; align-items:flex-end;">
+                    <div id="impactFluteContainer">
+                      <label style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Zähnezahl (Z)</label>
+                        <select id="impactFluteCount" style="padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                          <option value="1">1 Schneide</option>
+                          <option value="2">2 Schneiden</option>
+                          <option value="3">3 Schneiden</option>
+                          <option value="4" selected>4 Schneiden</option>
+                          <option value="5">5 Schneiden</option>
+                          <option value="6">6 Schneiden</option>
+                          <option value="8">8 Schneiden</option>
+                          <option value="custom">Manuell</option>
+                        </select>
+                        <input type="number" id="impactFluteCountCustom" placeholder="Z" value="4" style="background:#222; color:#fff; border:1px solid #555; padding:6px; border-radius:4px; width:50px; display:none;" min="1">
+                    </div>
+                    <div>
+                      <label for="ssvDiameterInput" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Durchmesser D (mm)</label>
+                      <input type="number" id="ssvDiameterInput" value="100" step="1" min="1" style="width:100px; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                    </div>
+                    <div>
+                      <label for="ssvVcInput" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Schnittgeschw. v_c (m/min)</label>
+                      <input type="number" id="ssvVcInput" value="200" step="5" min="1" style="width:110px; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label for="ssvRpmInput" style="display:block; font-size:0.85em; color:#ffd600; margin-bottom:4px; font-weight:bold;">Zieldrehzahl N_0</label>
+                    <input type="number" id="ssvRpmInput" value="637" style="width:110px; padding:6px; background:#222; color:#ffd600; border:1px solid #555; border-radius:4px; font-weight:bold;">
+                  </div>
+                </div>
+
+                <!-- Zeile 2: SSV-Limits & Resonanz -->
+                <div style="display:flex; flex-wrap:wrap; gap:15px; align-items:flex-end;">
+                  <div style="flex:1; min-width:140px; display:flex; gap:10px;">
+                    <div style="flex:1;">
+                        <label for="ssvFreqWp" style="display:block; font-size:0.85em; color:#ffd600; margin-bottom:4px; opacity:0.9;">f_c Werkstück (Hz)</label>
+                        <input type="number" id="ssvFreqWp" placeholder="WP Hz" step="0.1" style="width:100%; padding:6px; background:#222; color:#ffd600; border:1px solid #ffd600; border-radius:4px; font-weight:bold;">
+                    </div>
+                    <div style="flex:1;">
+                        <label for="ssvFreqTool" style="display:block; font-size:0.85em; color:#00ffff; margin-bottom:4px; opacity:0.9;">f_c Werkzeug (Hz)</label>
+                        <input type="number" id="ssvFreqTool" placeholder="TZ Hz" step="0.1" style="width:100%; padding:6px; background:#222; color:#00ffff; border:1px solid #00ffff; border-radius:4px; font-weight:bold;">
+                    </div>
+                  </div>
+                  <div style="flex:1; min-width:140px;">
+                    <label for="ssvAmpPercent" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">SSV-Amplitude ΔN (%)</label>
+                    <input type="number" id="ssvAmpPercent" value="10" min="1" max="50" style="width:100%; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                  </div>
+                  <div style="flex:1; min-width:140px;">
+                    <label for="ssvAccelInput" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Spindelbeschl. a_max</label>
+                    <input type="number" id="ssvAccelInput" value="6000" style="width:100%; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                  </div>
+                  <div style="flex:1; min-width:140px;">
+                    <label for="ssvMaxFreqLimit" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Max. SSV-Frequenz (Hz)</label>
+                    <input type="number" id="ssvMaxFreqLimit" value="2.0" step="0.1" style="width:100%; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                  </div>
+                  <div style="display:flex; flex-direction:column; justify-content:flex-end;">
+                    <span style="display:block; font-size:0.8em; color:#666; margin-bottom:4px;">Dämpfung</span>
+                    <strong id="ssvSelectedDecay" style="display:block; padding:6px 0; color:#888; min-width:60px;">-- ms</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ROW 1: Measurement Targets (Pills) -->
+              <style>
+                .impact-target-radio { display: none; }
+                .impact-target-label {
+                    flex: 1; text-align: center; padding: 6px 10px; background: #2a2a2a; border: 2px solid #444;
+                    border-radius: 6px; color: #888; font-size: 0.95em; font-weight: bold; cursor: pointer; transition: all 0.2s ease;
+                    display: flex; align-items: center; justify-content: center;
+                }
+                .impact-target-label:hover { background: #333; }
+                .impact-target-radio:checked + .impact-target-label.wp {
+                    background: rgba(255, 214, 0, 0.15); border-color: #ffd600; color: #ffd600; box-shadow: 0 0 8px rgba(255, 214, 0, 0.2);
+                }
+                .impact-target-radio:checked + .impact-target-label.tl {
+                    background: rgba(77, 166, 255, 0.15); border-color: #4da6ff; color: #4da6ff; box-shadow: 0 0 8px rgba(77, 166, 255, 0.2);
+                }
+              </style>
+              <div style="display:flex; gap:10px; margin-bottom: 12px;">
+                <input type="radio" name="impactTarget" id="targetWorkpiece" value="workpiece" class="impact-target-radio" checked>
+                <label for="targetWorkpiece" class="impact-target-label wp">🎯 Werkstück <span id="lblImpactCountWp" style="background:rgba(0,0,0,0.4); padding:2px 7px; border-radius:10px; font-size:0.85em; margin-left:8px; color:#ffd600;">(0)</span></label>
+                
+                <input type="radio" name="impactTarget" id="targetTool" value="tool" class="impact-target-radio">
+                <label for="targetTool" class="impact-target-label tl">🛠️ Werkzeug <span id="lblImpactCountTool" style="background:rgba(0,0,0,0.4); padding:2px 7px; border-radius:10px; font-size:0.85em; margin-left:8px; color:#4da6ff;">(0)</span></label>
+              </div>
+
+              <!-- ROW 2: Primary Control Bar -->
+              <div style="display:flex; gap: 10px; align-items:center; margin-bottom: 10px; background: #222; padding: 10px; border-radius: 6px; border: 1px solid #444; flex-wrap:wrap;">
+                <button id="btnArmImpactV2" class="impact-btn" style="flex-shrink:0;">Start Test (Arm Trigger)</button>
+                <div style="display:flex; flex-direction:column; justify-content:center; padding: 0 10px; width:120px; border-left: 1px solid #444;">
+                  <label for="impactTriggerThresholdV2" style="font-size:0.75em; color:#aaa; margin-bottom:2px;">Trigger: <span id="lblImpactTriggerValue" style="color:#ffd600; font-weight:bold;">4g</span></label>
+                  <input type="range" id="impactTriggerThresholdV2" min="0.1" max="16" value="4" step="0.1" style="accent-color:#ffd600; width:100%; margin:0;">
+                </div>
+                <div style="display:flex; align-items:center; gap:5px; border-left: 1px solid #444; padding-left: 10px;">
+                  <input type="checkbox" id="impactAutoRestart" style="accent-color:#ffd600; width:16px; height:16px;">
+                  <label for="impactAutoRestart" style="font-size:0.9em; color:#fff; cursor:pointer;">Auto-Restart</label>
+                </div>
+                <div style="flex:1;"></div>
+                <button id="btnImpactClear" style="background:#333; color:#ddd; border:1px solid #555; padding:4px 12px; border-radius:4px; cursor:pointer; font-size: 0.9em; transition: 0.2s;" onmouseover="this.style.background='#555'" onmouseout="this.style.background='#333'">Memory leeren</button>
+                <div style="font-family: monospace; font-size: 1.1rem; text-align:right; margin-left: 15px;" id="impactStatusStr">STATUS: IDLE</div>
+              </div>
+
+              <style>
+                  .impact-size-btn {
+                      background: rgba(255,255,255,0.1); border: 1px solid #555; border-radius: 4px;
+                      color: #fff; padding: 2px 8px; font-size: 0.8em; cursor: pointer; margin-left: 4px;
+                  }
+                  .impact-size-btn:hover { background: rgba(255, 214, 0, 0.2); border-color: #ffd600; color: #ffd600; }
+              </style>
+
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
+                  <div style="font-size: 0.9em; color: #aaa;">
+                      Rohsignal (Zeitanalyse)
+                  </div>
+                  <div>
+                      <button id="btnExt_impactTimeChartContainer" class="impact-size-btn" onclick="if(window.extendImpactChart) window.extendImpactChart('impactTimeChartContainer')">⛶ Extend</button>
+                      <button id="btnToggle_impactTimeChartContainer" class="impact-size-btn" style="color:#ffd600; font-weight:bold;" onclick="if(window.toggleImpactChart) window.toggleImpactChart('impactTimeChartContainer')">
+                          <span id="chevron_impactTimeChartContainer">▲</span>
+                      </button>
+                  </div>
+              </div>
+              <div id="impactTimeChartContainer" style="width: 100%; height: 250px; background: #111; border-radius:8px; overflow:hidden; margin-bottom: 20px; transition: height 0.3s ease;"></div>
+
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
+                  <div style="font-size: 0.9em; color: #aaa; display: flex; align-items: center; gap: 15px;">
+                      <span>Frequenzspektrum (FFT)</span>
+                      <div style="display:flex; gap: 10px; font-weight: normal; font-size: 0.85em;">
+                          <label style="cursor:pointer; color:#ff4a4a; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="impactAxisX" checked style="accent-color:#ff4a4a;"> X</label>
+                          <label style="cursor:pointer; color:#4caf50; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="impactAxisY" checked style="accent-color:#4caf50;"> Y</label>
+                          <label style="cursor:pointer; color:#4da6ff; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="impactAxisZ" checked style="accent-color:#4da6ff;"> Z</label>
+                      </div>
+                  </div>
+                  <div>
+                      <button id="btnExt_impactChartContainer" class="impact-size-btn" onclick="if(window.extendImpactChart) window.extendImpactChart('impactChartContainer')">⛶ Extend</button>
+                      <button id="btnToggle_impactChartContainer" class="impact-size-btn" style="color:#ffd600; font-weight:bold;" onclick="if(window.toggleImpactChart) window.toggleImpactChart('impactChartContainer')">
+                          <span id="chevron_impactChartContainer">▲</span>
+                      </button>
+                  </div>
+              </div>
+              <div id="impactChartContainer" style="width: 100%; height: 250px; background: #111; border-radius:8px; overflow:hidden; margin-bottom: 20px; transition: height 0.3s ease;"></div>
+
+              <!-- Drehzahldiagramm Bundle (Nur für Fräsen) -->
+              <div id="rpmChartWrapper" style="display:block;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
+                    <div style="display:flex; align-items:center;">
+                        <div style="font-size: 0.9em; color: #aaa; margin-right: 15px; display:flex; align-items:center; gap:8px;">
+                            Spindeldrehzahl Risiko-Analyse
+                            <button id="rpmInfoDocBtn" onclick="document.getElementById('rpmInfoDocOverlay').style.display='flex';" title="Ausführliche Erklärung zur Spindeldrehzahl Risiko-Analyse" style="background: rgba(255,214,0,0.15); border: 1px solid #FFD600; color: #FFD600; cursor: pointer; border-radius: 50%; width: 22px; height: 22px; font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center; padding: 0; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,214,0,0.4)';" onmouseout="this.style.background='rgba(255,214,0,0.15)';">?</button>
+                        </div>
+                        <div style="font-size: 0.85em;">
+                            <label style="margin-left:10px; cursor:pointer; color:#fff;"><input type="radio" name="impactViewFilter" value="combined" checked style="accent-color:#ffd600;"> Kombiniert</label>
+                            <label style="margin-left:10px; cursor:pointer; color:#ffd600;"><input type="radio" name="impactViewFilter" value="workpiece" style="accent-color:#ffd600;"> Nur Werkstück</label>
+                            <label style="margin-left:10px; cursor:pointer; color:#00ffff;"><input type="radio" name="impactViewFilter" value="tool" style="accent-color:#ffd600;"> Nur Werkzeug</label>
+                        </div>
+                    </div>
+                    <div>
+                        <button id="btnExt_rpmChartContainer" class="impact-size-btn" onclick="if(window.extendImpactChart) window.extendImpactChart('rpmChartContainer')">⛶ Extend</button>
+                        <button id="btnToggle_rpmChartContainer" class="impact-size-btn" style="color:#ffd600; font-weight:bold;" onclick="if(window.toggleImpactChart) window.toggleImpactChart('rpmChartContainer')">
+                            <span id="chevron_rpmChartContainer">▲</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="rpmChartContainer" style="width: 100%; height: 250px; background: #111; border-radius:8px; overflow:hidden; transition: height 0.3s ease;"></div>
+                
+                <details style="margin-top: 15px; margin-bottom: 20px; background: rgba(255,255,255,0.05); border: 1px solid #333; border-radius: 8px; padding: 10px;">
+                    <summary style="cursor: pointer; color: #4da6ff; font-weight: bold; outline: none; user-select: none;">ℹ️ Wie werden "Gute" und "Schlechte" Drehzahlen berechnet?</summary>
+                    <div style="margin-top: 12px; font-size: 0.9em; color: #ccc; line-height: 1.5;">
+                        <p style="margin-top:0;">Die Auswertung basiert auf der <strong>Regenerativen Ratter-Theorie (Stabilitätskeulen-Mechanik)</strong>.</p>
+                        <ul style="padding-left: 20px; margin-bottom: 10px;">
+                            <li style="margin-bottom: 8px;"><strong style="color:#ff4a4a;">Rote Bereiche (Resonanz-Gefahr):</strong> Hier entspricht die <em>Zahneingriffsfrequenz</em> (oder deren natürliche Harmonische, z.B. jeder 2. oder 3. Zahneingriff) exakt der gemessenen Eigenfrequenz (f_c) deines Werkzeugs oder Werkstücks. Die Fräserzähne treffen genau im Rhythmus der strukturellen Schwingung wieder ins Material und schaukeln die Maschine gewaltsam auf.<br>
+                            <span style="display:inline-block; margin-top:4px; font-size:0.9em; color:#aaa;">Formel: <code style="background:#222; padding:2px 4px; border-radius:3px; color:#fff;">Drehzahl = (f_c * 60) / (Zähnezahl * Ordnung)</code></span></li>
+                            <li><strong style="color:#4caf50;">Grüne Bereiche (Sweet Spots):</strong> Hier läuft die Spindeldrehzahl gezielt <em>asynchron</em> zur mechanischen Schwingung. Der Phasenversatz sorgt dafür, dass die Fräserzähne die aufgeworfene Ratterwelle des vorherigen Zahnes "wegschneiden". Die Vibration löscht sich selbst aus (Dämpfungseffekt).</li>
+                        </ul>
+                        <p style="margin-bottom:0; color:#aaa; font-style:italic;"><strong>Hinweis zur Dämpfung:</strong> Je flacher und breiter ein Peak im oberen Diagramm ist (hohe Systemdämpfung), desto weicher verlaufen auch die Zonen hier. Ein extrem spitzer Peak bedeutet geringe Dämpfung und führt zu scharfen, gefährlichen Resonanzzonen.</p>
+                    </div>
+                </details>
+              </div>
+
+              <!-- SSV Calculator Module (Immer sichtbar) -->
+              <div id="ssvCalculatorCard" style="display:block; margin-top:15px; padding:20px; background:rgba(255,255,255,0.05); border:1px solid #444; border-radius:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; padding-bottom:8px; margin-bottom:15px;">
+                   <h3 style="color:#ffd600; margin:0;">⚙️ Spindle Speed Variation (SSV) Ausgabe</h3>
+                   <span style="font-size:0.8em; color:#aaa;">(Berechnet aus Prozessparametern oben)</span>
+                </div>
+                
+                <div style="display:flex; justify-content:center;">
+                  <div style="flex:1; max-width:600px; background:linear-gradient(135deg, rgba(255,214,0,0.1), rgba(255,214,0,0.0)); padding:20px; border-radius:6px; border-left:3px solid #ffd600; display:flex; flex-direction:column; justify-content:center;">
+                    <span style="display:block; font-size:0.85em; color:#ffd600; margin-bottom:15px; text-transform:uppercase; font-weight:bold;">CNC Optimal-Parameter</span>
+                    
+                    <div style="display:flex; gap: 15px; margin-bottom:15px;">
+                        <div style="flex:1; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
+                            <div style="color:#ccc; font-size:0.9em; margin-bottom:4px;">SSV-Amplitude (Absolut)</div>
+                            <strong id="ssvResultAmp" style="color:#4caf50; font-size:1.5em; display:block;">-- U/min</strong>
+                        </div>
+                        <div style="flex:1; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
+                            <div style="color:#ccc; font-size:0.9em; margin-bottom:4px;">SSV-Amplitude (Relativ)</div>
+                            <strong id="ssvResultAmpPercent" style="color:#4caf50; font-size:1.5em; display:block;">-- %</strong>
+                        </div>
+                    </div>
+                    
+                    <div style="display:flex; gap: 15px;">
+                        <div style="flex:1; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
+                            <div style="color:#ccc; font-size:0.9em; margin-bottom:4px;">SSV-Frequenz (f_m)</div>
+                            <strong id="ssvResultFreq" style="color:#4caf50; font-size:1.5em; display:block;">-- Hz</strong>
+                        </div>
+                        <div style="flex:1; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
+                            <div style="color:#ccc; font-size:0.9em; margin-bottom:4px;">Periodendauer (T_m)</div>
+                            <strong id="ssvResultPeriod" style="color:#4caf50; font-size:1.5em; display:block;">-- s</strong>
+                        </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <!-- SSV Calculator End -->
+            </div>
+
+            <div class="impact-card" id="impactResultsCard" style="display:none;">
+              <h2 style="color: #ffd600; margin-top:0;">Ergebnisse</h2>
+              <div style="font-size: 1.2rem; margin-bottom: 15px;">Stärkste globale Resonanz: <strong id="impactPeakFreqDisplay" style="color:white; font-size:1.8rem;">-- Hz</strong></div>
+              
+              <div id="impactTablesContainer" style="display:flex; gap: 20px; flex-wrap: wrap;">
+                  <!-- Dynamically populated by JS (side by side tables) -->
+              </div>
+
+
+              <div style="margin-top: 25px; border-top: 1px solid #333; padding-top: 15px; text-align: right;">
+                <button id="btnImpactPdf" style="background:#4caf50; color:#fff; border:none; padding:8px 15px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:0.9em;">📄 Als PDF exportieren</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Damping Help Overlay -->
+          <div id="dampingHelpOverlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; padding: 20px;">
+            <div style="background:#1a1a1a; border: 1px solid #444; border-left: 5px solid #ffd600; border-radius: 8px; padding: 25px; max-width: 600px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.8);">
+               <h2 style="color:#ffd600; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px;">Was ist das Lehr'sche Dämpfungsmaß D?</h2>
+               <p style="color:#ccc; line-height:1.5;">Das Dämpfungsmaß <strong style="color:#fff;">D</strong> (oft auch als ζ bezeichnet) ist die wichtigste physikalische Kenngröße zur Bewertung von Schwingungseigenschaften in der Maschinenbaudynamik.</p>
+               <p style="color:#ccc; line-height:1.5;">Im Gegensatz zur reinen Ausschwingzeit in Millisekunden, welche hochfrequente Bauteile physikalisch bedingt "schöngerechnet" bevorzugt, setzt das Dämpfungsmaß D das Abklingen der Schwingungsenergie <strong>exakt ins Verhältnis zur Eigenfrequenz (f_c)</strong>.</p>
+               <h3 style="color:#ccc; margin-bottom: 10px; margin-top: 20px;">Interpretation der Werte:</h3>
+               <ul style="color:#ccc; line-height: 1.6; padding-left: 20px;">
+                 <li><strong style="color:#4caf50;">D ≥ 4.0 % (Hervorragend):</strong> Perfekte strukturelle Dämpfung. Typisch für massive Polymerbeton-Gestelle, Mineralguss oder stark dämpfende (reibende) Führungen. Rattern tritt hier fast nie auf.</li>
+                 <li><strong style="color:#8bc34a;">D ≥ 1.5 % (Gut):</strong> Normaler Industriewert für konventionell aufgebaute Maschinenstrukturen (Gusseisen / schwer verschraubter Stahl).</li>
+                 <li><strong style="color:#ff9800;">D ≥ 0.5 % (Kritisch):</strong> Typisch für geschweißte Leichtbaustrukturen oder etwas längere Werkzeugaufspannungen. Spindeldrehzahl und Schnittparameter müssen exakt abgestimmt werden.</li>
+                 <li><strong style="color:#ff4a4a;">D < 0.5 % (Gefährlich):</strong> Sehr schwache Eigendämpfung (z.B. lange, schlanke Fräser oder homogene, monolithische Blöcke ohne Fügestellen). Extrem anfällig für gewaltsam aufschaukelndes Rattern. SSV-Fräsen dringend empfohlen!</li>
+               </ul>
+               <div style="text-align:right; margin-top: 25px;">
+                 <button onclick="document.getElementById('dampingHelpOverlay').style.display='none'" style="background:#333; color:#fff; border:1px solid #555; padding:8px 20px; border-radius:4px; font-weight:bold; cursor:pointer;">Schließen</button>
+               </div>
+            </div>
+          </div>
+
+          <!-- Resonance Help Overlay -->
+          <div id="resonanceHelpOverlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; padding: 20px;">
+            <div style="background:#1a1a1a; border: 1px solid #444; border-left: 5px solid #4da6ff; border-radius: 8px; padding: 25px; max-width: 600px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.8);">
+               <h2 style="color:#4da6ff; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px;">Was ist die Resonanz (Eigenfrequenz f_c)?</h2>
+               <p style="color:#ccc; line-height:1.6;">Die Resonanzfrequenz (gemessen in Hertz, Hz) beschreibt den empfindlichsten Punkt deiner Maschinenstruktur. Es ist die exakte Vibrationsfrequenz, mit der dein Fräser oder das aufgespannte Bauteil am liebsten "mitschwingt".</p>
+               <p style="color:#ccc; line-height:1.6;"><strong>Die Gefahr:</strong> Wird diese Strukturfrequenz während des Fräsens getroffen &mdash; etwa weil die Fräserzähne exakt in diesem Zeittakt in das Material hämmern (Zahneingriffsfrequenz) &mdash; beginnt die Maschine sich unaufhaltsam aufzuschaukeln. Das Resultat ist lautes, zerstörerisches <strong>Rattern (Chatter)</strong>, schlechte Oberflächen und rapide Werkzeugabnutzung.</p>
+               <p style="color:#ccc; line-height:1.6; margin-bottom: 0;"><strong>Der Nutzen:</strong> Das Ziel des Sensortests ist es, genau <em>diese Frequenz</em> punktgenau herauszufinden. Wenn unsere Software f_c kennt, kann sie eine Spindeldrehzahl für dich ausrechnen, bei der die Maschine absichtlich "asynchron" zur Vibration schneidet (Sweet-Spot-Fräsen) &mdash; das Rattern löscht sich dann quasi von selbst aus.</p>
+               <div style="text-align:right; margin-top: 25px;">
+                 <button onclick="document.getElementById('resonanceHelpOverlay').style.display='none'" style="background:#333; color:#fff; border:1px solid #555; padding:8px 20px; border-radius:4px; font-weight:bold; cursor:pointer;">Schließen</button>
+               </div>
+            </div>
+          </div>
+
+          <!-- Magnitude Help Overlay -->
+          <div id="magnitudeHelpOverlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; padding: 20px;">
+            <div style="background:#1a1a1a; border: 1px solid #444; border-left: 5px solid #ff9800; border-radius: 8px; padding: 25px; max-width: 600px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.8);">
+               <h2 style="color:#ff9800; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px;">Was ist die Magnitude (g)?</h2>
+               <p style="color:#ccc; line-height:1.6;">Die Magnitude gibt die "Wucht" oder Intensität der Schwingung im Frequenzspektrum an. Sie basiert hier auf der errechneten Beschleunigungsamplitude (in <strong>g</strong> bzw. m/s²).</p>
+               <p style="color:#ccc; line-height:1.6;">In der Praxis zeigt dir dieser Wert an, wie "willig" deine Maschine genau auf die Resonanzfrequenz reagiert. Ein kleiner Hammerschlag regt alle Frequenzen kurzfristig an, aber die schwachen Stellen schlagen besonders hoch aus (hohe Magnitude).</p>
+               <h3 style="color:#ccc; margin-bottom: 10px; margin-top: 20px;">Das bedeutet dieser Wert:</h3>
+               <ul style="color:#ccc; line-height: 1.6; padding-left: 20px;">
+                 <li><strong>Hohe Magnitude = Gefährlicher Peak.</strong> Die Frequenz wird im Frequenz-Graphen spitz wie eine Nadel in die Höhe schießen. Die kleinste Anregung im Prozess bringt deine Maschine sofort zum Rattern.</li>
+                 <li><strong>Niedrige Magnitude = Steiferes System.</strong> Die Resonanz existiert zwar, aber die Maschine schluckt die Energie verhältnismäßig gut weg (geringere Nachgiebigkeit).</li>
+               </ul>
+               <div style="text-align:right; margin-top: 25px;">
+                 <button onclick="document.getElementById('magnitudeHelpOverlay').style.display='none'" style="background:#333; color:#fff; border:1px solid #555; padding:8px 20px; border-radius:4px; font-weight:bold; cursor:pointer;">Schließen</button>
+               </div>
+            </div>
+          </div>
+
+          <!-- RPM Info Help Overlay -->
+          <div id="rpmInfoDocOverlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; padding: 20px;">
+            <div style="background:#1a1a1a; border: 1px solid #444; border-left: 5px solid #ff4a4a; border-radius: 8px; padding: 25px; max-width: 600px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.8); max-height:80vh; overflow-y:auto;">
+               <h2 style="color:#ff4a4a; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px;">Spindeldrehzahl Risiko-Analyse (Chatter)</h2>
+               <p style="color:#ccc; line-height:1.5;">Diese Analyse bewertet, bei welchen Spindeldrehzahlen das Risiko für <strong>Rattern (Regenerative Chatter)</strong> am größten ist, und wo sich die schwingungsfreien <strong>"Sweet Spots"</strong> befinden.</p>
+               
+               <h3 style="color:#ccc; margin-bottom:10px; margin-top:20px;">1. Die physikalische Grundlage</h3>
+               <p style="color:#ccc; line-height:1.5; margin-top:0;">Aus der Frequenzgangfunktion (FRF) des Hammertests wird der negativste Wert des Realteils abgelesen. Dieser Punkt markiert die instabilste Schwingung, bei der die Maschine am stärksten nachgibt. Trifft der Werkzeugzahn wiederholt im falschen Rhythmus auf die Oberfläche, schaukelt sich die Maschine auf.</p>
+
+               <h3 style="color:#ccc; margin-bottom:10px; margin-top:20px;">2. Berechnung der Sweet Spots</h3>
+               <p style="color:#ccc; line-height:1.5; margin-top:0;">Ein "Sweet Spot" ist eine perfekte Drehzahl, bei der jeder nachfolgende Zahn exakt asynchron zur Schwingung einschneidet und die Vibration dadurch physikalisch auslöscht. Sie wird berechnet durch:</p>
+               <div style="background:#222; padding:10px; border-radius:6px; color:#ffd600; text-align:center; font-family:monospace; font-size:1.1em; margin: 10px 0;">
+                  n = (60 * f_c) / (z * k)
+               </div>
+               <p style="color:#ccc; line-height:1.5; font-size:0.9em; margin-top:0;">
+                 <strong style="color:white;">n</strong> = Empfohlene Drehzahl [U/min]<br>
+                 <strong style="color:white;">f_c</strong> = Gemessene Ratterfrequenz (Peak) [Hz]<br>
+                 <strong style="color:white;">z</strong> = Anzahl der Schneiden/Zähne<br>
+                 <strong style="color:white;">k</strong> = Wellenzug (Ordnung z.B. 1, 2, 3...)
+               </p>
+
+               <h3 style="color:#ccc; margin-bottom:10px; margin-top:20px;">Rechen-Beispiel:</h3>
+               <div style="background:#222; padding:12px; border-left:4px solid #ffd600; border-radius:4px;">
+                 <p style="color:#eee; line-height:1.5; font-size:0.95em; margin:0 0 10px 0;">
+                   Resonanz-Peak bei <strong>800 Hz</strong>, Fräser mit <strong>4 Zähnen</strong> (z=4).
+                 </p>
+                 <ul style="color:#ffd600; margin:0; padding-left:20px; font-family:monospace; font-size:0.95em;">
+                   <li style="margin-bottom:6px;"><span style="color:white;">Für k=1 (Bester Sweet Spot):</span><br> n = (60 * 800) / (4 * 1) = <strong>12.000 U/min</strong></li>
+                   <li><span style="color:white;">Für k=2 (Zweiter Lobe):</span><br> n = (60 * 800) / (4 * 2) = <strong>6.000 U/min</strong></li>
+                 </ul>
+               </div>
+               <p style="color:#ff6b6b; line-height:1.4; font-size:0.85em; margin-top:15px; font-weight:bold;">⚠️ Fräst du exakt "zwischen" diesen Sweet-Spot-Drehzahlen, sinkt die maximal erlaubte Schnitttiefe drastisch ab!</p>
+
+               <div style="text-align:right; margin-top: 25px;">
+                 <button onclick="document.getElementById('rpmInfoDocOverlay').style.display='none'" style="background:#333; color:#fff; border:1px solid #555; padding:8px 20px; border-radius:4px; font-weight:bold; cursor:pointer; transition:background 0.2s;" onmouseover="this.style.background='#555'" onmouseout="this.style.background='#333'">Schließen</button>
+               </div>
+            </div>
+          </div>
 
           <div id="settings" style="display:none;">
 
 
-
             <!-- Settings Section -->
             <div id="section-settings" class="content-section">
+              
+              <div style="margin-bottom:30px; padding:15px; border:1px solid rgba(255, 255, 255, 0.08); border-radius:14px; background:rgba(21, 27, 35, 0.86); color:#eef3f8; box-shadow:0 14px 40px rgba(0,0,0,0.28);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                  <div style="font-size:0.85rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:rgba(255, 214, 0, 0.92);">Verbundene Sensoren</div>
+                  <button id="btnDiscoverNodes" style="background:#333; border:none; color:#ffd600; cursor:pointer; padding: 6px 12px; border-radius:4px; font-weight:bold;">↻ Neu suchen</button>
+                </div>
+                <div id="nodesList" style="display:flex; flex-direction:column; gap:8px; font-size:0.9rem;">
+                  <div style="color:rgba(255,255,255,0.5);">Suche im Netzwerk...</div>
+                </div>
+              </div>
+
               <h1>LSM6DSO SETTINGS</h1>
               <div id="settingsForm">
 
@@ -1786,17 +2342,13 @@
 
   
 
-  <script type="module" src="script2.js?v=2"></script>
+  <script type="module" src="script2.js?v=57"></script>
+  <script src="lib/jszip.min.js"></script>
   <script type="module" src="ui/replay-manager.js?v=2"></script>
+  <script type="module" src="ui/impact-test.js?v=5"></script>
   <script src="gl-matrix-min.js"></script>
 
                   <script>
-
-                    const { vec3, mat3, quat } = glMatrix;
-
-                    // Beispiel: quat.create() verwenden
-                    const q = quat.create();
-                    console.log("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW" + q);
 
 
 
@@ -1814,13 +2366,17 @@
                       sidebar.classList.remove('expanded');
                     });
 
-                    const dashboardSections = ['liveChartarea', 'fftChartarea', 'gyroFftChartarea', 'waterfallArea', 'gyroWaterfallArea', 'vectorAlignArea', 'motionViewportArea', 'settings'];
+                    const dashboardSections = ['liveChartarea', 'fftChartarea', 'gyroFftChartarea', 'waterfallArea', 'gyroWaterfallArea', 'vectorAlignArea', 'settings', 'impactTestArea', 'relativeAnalysisArea'];
 
                     function showDashboardSection(sectionId) {
                       dashboardSections.forEach((id) => {
                         const element = document.getElementById(id);
                         if (element) {
-                          element.style.display = id === sectionId ? 'block' : 'none';
+                          if (id === sectionId) {
+                            element.style.display = (id === 'relativeAnalysisArea') ? 'flex' : 'block';
+                          } else {
+                            element.style.display = 'none';
+                          }
                         }
                       });
 
@@ -1863,8 +2419,9 @@
                       showDashboardSection('vectorAlignArea');
                     });
 
-                    document.getElementById('navMotionViewport').addEventListener('click', function () {
-                      showDashboardSection('motionViewportArea');
+
+                    document.getElementById('navRelativAnalysis').addEventListener('click', function () {
+                      showDashboardSection('relativeAnalysisArea');
                     });
 
 
@@ -1952,11 +2509,11 @@
 
 
   <!-- ====== REPLAY UI START ====== -->
-  <input type="file" id="replayCsvInput" accept=".csv" multiple style="display: none;" />
+  <input type="file" id="replayCsvInput" accept=".csv, .zip" multiple style="display: none;" onchange="if(this.files.length > 0) document.getElementById('replayLoadingOverlay').classList.add('is-visible');" />
 
   <div id="replayControlBar" style="display: none; position: fixed; bottom: 0; left: 0; width: 100vw; height: 60px; background: rgba(15, 15, 15, 0.95); border-top: 1px solid #FFD600; z-index: 9999; align-items: center; padding: 0 20px; gap: 15px; box-sizing: border-box; backdrop-filter: blur(10px); box-shadow: 0 -5px 20px rgba(0,0,0,0.5);">
     <div style="color: #FFD600; font-weight: bold; font-family: 'Courier New', monospace; letter-spacing: 1px; font-size: 14px;">REPLAY MODE</div>
-    <button id="replayBtnTriggerLoad" onclick="document.getElementById('replayCsvInput').click();" style="background: transparent; color: #FFD600; border: 1px solid #FFD600; padding: 6px 12px; border-radius: 4px; cursor: pointer; height: 32px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="1.2em" height="1.2em" style="vertical-align: middle; margin-right: 4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Datei laden</button>
+    <button id="replayBtnTriggerLoad" onclick="window.triggerReplayLoad();" style="background: transparent; color: #FFD600; border: 1px solid #FFD600; padding: 6px 12px; border-radius: 4px; cursor: pointer; height: 32px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="1.2em" height="1.2em" style="vertical-align: middle; margin-right: 4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Datei laden</button>
     <div style="width: 1px; height: 30px; background: #333; margin: 0 5px;"></div>
     
     <button id="replayPlayBtn" style="background: #FFD600; color: black; border: none; padding: 6px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; height: 32px; width: 85px; display: flex; align-items: center; justify-content: center; gap: 6px;"><svg viewBox="0 0 24 24" fill="currentColor" width="1.2em" height="1.2em"><path d="M8 5v14l11-7z"/></svg> PLAY</button>
@@ -1996,13 +2553,20 @@
       const hiddenOtaBtn = document.getElementById('hiddenOtaTrigger');
       if (!fileInput) return;
       
+      window.currentOtaTargetIp = null;
+
+      window.triggerGlobalOtaUpload = function(targetIp, channelName) {
+         if(confirm(`WARNUNG: Ein inkorrektes System-Update für ${channelName || targetIp} kann das Gerät unbrauchbar machen.\n\nBist du dir sicher, dass du flashen möchtest?`)) {
+            window.currentOtaTargetIp = targetIp;
+            fileInput.value = '';
+            fileInput.click();
+         }
+      };
+
       if (hiddenOtaBtn) {
         hiddenOtaBtn.addEventListener('dblclick', (e) => {
           e.preventDefault();
-          if(confirm("WARNUNG: Ein inkorrektes System-Update kann das Gerät unbrauchbar machen.\n\nBist du dir sicher, dass du flashen möchtest?")) {
-            fileInput.value = '';
-            fileInput.click();
-          }
+          window.triggerGlobalOtaUpload("192.168.4.1", "Master (CH1)");
         });
       }
       
@@ -2034,8 +2598,8 @@
         const defaultEspHost = '192.168.4.1';
         const isLocalPreview = window.location.protocol === 'file:' || previewHosts.has(window.location.hostname) || (hasExplicitDevPort && window.location.hostname !== defaultEspHost);
 
-        if (isLocalPreview) {
-          alert("Fehler: Updates können nicht aus dem lokalen Entwickler-Modus (Live-Server / Dateisystem) gesendet werden. Das blockiert der lokale Server mit 'Method Not Allowed'.\n\nBitte öffne das Netzwerkkabel-Gerät direkt über http://" + defaultEspHost + " um ein Update durchzuführen.");
+        if (isLocalPreview && !window.currentOtaTargetIp) {
+          alert("Fehler: Updates können nicht aus dem lokalen Entwickler-Modus (Live-Server / Dateisystem) an unbekannte Nodes gesendet werden. Das blockiert der lokale Server mit 'Method Not Allowed'.\n\nBitte öffne das Netzwerkkabel-Gerät direkt über http://" + defaultEspHost + " um ein Update durchzuführen.");
           this.value = '';
           return;
         }
@@ -2053,7 +2617,11 @@
         statusText.style.color = '#f1f4f8';
         progressBar.style.width = '0%';
         
-        const uploadUrl = currentUploadType === 'firmware' ? '/update' : '/update_fs';
+        const activeIp = window.currentOtaTargetIp || window.location.hostname || defaultEspHost;
+        const uploadEndpoint = currentUploadType === 'firmware' ? '/update' : '/update_fs';
+        const uploadUrl = `http://${activeIp}${uploadEndpoint}`;
+        console.log(`[OTA] Uploading to ${uploadUrl}`);
+
         const xhr = new XMLHttpRequest();
         xhr.open('POST', uploadUrl, true);
         
@@ -2093,10 +2661,263 @@
         this.value = ''; // reset file input
       });
     });
+
+    // ====== LED CONFIGURATION LOGIC ======
+    function hexToRgb(hex) {
+      let r = 0, g = 0, b = 0;
+      if (hex.length === 7) {
+        r = parseInt(hex.substring(1,3), 16);
+        g = parseInt(hex.substring(3,5), 16);
+        b = parseInt(hex.substring(5,7), 16);
+      }
+      return [r, g, b];
+    }
+
+    function rgbToHex(arr) {
+      return "#" + arr.map(x => {
+        const hex = x.toString(16);
+        return hex.length === 1 ? "0" + hex : hex;
+      }).join("");
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+      const overlay = document.getElementById("ledConfigOverlay");
+      const btnOpen = document.getElementById("btnOpenLedConfigOverlay");
+      const btnClose = document.getElementById("btnCloseLedConfig");
+      const btnCancel = document.getElementById("btnCancelLedConfig");
+      const ledReady = document.getElementById("ledConfigReady");
+      const ledStream = document.getElementById("ledConfigStream");
+      const ledError = document.getElementById("ledConfigError");
+      const ledIntensity = document.getElementById("ledConfigIntensity");
+      const btnSave = document.getElementById("btnSaveLedConfig");
+
+      btnOpen.addEventListener("click", () => {
+        overlay.style.display = "flex";
+        activePreviewState = "ready"; 
+        loadLedConfig().finally(() => saveConfig(true));
+      });
+
+      const closeOverlay = () => {
+        overlay.style.display = "none";
+        activePreviewState = "none";
+        // To revert preview locally just reload from ESP and do a live update once fetched to wipe the old preview
+        loadLedConfig().finally(() => saveConfig(true));
+      };
+
+      btnClose.addEventListener("click", closeOverlay);
+      btnCancel.addEventListener("click", closeOverlay);
+
+      const ledReadyInt = document.getElementById("ledConfigReadyInt");
+      const ledStreamInt = document.getElementById("ledConfigStreamInt");
+      const ledErrorInt = document.getElementById("ledConfigErrorInt");
+
+      // Load from ESP32
+      function loadLedConfig() {
+        let targetIp = document.getElementById("settingsSensorTarget")?.value;
+        if (!targetIp || targetIp === "localhost" || targetIp === "127.0.0.1") {
+            targetIp = "192.168.4.1";
+        }
+        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+        
+        return fetch(protocol + '//' + targetIp + '/api/led_config')
+          .then(res => res.json())
+          .then(data => {
+             if (data.ready) ledReady.value = rgbToHex(data.ready);
+             if (data.stream) ledStream.value = rgbToHex(data.stream);
+             if (data.error) ledError.value = rgbToHex(data.error);
+             
+             if (data.ready_int !== undefined) {
+                 ledReadyInt.value = data.ready_int;
+                 document.getElementById("ledReadyIntVal").textContent = data.ready_int;
+             }
+             if (data.stream_int !== undefined) {
+                 ledStreamInt.value = data.stream_int;
+                 document.getElementById("ledStreamIntVal").textContent = data.stream_int;
+             }
+             if (data.error_int !== undefined) {
+                 ledErrorInt.value = data.error_int;
+                 document.getElementById("ledErrorIntVal").textContent = data.error_int;
+             }
+          })
+          .catch(err => console.log("Fehler beim Laden der LED Config", err));
+      }
+
+      // Initial load
+      setTimeout(loadLedConfig, 500);
+
+      let updateTimeout = null;
+      function onLedChange(e) {
+        if(updateTimeout) clearTimeout(updateTimeout);
+        
+        if (e && e.target && e.target.id) {
+            const id = e.target.id;
+            if (id.includes("Ready")) activePreviewState = "ready";
+            else if (id.includes("Stream")) activePreviewState = "stream";
+            else if (id.includes("Error")) activePreviewState = "error";
+        }
+
+        updateTimeout = setTimeout(() => {
+          saveConfig(true);
+        }, 100);
+      }
+
+      [ledReady, ledStream, ledError, ledReadyInt, ledStreamInt, ledErrorInt].forEach(el => {
+          if (el) el.addEventListener('input', onLedChange);
+      });
+
+      function saveConfig(isLiveUpdate) {
+        const payload = {
+          preview: activePreviewState,
+          save: !isLiveUpdate,
+          ready: hexToRgb(ledReady.value),
+          stream: hexToRgb(ledStream.value),
+          error: hexToRgb(ledError.value),
+          ready_int: parseInt(ledReadyInt.value, 10),
+          stream_int: parseInt(ledStreamInt.value, 10),
+          error_int: parseInt(ledErrorInt.value, 10)
+        };
+
+        let targetIp = document.getElementById("settingsSensorTarget")?.value;
+        if (!targetIp || targetIp === "localhost" || targetIp === "127.0.0.1") {
+            targetIp = "192.168.4.1";
+        }
+        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+        const originalText = btnSave.textContent;
+        
+        if (!isLiveUpdate) btnSave.textContent = "Speichere...";
+        
+        fetch(protocol + '//' + targetIp + '/api/led_config', {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(res => {
+          if(res.ok) {
+            if (!isLiveUpdate) {
+                btnSave.textContent = "Gespeichert!";
+                setTimeout(() => {
+                    btnSave.textContent = originalText;
+                    overlay.style.display = "none";
+                    activePreviewState = "none";
+                    saveConfig(true); // reset preview after saved
+                }, 1000);
+            }
+          } else {
+            if (!isLiveUpdate) {
+                btnSave.textContent = "Fehler!";
+                setTimeout(() => btnSave.textContent = originalText, 2000);
+            }
+          }
+        }).catch(err => {
+          console.error(err);
+          if (!isLiveUpdate) {
+              btnSave.textContent = "Fehler!";
+              setTimeout(() => btnSave.textContent = originalText, 2000);
+          }
+        });
+      }
+
+      const btnDefaults = document.getElementById("btnDefaultsLedConfig");
+      btnDefaults.addEventListener("click", () => {
+          ledReady.value = "#00ff00";
+          ledStream.value = "#0000ff";
+          ledError.value = "#ff0000";
+          ledReadyInt.value = 100;
+          ledStreamInt.value = 20;
+          ledErrorInt.value = 100;
+          document.getElementById("ledReadyIntVal").textContent = "100";
+          document.getElementById("ledStreamIntVal").textContent = "20";
+          document.getElementById("ledErrorIntVal").textContent = "100";
+          activePreviewState = "ready";
+          saveConfig(true);
+      });
+
+      btnSave.addEventListener("click", () => saveConfig(false));
+    });
   </script>
+
+  <!-- ====== LED OVERLAY ====== -->
+  <div id="ledConfigOverlay" style="position:fixed; inset:0; z-index:5000; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.7); backdrop-filter:blur(10px); transition:opacity 0.2s, visibility 0.2s;">
+    <div style="width:340px; background:#151b23; border:1px solid rgba(255,255,255,0.1); border-radius:12px; padding:20px; color:#f1f4f8; font-family:sans-serif; box-shadow:0 10px 40px rgba(0,0,0,0.5);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+        <h3 style="margin:0; font-size:1.1em; color:#ffd600;">LED KONFIGURATION</h3>
+        <button id="btnCloseLedConfig" style="background:transparent; border:none; color:#fff; cursor:pointer; font-size:1.2em;">&times;</button>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.05); padding:15px; border-radius:8px; display:flex; flex-direction:column; gap:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+           <div style="flex:1;">
+             <label style="font-size:0.9em; display:block;">Ready (<span id="ledReadyIntVal">100</span>%)</label>
+             <input type="range" id="ledConfigReadyInt" min="0" max="100" value="100" style="width:100px; cursor:pointer;" oninput="document.getElementById('ledReadyIntVal').textContent=this.value" />
+           </div>
+           <input type="color" id="ledConfigReady" value="#00ff00" style="width:36px; height:36px; padding:0; border:none; cursor:pointer; border-radius:4px;" />
+        </div>
+        <hr style="border:0; border-top:1px solid rgba(255,255,255,0.05); margin:0;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+           <div style="flex:1;">
+             <label style="font-size:0.9em; display:block;">Stream (<span id="ledStreamIntVal">100</span>%)</label>
+             <input type="range" id="ledConfigStreamInt" min="0" max="100" value="100" style="width:100px; cursor:pointer;" oninput="document.getElementById('ledStreamIntVal').textContent=this.value" />
+           </div>
+           <input type="color" id="ledConfigStream" value="#0000ff" style="width:36px; height:36px; padding:0; border:none; cursor:pointer; border-radius:4px;" />
+        </div>
+        <hr style="border:0; border-top:1px solid rgba(255,255,255,0.05); margin:0;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+           <div style="flex:1;">
+             <label style="font-size:0.9em; display:block;">Error (<span id="ledErrorIntVal">100</span>%)</label>
+             <input type="range" id="ledConfigErrorInt" min="0" max="100" value="100" style="width:100px; cursor:pointer;" oninput="document.getElementById('ledErrorIntVal').textContent=this.value" />
+           </div>
+           <input type="color" id="ledConfigError" value="#ff0000" style="width:36px; height:36px; padding:0; border:none; cursor:pointer; border-radius:4px;" />
+        </div>
+      </div>
+      
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:20px;">
+        <button id="btnDefaultsLedConfig" style="padding:8px 16px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:4px; color:#fff; cursor:pointer; font-size:0.85em;">Standardwerte</button>
+        <div style="display:flex; gap:10px;">
+          <button id="btnCancelLedConfig" style="padding:8px 16px; background:rgba(255,255,255,0.1); border:none; border-radius:4px; color:#fff; cursor:pointer;">Abbrechen</button>
+          <button id="btnSaveLedConfig" style="padding:8px 16px; background:#386596; border:none; border-radius:4px; color:#fff; font-weight:bold; cursor:pointer;">Speichern</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <!-- ====== OTA UPDATE UI END ====== -->
+  <script>
+    window.triggerReplayLoad = function() {
+        const overlay = document.getElementById('replayLoadingOverlay');
+        const input = document.getElementById('replayCsvInput');
+        const fnameEl = document.getElementById('replayLoadingFilename');
+        
+        if (fnameEl) fnameEl.textContent = "Warte auf Dateiauswahl...";
+        if (overlay) overlay.classList.add('is-visible');
+        
+        // Reset the input so we can detect if the user selected a new file
+        input.value = '';
+        
+        // Timeout ensures the browser paints the "visible" state
+        // BEFORE the OS file dialog blocks the thread
+        setTimeout(() => {
+            // Check gracefully if the user really didn't pick anything
+            const gracefullyHide = () => {
+                setTimeout(() => {
+                    if (input.files.length === 0) {
+                        if(overlay) overlay.classList.remove('is-visible');
+                    }
+                }, 1000);
+            };
+
+            // Chrome/Modern browsers fire 'cancel' if the user closes the dialog without picking a file
+            input.addEventListener('cancel', gracefullyHide, {once: true});
+            
+            // Fallback for browsers that do not support the 'cancel' event
+            const onFocus = () => {
+                window.removeEventListener('focus', onFocus);
+                gracefullyHide();
+            };
+            window.addEventListener('focus', onFocus);
+            
+            input.click();
+        }, 50);
+    };
+  </script>
   <link rel="stylesheet" href="uPlot.min.css">
   <link rel="stylesheet" href="stylesheet.css">
 </body>
-
 </html>

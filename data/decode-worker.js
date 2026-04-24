@@ -40,10 +40,24 @@ setInterval(() => {
 
 
 
+let timeSyncOffset = 0;
+
 onmessage = function (event) {
   let arrayBuffer = event.data;
   if (!(arrayBuffer instanceof ArrayBuffer)) {
-    console.warn("[DECODE-WORKER] Skipping invalid message " + String(event.data));
+    if (event.data && event.data.type === 'time_sync') {
+        if (lastTimestamp !== 0) {
+            // Apply lightweight EMA for the offset internally to prevent visual jitter
+            const newOffset = event.data.payload - lastTimestamp;
+            if (timeSyncOffset === 0) {
+               timeSyncOffset = newOffset;
+            } else {
+               timeSyncOffset = 0.9 * timeSyncOffset + 0.1 * newOffset;
+            }
+        }
+        return;
+    }
+    // console.warn("[DECODE-WORKER] Skipping invalid message " + String(event.data));
     return;
   }
 
@@ -61,10 +75,7 @@ onmessage = function (event) {
 
     switch (tag) {
       case 4: { // Timestamp-Frame
-        const ts_raw = (view.getUint8(offset + 4) << 24) |
-                       (view.getUint8(offset + 3) << 16) |
-                       (view.getUint8(offset + 2) << 8)  |
-                        view.getUint8(offset + 1);
+        const ts_raw = view.getUint32(offset + 1, true);
 
         const ts = ts_raw * LSBSTEP // Umwandlung in Mikrosekunden
 
@@ -98,7 +109,7 @@ onmessage = function (event) {
           currentTimestamp = lastTimestamp + samplesSinceLastTsGyro * timestampStepGyro;
         }
 
-        gyro.push({ time: currentTimestamp, x: x , y: y , z: z  });
+        gyro.push({ time: currentTimestamp + timeSyncOffset, x: x , y: y , z: z  });
         samplesSinceLastTsGyro++;
         break;
       }
@@ -114,7 +125,7 @@ onmessage = function (event) {
           currentTimestamp = lastTimestamp + samplesSinceLastTsAcc * timestampStepAcc;
         }
 
-        acc.push({ time: currentTimestamp, x: x , y: y, z: z, total: total });
+        acc.push({ time: currentTimestamp + timeSyncOffset, x: x , y: y, z: z, total: total });
         samplesSinceLastTsAcc++;
         
         break;
@@ -127,7 +138,7 @@ onmessage = function (event) {
           currentTimestamp = lastTimestamp + samplesSinceLastTsTemp * timestampStepTemp;
         }
         //console.log("TEMPVALUE: " + x);
-        temp.push({ time: currentTimestamp, value: x });
+        temp.push({ time: currentTimestamp + timeSyncOffset, value: x });
         samplesSinceLastTsTemp++;
         break;
       }

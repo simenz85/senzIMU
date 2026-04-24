@@ -25,7 +25,7 @@ const RECONNECT_MIN_DELAY = 100; // 1 Sek
 const RECONNECT_MAX_DELAY = 3000; // 3 Sek
 
 // Heartbeat-Konfiguration
-const PING_INTERVAL_MS = 20000; // 20 Sekunden
+const PING_INTERVAL_MS = 3000;  // Alle 3 Sekunden Ping senden, um IDF Timeout zuvorzukommen
 const PONG_WAIT_MS = 5000;      // 5 Sek warten auf Antwort
 
 function log(...args) {
@@ -169,9 +169,12 @@ function connectWebSocket(url) {
     ws.onopen = () => {
         log("Connection opened");
         postMessage({ type: 'connected', payload: { url } });
+        
+        // Asynchrone Anforderung der IMU-Konfiguration erst NACHDEM der Handshake durch ist
+        ws.send("get_config");
 
-        // Starte Ping/Heartbeat
-        //startHeartbeat();
+        // Starte Ping/Heartbeat alle 3 Sekunden
+        startHeartbeat();
     };
 
     ws.onmessage = (event) => {
@@ -194,6 +197,14 @@ function connectWebSocket(url) {
                     const parsed = JSON.parse(event.data);
                     if (parsed?.type === 'espStats') {
                         postMessage({ type: 'espStats', payload: parsed });
+                        return;
+                    }
+                    if (parsed?.type === 'firmwareVer') {
+                        postMessage({ type: 'firmwareVer', payload: parsed.version });
+                        return;
+                    }
+                    if (parsed?.type === 'node_registered') {
+                        postMessage({ type: 'node_registered', payload: parsed });
                         return;
                     }
                 } catch (error) {
@@ -244,11 +255,9 @@ function startHeartbeat() {
     pingInterval = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
             try {
-                // Text-Ping senden (Server-spezifisch)
-                ws.send("ping");
-                // Timeout setzen, falls kein Pong/Nachricht kommt
-                startPongTimeout();
-                // log("Ping sent");
+                // Sende explizites JSON PING. Der Handler im C++ Code ("COMMAND": "PING") ignoriert dies,
+                // ABER es weckt den ESP-IDF Traffic auf und verhindert den 5-Sekunden Timeout absolut zuverlässig!
+                ws.send(JSON.stringify({ "COMMAND": "PING" }));
             } catch (err) {
                 console.error("[WS-WORKER] Failed to send ping:", err);
             }

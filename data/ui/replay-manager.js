@@ -3,8 +3,8 @@ import { setFixedBootTimeOffset, resetFixedBootTimeOffset } from '../utils/forma
 
 
 window.replayData = {
-    acc: [],
-    gyro: []
+    acc: [[], [], [], []],
+    gyro: [[], [], [], []]
 };
 let replayData = window.replayData;
 
@@ -22,17 +22,12 @@ let currentGyroIndex = 0;
 
 export function initReplayManager() {
     window.initOfflineReplay = () => {
-        window.isOfflineReplayMode = true;
-        // Stop boot overlay
+        // Offline-Flag und Disconnect passieren erst in loadCsvFiles!
+
+        // Hide the boot overlay if we are coming from the boot screen
         const overlay = document.getElementById('bootOverlay');
         if (overlay) overlay.style.display = 'none';
-
-        // Disconnect WebSocket if running
-        if (window.wsWorker) {
-            window.wsWorker.postMessage({ type: 'disconnect' });
-        }
         
-        // Boot up the animation render loop since WebSocket won't do it!
         if (window.startChartUpdates) {
             window.startChartUpdates();
         }
@@ -72,16 +67,16 @@ export function initReplayManager() {
 }
 
 function resetReplayState() {
-    replayData = { acc: [], gyro: [] };
+    replayData = { acc: [[], [], [], []], gyro: [[], [], [], []] };
     replayTime = 0;
     isReplaying = false;
     replayStartTimeUs = 0;
     replayEndTimeUs = 0;
     replayDurationUs = 0;
-    currentAccIndex = 0;
-    currentGyroIndex = 0;
+    currentAccIndex = [0, 0, 0, 0];
+    currentGyroIndex = [0, 0, 0, 0];
     
-    window.isOfflineReplayMode = false;
+    // window.isOfflineReplayMode = false; <-- Entfällt, sonst killen wir die Anzeige!
     window.replayRecordingDate = "";
     
     // UI Cleanup
@@ -98,27 +93,93 @@ function resetReplayState() {
 }
 
 async function loadCsvFiles(files) {
-    resetReplayState();
+    const overlay = document.getElementById('replayLoadingOverlay');
+    const fnameEl = document.getElementById('replayLoadingFilename');
+    if (overlay) overlay.classList.add('is-visible');
+
+    // Force browser to paint the overlay with a robust delay before executing synchronous tasks
+    await new Promise(r => setTimeout(r, 150));
+
+    try {
+        // Now we truly enter offline mode and halt the stream
+        window.isOfflineReplayMode = true;
+        if (window.wsWorker) {
+            window.wsWorker.postMessage({ type: 'disconnect' });
+        }
+        if (window.activeSensors && window.activeSensors.length > 0) {
+            window.activeSensors.forEach(node => {
+                if (node.wsWorker) {
+                    node.wsWorker.postMessage({ type: 'disconnect' });
+                }
+            });
+        }
+        
+        resetReplayState();
+        
+        let minTime = Number.MAX_SAFE_INTEGER;
+        let maxTime = 0;
     
-    let minTime = Number.MAX_SAFE_INTEGER;
-    let maxTime = 0;
+        let flatFiles = [];
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (file.name.toLowerCase().endsWith('.zip') && window.JSZip) {
+                console.log(`Unpacking ${file.name}...`);
+                if (fnameEl) fnameEl.textContent = `Entpacke ${file.name}...`;
+                await new Promise(r => setTimeout(r, 50));
+                
+                const zip = await JSZip.loadAsync(file);
+            for (const relativePath in zip.files) {
+                const zipEntry = zip.files[relativePath];
+                if (!zipEntry.dir && (relativePath.includes('acc') || relativePath.includes('gyro'))) {
+                    const blob = await zipEntry.async("blob");
+                    blob.name = relativePath;
+                    flatFiles.push(blob);
+                }
+            }
+        } else {
+            flatFiles.push(file);
+        }
+    }
     
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+    for (let i = 0; i < flatFiles.length; i++) {
+        const file = flatFiles[i];
         const isAcc = file.name.toLowerCase().includes('acc');
         const isGyro = file.name.toLowerCase().includes('gyro');
         
-        if (isAcc || isGyro) {
-            console.log(`Loading ${file.name}...`);
-            const data = await parseCsv(file);
-            console.log(`Parsed ${data.length} rows.`);
+            if (isAcc || isGyro) {
+                console.log(`Loading ${file.name}...`);
+                if (fnameEl) fnameEl.textContent = `Analysiere ${file.name}...`;
+                await new Promise(r => setTimeout(r, 50));
+                
+                const data = await parseCsv(file);
+                console.log(`Parsed ${data.length > 0 ? data[0]?.length || 0 : 0} rows from ${file.name}.`);
             
-            if (isAcc) window.replayData.acc = replayData.acc = data;
-            if (isGyro) window.replayData.gyro = replayData.gyro = data;
+            // Extract _CH1_, _CH2_, _CH3_, _CH4_ from filename to map to indices 0, 1, 2, 3
+            const chMatch = file.name.toUpperCase().match(/_CH(\d)_/);
+            const explicitCh = chMatch ? parseInt(chMatch[1], 10) - 1 : 0;
+            const hasChannelColumnInFile = data.length > 1; // If parseCsv found multiple channels internally
             
-            if (data.length > 0) {
+            for (let ch = 0; ch < data.length; ch++) {
+                if (!data[ch] || data[ch].length === 0) continue;
+                
+                // If it's a dedicated single-channel file mapped via filename, override target index
+                let targetCh = ch;
+                if (!hasChannelColumnInFile && ch === 0 && chMatch) {
+                    targetCh = explicitCh;
+                }
+                
+                // Ensure array exists
+                if (isAcc) {
+                    if (!replayData.acc[targetCh]) replayData.acc[targetCh] = [];
+                    replayData.acc[targetCh] = data[ch];
+                }
+                if (isGyro) {
+                    if (!replayData.gyro[targetCh]) replayData.gyro[targetCh] = [];
+                    replayData.gyro[targetCh] = data[ch];
+                }
+                
                 if (minTime === Number.MAX_SAFE_INTEGER) {
-                    const firstRow = data[0];
+                    const firstRow = data[ch][0];
                     if (firstRow && firstRow.hms) {
                         const chunks = firstRow.hms.split(':');
                         if (chunks.length === 3) {
@@ -135,8 +196,8 @@ async function loadCsvFiles(files) {
                     }
                 }
                 
-                const firstUs = data[0].time;
-                const lastUs = data[data.length - 1].time;
+                const firstUs = data[ch][0].time;
+                const lastUs = data[ch][data[ch].length - 1].time;
                 if (firstUs < minTime) minTime = firstUs;
                 if (lastUs > maxTime) maxTime = lastUs;
             }
@@ -147,47 +208,32 @@ async function loadCsvFiles(files) {
     replayEndTimeUs = maxTime;
     replayDurationUs = replayEndTimeUs - replayStartTimeUs;
     
-    // Inject full recorded session into UI Charts statically
-    if (window.applyStaticReplayData) {
-        let accExtracted = null;
-        let accTotals = null;
-        if (replayData.acc.length > 0) {
-            const len = replayData.acc.length;
-            const t = new Float32Array(len), x = new Float32Array(len), y = new Float32Array(len), z = new Float32Array(len), to = new Float32Array(len);
-            for(let i=0; i<len; i++) {
-                const d = replayData.acc[i];
-                t[i] = d.time; x[i] = d.x; y[i] = d.y; z[i] = d.z; to[i] = d.total;
+    // Live-Simulator Mode applies data over time instead of static injection.
+    if (window.resetDashboardBuffers) {
+        window.resetDashboardBuffers();
+    }
+    
+    // Evaluate how many channels we need based on the imported replay arrays
+    let maxChannels = 0;
+    for (let i = 0; i < 4; i++) {
+        if (replayData.acc[i] && replayData.acc[i].length > 0) maxChannels = Math.max(maxChannels, i + 1);
+        if (replayData.gyro[i] && replayData.gyro[i].length > 0) maxChannels = Math.max(maxChannels, i + 1);
+    }
+    
+    // If the dashboard was not mapped (e.g. offline boot without ESP32 connection),
+    // force initialization of the Live Pipeline for the required number of channels.
+    if (maxChannels > 0 && typeof window.initializeDashboardNodes === "function") {
+        if (!window.activeSensors || window.activeSensors.length < maxChannels) {
+            console.log(`[Replay Manager] Bootstrapping Offline Dashboard for ${maxChannels} channels...`);
+            const mockNodes = [];
+            for (let i = 0; i < maxChannels; i++) {
+                mockNodes.push({
+                    ip: `Offline-CH${i+1}`,
+                    mac: `Offline-MAC-${i+1}`,
+                    isMaster: i === 0
+                });
             }
-            accExtracted = [t, x, y, z, to];
-            accTotals = to;
-        }
-        
-        let gyroExtracted = null;
-        let gyroTotals = null;
-        if (replayData.gyro.length > 0) {
-            const len = replayData.gyro.length;
-            const t = new Float32Array(len), x = new Float32Array(len), y = new Float32Array(len), z = new Float32Array(len), to = new Float32Array(len);
-            for(let i=0; i<len; i++) {
-                const d = replayData.gyro[i];
-                t[i] = d.time; x[i] = d.x; y[i] = d.y; z[i] = d.z; to[i] = d.total; 
-            }
-            gyroExtracted = [t, x, y, z];
-            gyroTotals = to;
-        }
-        
-        window.applyStaticReplayData(accExtracted, gyroExtracted, replayStartTimeUs, replayEndTimeUs);
-        
-        if (window.generateStaticWaterfalls) {
-            // Estimate average sampleRate from timespan
-            let sampleRate = 0;
-            if (replayData.acc.length > 100) {
-                sampleRate = Math.round(replayData.acc.length / (replayDurationUs / 1000000));
-            } else if (replayData.gyro.length > 100) {
-                sampleRate = Math.round(replayData.gyro.length / (replayDurationUs / 1000000));
-            }
-            const accTimes = accExtracted ? accExtracted[0] : null;
-            const gyroTimes = gyroExtracted ? gyroExtracted[0] : null;
-            window.generateStaticWaterfalls(accTotals, gyroTotals, sampleRate, accTimes, gyroTimes);
+            window.initializeDashboardNodes(mockNodes);
         }
     }
     
@@ -210,6 +256,9 @@ async function loadCsvFiles(files) {
     if (controlBar) controlBar.style.display = 'flex';
     
     onSliderSeek(0);
+    } finally {
+        if (overlay) overlay.classList.remove('is-visible');
+    }
 }
 
 function parseCsv(file) {
@@ -222,6 +271,8 @@ function parseCsv(file) {
             window.replayRecordingDate = ""; // Reset for new file
             let recordingBaseTimeMs = 0;
             let firstTimeUs = -1;
+            
+            let hasChannelColumn = false;
             
             for (let i = 0; i < lines.length; i++) {
                 if (!lines[i]) continue;
@@ -254,16 +305,24 @@ function parseCsv(file) {
                     continue;
                 }
                 if (lines[i].toLowerCase().includes('time_local_hms') || lines[i].toLowerCase().includes('timestamp_us')) {
+                    if (lines[i].toLowerCase().includes('channel_index')) hasChannelColumn = true;
                     continue; // Skip the column headers row
                 }
                 
                 const parts = lines[i].split(',');
+                let channel = 0;
+                let offset = 0;
                 
-                if (parts.length >= 5) { 
-                    const timeUs = parseFloat(parts[1]);
+                if (hasChannelColumn && parts.length >= 6) {
+                    channel = parseInt(parts[0], 10) || 0;
+                    offset = 1;
+                }
+                
+                if (parts.length >= 5 + offset) { 
+                    const timeUs = parseFloat(parts[1 + offset]);
                     if (!isNaN(timeUs)) {
                         if (firstTimeUs === -1) firstTimeUs = timeUs;
-                        let hmsStr = parts[0].replace(/"/g, '');
+                        let hmsStr = parts[0 + offset].replace(/"/g, '');
                         
                         if (recordingBaseTimeMs > 0) {
                             const absDate = new Date(recordingBaseTimeMs + ((timeUs - firstTimeUs) / 1000));
@@ -274,11 +333,13 @@ function parseCsv(file) {
                             hmsStr = `${HH}:${MM}:${SS}.${Math.floor(parseInt(MS, 10)/100)}`;
                         }
                         
-                        const x = parseFloat(parts[2]);
-                        const y = parseFloat(parts[3]);
-                        const z = parseFloat(parts[4]);
-                        data.push({
-                            time: timeUs,
+                        const x = parseFloat(parts[2 + offset]);
+                        const y = parseFloat(parts[3 + offset]);
+                        const z = parseFloat(parts[4 + offset]);
+                        
+                        if (!data[channel]) data[channel] = [];
+                        data[channel].push({
+                            time: timeUs - firstTimeUs,
                             x: x,
                             y: y,
                             z: z,
@@ -286,8 +347,8 @@ function parseCsv(file) {
                             hms: hmsStr
                         });
                     }
-                } else if (parts.length === 4) {
-                    const timeSpanStr = parts[0].replace(/"/g, ''); 
+                } else if (parts.length === 4 + offset) {
+                    const timeSpanStr = parts[0 + offset].replace(/"/g, ''); 
                     const chunks = timeSpanStr.split(':');
                     if (chunks.length === 3) {
                         const h = parseInt(chunks[0], 10);
@@ -310,11 +371,13 @@ function parseCsv(file) {
                                 hmsStr = `${HH}:${MM}:${SS}.${Math.floor(parseInt(MS, 10)/100)}`;
                             }
                             
-                            const x = parseFloat(parts[1]);
-                            const y = parseFloat(parts[2]);
-                            const z = parseFloat(parts[3]);
-                            data.push({
-                                time: timeUs,
+                            const x = parseFloat(parts[1 + offset]);
+                            const y = parseFloat(parts[2 + offset]);
+                            const z = parseFloat(parts[3 + offset]);
+                            
+                            if (!data[channel]) data[channel] = [];
+                            data[channel].push({
+                                time: timeUs - firstTimeUs,
                                 x: x,
                                 y: y,
                                 z: z,
@@ -360,22 +423,28 @@ function onSliderSeek(usValue) {
     replayTime = usValue;
     const absTime = replayStartTimeUs + replayTime;
     
-    // Find nearest index
-    currentAccIndex = replayData.acc.findIndex(s => s.time >= absTime);
-    if (currentAccIndex === -1) currentAccIndex = replayData.acc.length;
+    // Find nearest index for all channels
+    for (let ch = 0; ch < 4; ch++) {
+        if (replayData.acc[ch]) {
+            currentAccIndex[ch] = replayData.acc[ch].findIndex(s => s.time >= absTime);
+            if (currentAccIndex[ch] === -1) currentAccIndex[ch] = replayData.acc[ch].length;
+        }
+        if (replayData.gyro[ch]) {
+            currentGyroIndex[ch] = replayData.gyro[ch].findIndex(s => s.time >= absTime);
+            if (currentGyroIndex[ch] === -1) currentGyroIndex[ch] = replayData.gyro[ch].length;
+        }
+    }
     
-    currentGyroIndex = replayData.gyro.findIndex(s => s.time >= absTime);
-    if (currentGyroIndex === -1) currentGyroIndex = replayData.gyro.length;
-    
+    // Update local variables and UI
     const timeDisplay = document.getElementById('replayTimeDisplay');
     if (timeDisplay) timeDisplay.textContent = formatUsToTime(replayTime);
     
-    // Update global scrubber UI and 3D Vector Viewport
-    if (window.updateReplayDashboard) {
-        const accSample = replayData.acc[currentAccIndex < replayData.acc.length ? currentAccIndex : replayData.acc.length - 1];
-        const gyroSample = replayData.gyro[currentGyroIndex < replayData.gyro.length ? currentGyroIndex : replayData.gyro.length - 1];
-        window.updateReplayDashboard(absTime, accSample, gyroSample);
+    // Clear live data buffers so that charts jump cleanly to the new slice
+    if (window.resetDashboardBuffers) {
+        window.resetDashboardBuffers();
     }
+    
+    // Next playback frames will push new batches of data smoothly.
 }
 
 function playbackLoop(now) {
@@ -401,21 +470,46 @@ function playbackLoop(now) {
     const timeDisplay = document.getElementById('replayTimeDisplay');
     if (timeDisplay) timeDisplay.textContent = formatUsToTime(replayTime);
     
-    // Just scrub to the exact time representation globally
+    // Feed samples precisely as they would arrive from WebSockets
     const currentAbsTime = replayStartTimeUs + replayTime;
-    if (window.updateReplayDashboard) {
-        // Advance indexes dynamically for playback speed
-        while (currentAccIndex < replayData.acc.length && replayData.acc[currentAccIndex].time <= currentAbsTime) {
-            currentAccIndex++;
-        }
-        while (currentGyroIndex < replayData.gyro.length && replayData.gyro[currentGyroIndex].time <= currentAbsTime) {
-            currentGyroIndex++;
+    
+    for (let ch = 0; ch < 4; ch++) {
+        const batchAcc = [];
+        const batchGyro = [];
+        
+        if (replayData.acc[ch] && replayData.acc[ch].length > 0) {
+            while (currentAccIndex[ch] < replayData.acc[ch].length) {
+                const sample = replayData.acc[ch][currentAccIndex[ch]];
+                if (sample.time <= currentAbsTime) {
+                    batchAcc.push(sample);
+                    currentAccIndex[ch]++;
+                } else {
+                    break;
+                }
+            }
         }
         
-        const accSample = replayData.acc[currentAccIndex < replayData.acc.length ? currentAccIndex : replayData.acc.length - 1];
-        const gyroSample = replayData.gyro[currentGyroIndex < replayData.gyro.length ? currentGyroIndex : replayData.gyro.length - 1];
+        if (replayData.gyro[ch] && replayData.gyro[ch].length > 0) {
+            while (currentGyroIndex[ch] < replayData.gyro[ch].length) {
+                const sample = replayData.gyro[ch][currentGyroIndex[ch]];
+                if (sample.time <= currentAbsTime) {
+                    batchGyro.push(sample);
+                    currentGyroIndex[ch]++;
+                } else {
+                    break;
+                }
+            }
+        }
         
-        window.updateReplayDashboard(currentAbsTime, accSample, gyroSample);
+        if ((batchAcc.length > 0 || batchGyro.length > 0) && window.processSensorBatch) {
+            const nodeDef = window.activeSensors ? window.activeSensors[ch] : null;
+            window.processSensorBatch({ 
+                acc: batchAcc, 
+                accraw: batchAcc, 
+                gyro: batchGyro, 
+                gyroraw: batchGyro 
+            }, ch, nodeDef);
+        }
     }
     
     replayLoopId = requestAnimationFrame(playbackLoop);

@@ -167,6 +167,7 @@ if (fftDBoutput) {
     fftSize: N,
     timestamp: event.data.timestamp,
     timeString: event.data.timeString,
-    clockTimeStr: event.data.clockTimeStr
+    clockTimeStr: event.data.clockTimeStr,
+    axis: event.data.axis
   }, [freqs.buffer, mags.buffer]);
 };

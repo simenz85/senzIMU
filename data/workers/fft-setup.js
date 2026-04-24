@@ -16,13 +16,13 @@ export function initFFTChart() {
     },
           axes: [
   	{
-    	stroke: () => dark ? "white" : "black",
+    	stroke: "white",
 //    grid: {
-//    	stroke: () => dark ? "white" : "black",
+//    	stroke: "white",
 //    }
     },
     {
-   	stroke: () => dark ? "white" : "black"
+   	stroke: "white"
    },
   ],
    series: [

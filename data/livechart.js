@@ -21,27 +21,70 @@ class LiveChart {
             cursor: { drag: { x: true, y: true, setScale: true } },
         };
 
-        this.chart = new uPlot(options, [[], []], container.querySelector("#chart"));
+        const plotHost = container.querySelector("#chart") || container.querySelector(".chart-plot-host") || container;
+        this.chart = new uPlot(options, [[], []], plotHost);
 
         // Pause Button
-        this.pauseBtn = container.querySelector("#pauseBtn");
-        this.pauseBtn.onclick = () => {
-            this.paused = !this.paused;
-            this.pauseBtn.textContent = this.paused ? "Fortsetzen" : "Pause";
-        };
+        this.pauseBtn = container.querySelector("#pauseBtn") || container.querySelector("[id^='pauseBtn']");
+        if (this.pauseBtn) {
+            this.pauseBtn.onclick = () => {
+                this.paused = !this.paused;
+                this.pauseBtn.textContent = this.paused ? "Fortsetzen" : "Pause";
+            };
+        }
 
         // Reset Button
-        container.querySelector("#resetBtn").addEventListener("click", () => {
-            this.setPanOffset(0);
-            this.chart.setScale("x", { min: null, max: null });
-            this.chart.setScale("y", { min: null, max: null });
-        });
+        const resetBtn = container.querySelector("#resetBtn") || document.getElementById("resetZoomBtn");
+        if (resetBtn) {
+            resetBtn.addEventListener("click", () => {
+                this.setPanOffset(0);
+                this.chart.setScale("x", { min: null, max: null });
+                this.chart.setScale("y", { min: null, max: null });
+            });
+        }
 
         // Maussteuerung
         this.#initYAxisOverlay();
         this.#initXAxisOverlay();
         this.#initZoomBox();
         this.#initTouchGestures();
+    }
+
+    setSensorCount(n) {
+        const baseColors = [
+            ["#4da6ff", "#0073e6", "#004d99"], // CH1 (Blautöne)
+            ["#ff4a4a", "#cc0000", "#800000"], // CH2 (Rottöne)
+            ["#50c878", "#228b22", "#006400"], // CH3 (Grüntöne)
+            ["#ffd600", "#b39b00", "#665900"], // CH4 (Gelbtöne)
+        ];
+
+        let newSeries = [
+            { label: "Zeit", value: (u, v) => v === null ? "-" : new Date(v * 1000).toLocaleTimeString() }
+        ];
+
+        for (let i = 0; i < n; i++) {
+            const colors = baseColors[i % baseColors.length];
+            newSeries.push({ label: `CH${i+1} X`, stroke: colors[0], width: 2 });
+            newSeries.push({ label: `CH${i+1} Y`, stroke: colors[1], width: 2 });
+            newSeries.push({ label: `CH${i+1} Z`, stroke: colors[2], width: 2 });
+        }
+
+        // Neues Chart mit geänderten Optionen aufbauen (uPlot erlaubt dynamische Series nur via Re-Init oder .addSeries API in v1.6+)
+        const opt = this.chart.axes ? Object.assign({}, this.chart.axes) : {};
+        const oldOpts = this.chart;
+        
+        let newOpts = {
+            title: "Live-Chart Multi-Channel",
+            width: this.chart.width,
+            height: this.chart.height,
+            scales: { x: { time: true }, y: { range: [-100, 100] } },
+            series: newSeries,
+            cursor: { drag: { x: true, y: true, setScale: true } }
+        };
+
+        const parent = this.chart.root.parentNode;
+        this.chart.destroy();
+        this.chart = new uPlot(newOpts, Array(n * 3 + 1).fill().map(() => []), parent);
     }
 
     /**
@@ -98,6 +141,9 @@ class LiveChart {
     #initYAxisOverlay() {
         const yOverlay = this.container.querySelector("#y-axis-overlay") || this.container.querySelector("[id$='y-axis-overlay']");
         if (!yOverlay) return;
+        // Ensure overlays don't block touch gestures
+        yOverlay.style.touchAction = "none";
+        yOverlay.style.pointerEvents = "auto";
         let isPanning = false;
         let lastY = 0;
 

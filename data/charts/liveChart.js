@@ -3,9 +3,9 @@ import { MultiRingBuffer2 } from "../buffers.js";
 const BUFFERSIZE = 20000000;
 
 export const accBuffer = new MultiRingBuffer2(
-  [Float64Array, Float32Array, Float32Array, Float32Array],
+  [Float64Array, Float32Array, Float32Array, Float32Array, Float32Array],
   BUFFERSIZE,
-  ['time', 'x', 'y', 'z']
+  ['time', 'x', 'y', 'z', 'total']
 );
 
 export const gyroBuffer = new MultiRingBuffer2(
@@ -87,6 +87,7 @@ const options = {
 };
 
   chart = new uPlot(options, [[], [], [], []], document.getElementById("livechart2"));
+  window.chart = chart; // Mache chart global verfügbar für script2.js
 
         const pauseBtn2 = document.getElementById("pauseBtn2");
         let paused2 = false;

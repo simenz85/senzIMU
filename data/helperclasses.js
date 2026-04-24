@@ -82,6 +82,12 @@ export class MultiRingBuffer2 {
         if (this.length < this.size) this.length++;
     }
 
+    getLast() {
+        if (!this.length) return null;
+        const idx = (this.index + this.size - 1) % this.size;
+        return this.channelNames.reduce((o, n, i) => { o[n] = this.channels[i][idx]; return o; }, {});
+    }
+
     getChannelTypedArray(channel) {
         const buf = this.channels[channel];
         if (this.length < this.size) {

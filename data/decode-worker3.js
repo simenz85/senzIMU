@@ -85,8 +85,7 @@ onmessage = function(event) {
                 samplesSinceLast.temp++;
             }
             else if (tag === 4) { // Timestamp
-                const ts_raw = (view.getUint8(offset+4) << 24) | (view.getUint8(offset+3) << 16) | 
-                               (view.getUint8(offset+2) << 8) | view.getUint8(offset+1);
+                const ts_raw = view.getUint32(offset + 1, true);
                 const ts = ts_raw * LSBSTEP;
 
                 if (lastTimestamp !== 0) {

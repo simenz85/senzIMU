@@ -503,9 +503,14 @@ export class MotionViewport {
 
     updateVibrationTipTrail(state = {}) {
         const sampleTimeUs = Number(state.sampleTimeUs || 0);
-        const timeUs = Number.isFinite(sampleTimeUs) && sampleTimeUs > 0
-            ? sampleTimeUs
-            : Math.round(performance.now() * 1000);
+        let timeUs = 0;
+        if (Number.isFinite(sampleTimeUs) && sampleTimeUs > 0) {
+            timeUs = sampleTimeUs;
+        } else if (typeof window !== 'undefined' && window.isOfflineReplayMode) {
+            timeUs = (window.replayStartTimeUs || 0) + (window.replayTime || 0);
+        } else {
+            timeUs = Math.round(performance.now() * 1000);
+        }
         const tipPoint = {
             x: Number(state.linearAcc?.x || 0) * 0.12,
             y: Number(state.linearAcc?.y || 0) * 0.12,
@@ -573,6 +578,81 @@ export class MotionViewport {
             this.updateTrail(Array.isArray(state.trail) ? state.trail : []);
         }
         this.updateVectors(state);
+    }
+
+    setMultiNodeSamples(nodesData) {
+        if (!this.THREE || !this.scene) return;
+        
+        if (!this.multiTrailsGroup) {
+            this.multiTrailsGroup = new this.THREE.Group();
+            this.scene.add(this.multiTrailsGroup);
+            this.multiTrails = [];
+        }
+        
+        if (this.currentPoint) this.currentPoint.visible = false;
+        if (this.trailLine) this.trailLine.visible = false;
+        if (this.velocityArrow) this.velocityArrow.visible = false;
+        if (this.accelerationArrow) this.accelerationArrow.visible = false;
+
+        nodesData.forEach((node, idx) => {
+            if (idx >= this.multiTrails.length) {
+                const trailMaterial = new this.THREE.LineBasicMaterial({
+                    color: node.color,
+                    transparent: true,
+                    opacity: 0.95,
+                });
+                const trailGeometry = new this.THREE.BufferGeometry();
+                const trailLine = new this.THREE.Line(trailGeometry, trailMaterial);
+                
+                const currentPoint = new this.THREE.Mesh(
+                    new this.THREE.SphereGeometry(0.08, 24, 24),
+                    new this.THREE.MeshStandardMaterial({ color: node.color, roughness: 0.35 })
+                );
+                
+                this.multiTrailsGroup.add(trailLine);
+                this.multiTrailsGroup.add(currentPoint);
+                this.multiTrails.push({ trailLine, trailGeometry, currentPoint });
+            }
+            
+            const tr = this.multiTrails[idx];
+            tr.trailLine.material.color.setHex(node.color);
+            tr.currentPoint.material.color.setHex(node.color);
+            
+            // node.trail contains the array of points
+            if (node.trail && node.trail.length > 0) {
+                const scaled = [];
+                for(let j=0; j<node.trail.length; j++) {
+                    scaled.push(node.trail[j].x * this.displayScale, node.trail[j].y * this.displayScale, node.trail[j].z * this.displayScale);
+                }
+                tr.trailGeometry.setAttribute('position', new this.THREE.Float32BufferAttribute(scaled, 3));
+                tr.trailGeometry.computeBoundingSphere();
+                
+                const targetPoint = node.trail[node.trail.length -1];
+                tr.currentPoint.visible = true;
+                tr.trailLine.visible = true;
+                tr.currentPoint.position.set(targetPoint.x * this.displayScale, targetPoint.y * this.displayScale, targetPoint.z * this.displayScale);
+            } else {
+                tr.currentPoint.visible = false;
+                tr.trailLine.visible = false;
+            }
+            
+            if (node.isTarget) {
+                const anchor = tr.currentPoint.visible ? tr.currentPoint.position.clone() : new this.THREE.Vector3();
+                
+                if (this.velocityArrow && node.velocity) {
+                    this.velocityArrow.visible = true;
+                    this.velocityArrow.position.copy(anchor);
+                    const vVel = new this.THREE.Vector3(node.velocity.x, node.velocity.y, node.velocity.z).multiplyScalar(this.displayScale * 0.7);
+                    this.setArrowVector(this.velocityArrow, vVel, 0.001);
+                }
+                if (this.accelerationArrow && node.linearAcc) {
+                    this.accelerationArrow.visible = true;
+                    this.accelerationArrow.position.copy(anchor);
+                    const vAcc = new this.THREE.Vector3(node.linearAcc.x, node.linearAcc.y, node.linearAcc.z).multiplyScalar(this.displayScale * 0.12);
+                    this.setArrowVector(this.accelerationArrow, vAcc, 0.001);
+                }
+            }
+        });
     }
 
     handleArrowOpacityInput(event) {

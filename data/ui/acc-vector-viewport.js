@@ -13,6 +13,9 @@ export class AccVectorViewport {
             gyroToggle: document.getElementById(options.gyroToggleButtonId || 'alignGyroToggleBtn'),
         };
 
+        this.alignNodeSelect = document.getElementById(options.alignNodeSelectId || 'alignNodeSelect');
+        this.activeNodeIp = null;
+
         this.sliderElements = {
             x: document.getElementById(options.sliderXId || 'alignRotX'),
             y: document.getElementById(options.sliderYId || 'alignRotY'),
@@ -519,6 +522,15 @@ export class AccVectorViewport {
 
         if (this.sourceButtons.gyroToggle) {
             this.sourceButtons.gyroToggle.addEventListener('click', () => this.setGyroVisible(!this.gyroVisible));
+        }
+
+        if (this.alignNodeSelect) {
+            this.alignNodeSelect.addEventListener('change', (e) => {
+                this.activeNodeIp = e.target.value;
+                if (typeof window.onAccVectorNodeChanged === 'function') {
+                    window.onAccVectorNodeChanged(this.activeNodeIp);
+                }
+            });
         }
 
         if ('ResizeObserver' in globalThis && this.viewport) {
@@ -1410,6 +1422,69 @@ export class AccVectorViewport {
         this.updateGyroVectors();
     }
 
+    setMultiNodeSamples(nodesData) {
+        if (!this.THREE || !this.scene) return;
+        
+        if (!this.multiArrowsGroup) {
+            this.multiArrowsGroup = new this.THREE.Group();
+            this.scene.add(this.multiArrowsGroup);
+            this.multiArrows = [];
+        }
+        
+        if (this.rawVectorArrow) this.rawVectorArrow.visible = false;
+        if (this.rotatedVectorArrow) this.rotatedVectorArrow.visible = false;
+        if (this.gyroGroup) this.gyroGroup.visible = false;
+
+        this.multiArrows.forEach(pair => {
+            pair.raw.visible = false;
+            pair.rotated.visible = false;
+        });
+
+        const resultQuaternion = this.getResultQuaternionObject();
+
+        nodesData.forEach((node, idx) => {
+            if (idx >= this.multiArrows.length) {
+                const rawArrow = this.createArrowMesh(new this.THREE.Vector3(0,0,1), node.color, { length: 1, shaftRadius: 0.08, headRadius: 0.2, headLength: 0.38, opacityGroup: 'raw' });
+                const rotArrow = this.createArrowMesh(new this.THREE.Vector3(0,0,1), node.color, { length: 1, shaftRadius: 0.08, headRadius: 0.2, headLength: 0.38, opacityGroup: 'result' });
+                rotArrow.position.set(0, 0, 0.03 * (idx+1));
+                this.multiArrowsGroup.add(rawArrow);
+                this.multiArrowsGroup.add(rotArrow);
+                this.multiArrows.push({ raw: rawArrow, rotated: rotArrow });
+            }
+            
+            const pair = this.multiArrows[idx];
+            pair.raw.userData.material.color.setHex(node.color);
+            pair.rotated.userData.material.color.setHex(node.color);
+            
+            let pref = node.raw;
+            if (this.sourceMode === 'calibrated') pref = node.calibrated || node.raw;
+            if (this.sourceMode === 'calibratedCut') pref = node.calibratedCut || node.calibrated || node.raw;
+
+            if (pref) {
+                pair.raw.visible = true;
+                pair.rotated.visible = true;
+                const rawVector = new this.THREE.Vector3(pref.x, pref.y, pref.z);
+                const resultVector = resultQuaternion ? rawVector.clone().applyQuaternion(resultQuaternion) : rawVector.clone();
+                this.updateArrow(pair.raw, rawVector);
+                this.updateArrow(pair.rotated, resultVector);
+                
+                if (node.isTarget) {
+                    this.updateReadout(rawVector, resultVector);
+                    let prefGyro = node.gyroCalibrated || node.gyroRaw;
+                    if (prefGyro) {
+                        this.latestGyroVector = new this.THREE.Vector3(prefGyro.x, prefGyro.y, prefGyro.z);
+                        if (this.gyroGroup) {
+                            this.gyroGroup.visible = this.gyroVisible;
+                            this.updateGyroVectors();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+
+
     updateGyroVectors() {
         if (!this.latestGyroVector || !this.gyroRotatedRingSet) {
             return;
@@ -1591,6 +1666,44 @@ export class AccVectorViewport {
         return this.rotationQuaternion.clone().normalize();
     }
 
+    updateNodeSelector(activeSensors) {
+        if (!this.alignNodeSelect || !activeSensors || !Array.isArray(activeSensors)) return;
+        
+        const currentValue = this.alignNodeSelect.value;
+        this.alignNodeSelect.innerHTML = '';
+        
+        activeSensors.forEach((node, index) => {
+            const opt = document.createElement('option');
+            opt.value = node.ip;
+            opt.textContent = node.isMaster ? `Master (CH${index+1})` : `CH${index+1} (${node.ip})`;
+            this.alignNodeSelect.appendChild(opt);
+        });
+        
+        if (Array.from(this.alignNodeSelect.options).some(opt => opt.value === currentValue)) {
+            this.alignNodeSelect.value = currentValue;
+            this.activeNodeIp = currentValue;
+        } else if (this.alignNodeSelect.options.length > 0) {
+            this.alignNodeSelect.value = this.alignNodeSelect.options[0].value;
+            this.activeNodeIp = this.alignNodeSelect.value;
+            if (typeof window.onAccVectorNodeChanged === 'function') {
+                window.onAccVectorNodeChanged(this.activeNodeIp);
+            }
+        }
+    }
+
+    setMultiNodeSamples(multiNodesData) {
+        if (!Array.isArray(multiNodesData) || multiNodesData.length === 0) return;
+        
+        let targetData = multiNodesData.find(n => n.ip === this.activeNodeIp);
+        if (!targetData) targetData = multiNodesData[0]; // fallback to Master
+        
+        if (typeof globalThis.buildViewportAccelerationSamples === 'function') {
+            this.setAccelerationSamples(globalThis.buildViewportAccelerationSamples(targetData.lastAccRawSample, targetData.lastAccSample));
+        }
+        if (typeof globalThis.buildViewportGyroSamples === 'function' && targetData.gyroRawBuffer) {
+            this.setGyroSamples(globalThis.buildViewportGyroSamples(targetData.gyroRawBuffer.getLast(), targetData.lastGyroSample));
+        }
+    }
     getAppliedQuaternionObject() {
         const baseQuaternion = this.getBaseQuaternionObject();
         const adjustmentQuaternion = this.getAdjustmentQuaternionObject();

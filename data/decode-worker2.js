@@ -126,6 +126,8 @@ function maybeReportDecodeStats(replyPort) {
   });
 }
 
+let timeSyncOffset = 0;
+
 function handleWorkerMessage(data, replyPort = null) {
   let event = { data };
 
@@ -155,10 +157,7 @@ function handleWorkerMessage(data, replyPort = null) {
 
       switch (tag) {
         case 4: { // Timestamp-Frame
-          const ts_raw = (view.getUint8(offset + 4) << 24) |
-            (view.getUint8(offset + 3) << 16) |
-            (view.getUint8(offset + 2) << 8) |
-            view.getUint8(offset + 1);
+          const ts_raw = view.getUint32(offset + 1, true);
 
           const ts = ts_raw * LSBSTEP // Umwandlung in Mikrosekunden
 
@@ -213,12 +212,12 @@ function handleWorkerMessage(data, replyPort = null) {
           }
 
           if (IMUOrientation === IMUOpt.WORLD_SIMPLE) {
+            if (worldSimpleGyroState) {
+              x = x - worldSimpleGyroState.x;
+              y = y - worldSimpleGyroState.y;
+              z = z - worldSimpleGyroState.z;
+            }
             if (quatworldsimple !== null && quatworldsimple !== undefined) {
-              if (worldSimpleGyroState) {
-                x = x - worldSimpleGyroState.x;
-                y = y - worldSimpleGyroState.y;
-                z = z - worldSimpleGyroState.z;
-              }
               [x, y, z] = applyCalibrationToAccelFast(x, y, z);
             }
           }
@@ -233,8 +232,8 @@ function handleWorkerMessage(data, replyPort = null) {
             [x, y, z] = applyPostTransformFast(x, y, z);
           }
 
-          gyroraw.push({ time: currentTimestamp, x: rawGyroX, y: rawGyroY, z: rawGyroZ });
-          gyro.push({ time: currentTimestamp, x: x, y: y, z: z });
+          gyroraw.push({ time: currentTimestamp + timeSyncOffset, x: rawGyroX, y: rawGyroY, z: rawGyroZ });
+          gyro.push({ time: currentTimestamp + timeSyncOffset, x: x, y: y, z: z });
           samplesSinceLastTsGyro++;
           break;
         }
@@ -251,7 +250,7 @@ function handleWorkerMessage(data, replyPort = null) {
           let y = view.getInt16(offset + 3, true) * ACCMULTIPLIER;
           let z = view.getInt16(offset + 5, true) * ACCMULTIPLIER;
 
-          accraw.push({ time: currentTimestamp, x: x, y: y, z: z });
+          accraw.push({ time: currentTimestamp + timeSyncOffset, x: x, y: y, z: z });
           // SENDE ROHDATEN
           if (calibrating1) {
             acccalib.push({ x: x, y: y, z: z });
@@ -271,7 +270,7 @@ function handleWorkerMessage(data, replyPort = null) {
               }
               total = Math.sqrt(fusionacc.x * fusionacc.x + fusionacc.y * fusionacc.y + fusionacc.z * fusionacc.z);
               
-              acc.push({ time: currentTimestamp, x: fusionacc.x, y: fusionacc.y, z: fusionacc.z, total: total });
+              acc.push({ time: currentTimestamp + timeSyncOffset, x: fusionacc.x, y: fusionacc.y, z: fusionacc.z, total: total });
               samplesSinceLastTsAcc++;
               break;
           }
@@ -288,7 +287,7 @@ function handleWorkerMessage(data, replyPort = null) {
                 [x, y, z] = subtractGravityFast(x, y, z);
               }
               total = Math.sqrt(x * x + y * y + z * z);
-              acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
+              acc.push({ time: currentTimestamp + timeSyncOffset, x: x, y: y, z: z, total: total });
               samplesSinceLastTsAcc++;
               break;
             }
@@ -304,7 +303,7 @@ function handleWorkerMessage(data, replyPort = null) {
                 [x, y, z] = applyPostTransformFast(x, y, z);
               }
               total = Math.sqrt(x * x + y * y + z * z);
-              acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
+              acc.push({ time: currentTimestamp + timeSyncOffset, x: x, y: y, z: z, total: total });
               samplesSinceLastTsAcc++;
               break;
             }
@@ -317,7 +316,7 @@ function handleWorkerMessage(data, replyPort = null) {
             [x, y, z] = applyPostTransformFast(x, y, z);
           }
           total = Math.sqrt(x * x + y * y + z * z);
-          acc.push({ time: currentTimestamp, x: x, y: y, z: z, total: total });
+          acc.push({ time: currentTimestamp + timeSyncOffset, x: x, y: y, z: z, total: total });
           samplesSinceLastTsAcc++;
 
           break;
@@ -330,7 +329,7 @@ function handleWorkerMessage(data, replyPort = null) {
             currentTimestamp = lastTimestamp + samplesSinceLastTsTemp * timestampStepTemp;
           }
           //console.log("TEMPVALUE: " + x);
-          temp.push({ time: currentTimestamp, value: x });
+          temp.push({ time: currentTimestamp + timeSyncOffset, value: x });
           samplesSinceLastTsTemp++;
           break;
         }
@@ -412,8 +411,12 @@ function handleWorkerMessage(data, replyPort = null) {
               break;
 
             case 107:
-              LSBSTEP = value; // Umwandlung in Mikrosekunden
-              console.log("Config: LSB STEP =", value);
+              // WICHTIG: Wenn der ESP den exakten LSB-Step (als float) schickt, 
+              // darf man hier kein Uint16 nutzen (da sonst Nachkommastellen abgeschnitten werden).
+              // Ein Float nimmt 4 Bytes ab offset + 2 ein.
+              let exactValue = view.getFloat32(offset + 2, true);
+              LSBSTEP = exactValue; // Umwandlung in Mikrosekunden
+              console.log("Config: LSB STEP =", exactValue);
               break;
             default:
               console.warn("Unbekannte Config-SubID", subId, "Value", value);
@@ -601,6 +604,16 @@ function handleWorkerMessage(data, replyPort = null) {
     }
 
     //console.log("[DECODE-WORKER] Quaternion updated:", calibdata);
+  }
+  else if (event.data.type === 'time_sync') {
+    if (lastTimestamp !== 0) {
+      const newOffset = event.data.payload - lastTimestamp;
+      if (timeSyncOffset === 0) {
+         timeSyncOffset = newOffset;
+      } else {
+         timeSyncOffset = 0.9 * timeSyncOffset + 0.1 * newOffset;
+      }
+    }
   }
 }
 

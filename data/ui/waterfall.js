@@ -250,27 +250,78 @@ class WaterfallRenderer {
         buf32.fill(0); // Transparent fill
         
         let targetX = tempCanvas.width - 1;
+        const cropRatio = Math.min(1.0, this.maxDrawFreq / this.nyquistFreq);
+        
         for (let i = endIdx; i >= startIdx; i--) {
-            const mags = this.history[i];
-            if (!mags) continue;
+            let magsArray = this.history[i];
+            if (!magsArray || magsArray.length === 0) continue;
+            
+            let localMagsArray = magsArray;
+            if (this.diffMode && magsArray.length >= 2) {
+                const m0 = magsArray[0];
+                const m1 = magsArray[1];
+                const diffLen = Math.min(m0.length, m1.length);
+                const diffMags = new Float32Array(diffLen);
+                for (let k = 0; k < diffLen; k++) {
+                    diffMags[k] = m1[k] - m0[k];
+                }
+                localMagsArray = [diffMags];
+            }
+            
+            const stripCount = localMagsArray.length;
+            const stripHeightFloat = graphH / stripCount;
             
             for (let w = 0; w < this.scrollSpeed; w++) {
                 if (targetX < 0) break;
-                for (let y = 0; y < graphH; y++) {
-                    const ratio = 1.0 - (y / graphH);
-                    const currentFreq = ratio * this.maxDrawFreq;
-                    const mapIdx = Math.floor((currentFreq / this.nyquistFreq) * mags.length);
+                
+                for (let stripIdx = 0; stripIdx < stripCount; stripIdx++) {
+                    const mags = localMagsArray[stripIdx];
+                    if (!mags || mags.length === 0) continue;
                     
-                    if (mapIdx >= 0 && mapIdx < mags.length) {
-                        const mag = mags[mapIdx];
-                        let v = mag / this.maxMagnitude;
-                        v = Math.max(0, Math.min(1, v));
-                        const cIndex = Math.floor(v * 255);
+                    const binsToDraw = Math.max(1, Math.floor(mags.length * cropRatio));
+                    const yStart = Math.floor(stripIdx * stripHeightFloat);
+                    const yEnd = Math.floor((stripIdx + 1) * stripHeightFloat);
+                    const stripH = yEnd - yStart;
+                    if (stripH <= 0) continue;
+                    
+                    for (let sy = 0; sy < stripH; sy++) {
+                        const normalizedY = 1.0 - (sy / stripH); 
+                        const binIndex = Math.max(0, Math.min(binsToDraw - 1, Math.floor(normalizedY * binsToDraw)));
+                        const mag = mags[binIndex] || 0;
                         
-                        const pxIdx = y * tempCanvas.width + targetX;
-                        buf32[pxIdx] = table[cIndex];
+                        let color;
+                        if (this.diffMode && magsArray.length >= 2) {
+                            const v = Math.max(-1, Math.min(1, mag / this.maxMagnitude));
+                            if (v > 0) {
+                                // Red = Node 1
+                                const intensity = Math.floor(v * 255);
+                                const a = intensity > 30 ? intensity : 0; // Transparent threshold mask
+                                color = (a << 24) | (0 << 16) | (0 << 8) | intensity; 
+                            } else {
+                                // Blue = Node 0
+                                const intensity = Math.floor(Math.abs(v) * 255);
+                                const a = intensity > 30 ? intensity : 0; // Transparent threshold mask
+                                color = (a << 24) | (intensity << 16) | (0 << 8) | 0;
+                            }
+                        } else {
+                            const intensity = Math.max(0, Math.min(255, Math.floor((mag / this.maxMagnitude) * 255)));
+                            color = table[intensity];
+                        }
+                        
+                        const drawY = yStart + sy;
+                        const pxIdx = drawY * tempCanvas.width + targetX;
+                        buf32[pxIdx] = color;
                     }
                 }
+                
+                // Draw separator lines after strips to prevent overwriting
+                for (let stripIdx = 0; stripIdx < stripCount - 1; stripIdx++) {
+                    const yEnd = Math.floor((stripIdx + 1) * stripHeightFloat);
+                    if (yEnd < graphH) {
+                        buf32[yEnd * tempCanvas.width + targetX] = 0xFFFFFFFF;
+                    }
+                }
+                
                 targetX--;
             }
         }
@@ -284,11 +335,16 @@ class WaterfallRenderer {
         ctx.font = 'bold 12px monospace';
         
         // Y-Axis Overlay
-        const yLabels = [
-            { t: `${Math.round(this.maxDrawFreq)} Hz`, y: 10, align: 'top' },
-            { t: `${Math.round(this.maxDrawFreq/2)} Hz`, y: graphH/2 - 6, align: 'top' },
-            { t: `0 Hz`, y: graphH - 10, align: 'bottom' }
-        ];
+        const yLabels = [];
+        const screenshotStripCount = this.lastMagsArrayLength || 1;
+        const screenshotStripHeight = graphH / screenshotStripCount;
+        
+        for (let i = 0; i < screenshotStripCount; i++) {
+            const yOffset = i * screenshotStripHeight;
+            yLabels.push({ t: `${Math.round(this.maxDrawFreq)} Hz`, y: yOffset + 10, align: 'top' });
+            yLabels.push({ t: `${Math.round(this.maxDrawFreq/2)} Hz`, y: yOffset + screenshotStripHeight/2 - 6, align: 'top' });
+            yLabels.push({ t: `0 Hz`, y: yOffset + screenshotStripHeight - 10, align: 'bottom' });
+        }
 
         for (let l of yLabels) {
             ctx.textBaseline = l.align;
@@ -395,7 +451,12 @@ class WaterfallRenderer {
     refreshCursorData() {
         if (this.mouseX < 0 || this.mouseY < 0 || !this.history.length) return;
         
-        const ratio = 1.0 - (this.mouseY / this.canvas.height);
+        const stripCount = this.lastMagsArrayLength || 1;
+        const stripHeight = this.canvas.height / stripCount;
+        const stripIdx = Math.min(stripCount - 1, Math.floor(this.mouseY / stripHeight));
+        const localY = this.mouseY - (stripIdx * stripHeight);
+        
+        const ratio = 1.0 - (localY / stripHeight);
         const hz = (ratio * this.maxDrawFreq).toFixed(1);
         
         const latestIdx = this.history.length - 1 - this.scrollOffset;
@@ -403,7 +464,8 @@ class WaterfallRenderer {
         const histIdx = Math.max(0, latestIdx - colDelta);
         const cursorStrTime = this.clockStrings[histIdx] || "";
         
-        this.mouseHoverText = `${hz} Hz  |  ${cursorStrTime}`;
+        const chPrefix = stripCount > 1 ? `CH${stripIdx + 1} | ` : "";
+        this.mouseHoverText = `${chPrefix}${hz} Hz  |  ${cursorStrTime}`;
         this.showTooltip(this.clientX, this.clientY, this.mouseHoverText);
         
         const wfCrossV = document.getElementById(`${this.prefix}CrossV`);
@@ -471,39 +533,97 @@ class WaterfallRenderer {
         const imgData = this.ctx.createImageData(w, h);
         const data32 = new Uint32Array(imgData.data.buffer);
         
-        // Fill block black
-        data32.fill((255 << 24)); 
+        data32.fill((255 << 24)); // Fill solid black initially
         
         const cropRatio = Math.min(1.0, this.maxDrawFreq / this.nyquistFreq);
         const latestIdx = this.history.length - 1 - this.scrollOffset;
         let colDrawCount = 0;
         
-        // Draw from right to left
         for (let x = w - 1; x >= 0; x -= s) {
             const histIdx = latestIdx - colDrawCount;
             if (histIdx < 0) break;
             
-            const mags = this.history[histIdx];
-            const binsToDraw = Math.max(1, Math.floor(mags.length * cropRatio));
-            
-            for (let y = 0; y < h; y++) {
-                const normalizedY = 1.0 - (y / h); 
-                const binIndex = Math.floor(normalizedY * binsToDraw);
-                const mag = mags[Math.min(mags.length - 1, binIndex)] || 0;
-                
-                const intensity = Math.max(0, Math.min(255, Math.floor((mag / this.maxMagnitude) * 255)));
-                const color = this.colorTable[intensity];
-                
-                for (let sx = 0; sx < s; sx++) {
-                    const drawX = x - sx;
-                    if (drawX >= 0) {
-                       data32[y * w + drawX] = color;
-                    }
-                }
-            }
+            this.drawColumnIntoBuffer(data32, w, h, x, s, this.history[histIdx], cropRatio);
             colDrawCount++;
         }
         this.ctx.putImageData(imgData, 0, 0);
+    }
+
+    drawColumnIntoBuffer(data32, w, h, x, s, magsArray, cropRatio) {
+        if (!magsArray || magsArray.length === 0) return;
+        
+        let localMagsArray = magsArray;
+        
+        // Option 3: Differential mode
+        if (this.diffMode && magsArray.length >= 2) {
+            const m0 = magsArray[0];
+            const m1 = magsArray[1];
+            const diffLen = Math.min(m0.length, m1.length);
+            const diffMags = new Float32Array(diffLen);
+            for (let i = 0; i < diffLen; i++) {
+                const diff = m1[i] - m0[i];
+                // Red = Node 1 louder, Blue = Node 0 louder 
+                // We'll map the signed diff directly via our color mapping logic later, 
+                // but for now, we just take the raw difference and use a custom approach:
+                diffMags[i] = diff;
+            }
+            localMagsArray = [diffMags];
+        }
+
+        const stripCount = localMagsArray.length;
+        this.lastMagsArrayLength = stripCount;
+        const stripHeightFloat = h / stripCount;
+        
+        for (let stripIdx = 0; stripIdx < stripCount; stripIdx++) {
+            const mags = localMagsArray[stripIdx];
+            if (!mags || mags.length === 0) continue;
+            
+            const binsToDraw = Math.max(1, Math.floor(mags.length * cropRatio));
+            const yStart = Math.floor(stripIdx * stripHeightFloat);
+            const yEnd = Math.floor((stripIdx + 1) * stripHeightFloat);
+            const stripH = yEnd - yStart;
+            if (stripH <= 0) continue;
+            
+            for (let sy = 0; sy < stripH; sy++) {
+                const normalizedY = 1.0 - (sy / stripH); 
+                const binIndex = Math.max(0, Math.min(binsToDraw - 1, Math.floor(normalizedY * binsToDraw)));
+                const mag = mags[binIndex] || 0;
+                
+                let color;
+                if (this.diffMode && magsArray.length >= 2) {
+                    const v = Math.max(-1, Math.min(1, mag / this.maxMagnitude));
+                    if (v > 0) {
+                        const intensity = Math.floor(v * 255);
+                        color = (255 << 24) | (0 << 16) | (0 << 8) | intensity;
+                    } else {
+                        const intensity = Math.floor(Math.abs(v) * 255);
+                        color = (255 << 24) | (intensity << 16) | (0 << 8) | 0;
+                    }
+                } else {
+                    const intensity = Math.max(0, Math.min(255, Math.floor((mag / this.maxMagnitude) * 255)));
+                    color = this.colorTable[intensity];
+                }
+                
+                const drawY = yStart + sy;
+                for (let sx = 0; sx < s; sx++) {
+                    const drawX = x - sx;
+                    if (drawX >= 0) {
+                       data32[drawY * w + drawX] = color;
+                    }
+                }
+            }
+        }
+
+        // Draw separator lines last so they don't get overwritten by the next strip's yStart=0 iteration
+        for (let stripIdx = 0; stripIdx < stripCount - 1; stripIdx++) {
+            const yEnd = Math.floor((stripIdx + 1) * stripHeightFloat);
+            for (let sx = 0; sx < s; sx++) {
+                const drawX = x - sx;
+                if (drawX >= 0 && yEnd < h) {
+                    data32[yEnd * w + drawX] = 0xFFFFFFFF; // White separator
+                }
+            }
+        }
     }
 
     updateLabels() {
@@ -545,15 +665,59 @@ class WaterfallRenderer {
         if (lblMid) lblMid.textContent = this.clockStrings[midIdx] || '';
         if (lblRight) lblRight.textContent = this.clockStrings[rightIdx] || '';
         
-        const lblYMax = document.getElementById(`${this.prefix}LblMax`);
-        const lblYMid = document.getElementById(`${this.prefix}LblMid`);
-        if (lblYMax) lblYMax.textContent = `${Math.round(this.maxDrawFreq)} Hz`;
-        if (lblYMid) lblYMid.textContent = `${Math.round(this.maxDrawFreq / 2)} Hz`;
+        // Dynamically rebuild Y-Axis for multiple strips
+        const yAxisId = this.prefix === 'wf' ? 'waterfallYAxis' : 'gyroWaterfallYAxis';
+        const yAxisContainer = document.getElementById(yAxisId);
+        const stripCount = this.lastMagsArrayLength || 1;
+        
+        if (yAxisContainer && (this.lastRenderedYAxisStripCount !== stripCount || this.lastRenderedYAxisMaxFreq !== this.maxDrawFreq)) {
+            this.lastRenderedYAxisStripCount = stripCount;
+            this.lastRenderedYAxisMaxFreq = this.maxDrawFreq;
+            
+            yAxisContainer.innerHTML = '';
+            const maxVal = Math.round(this.maxDrawFreq);
+            const midVal = Math.round(this.maxDrawFreq / 2);
+            
+            for (let i = 0; i < stripCount; i++) {
+                const stripDiv = document.createElement('div');
+                stripDiv.style.flex = "1";
+                stripDiv.style.display = "flex";
+                stripDiv.style.flexDirection = "column";
+                stripDiv.style.justifyContent = "space-between";
+                stripDiv.style.width = "100%";
+                
+                if (i < stripCount - 1) {
+                    stripDiv.style.borderBottom = "1px solid rgba(255,255,255,0.7)";
+                }
+                
+                // Add unique IDs to the top strip so syncWaterfallRenderer still finds them
+                const idMax = i === 0 ? `id="${this.prefix}LblMax"` : '';
+                const idMid = i === 0 ? `id="${this.prefix}LblMid"` : '';
+                
+                stripDiv.innerHTML = `
+                  <span ${idMax} style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); align-self: flex-start; z-index: 10;">${maxVal} Hz</span>
+                  <span ${idMid} style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); align-self: flex-start; z-index: 10;">${midVal} Hz</span>
+                  <span style="background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); align-self: flex-start; z-index: 10;">0 Hz</span>
+                `;
+                yAxisContainer.appendChild(stripDiv);
+            }
+        }
     }
 
-    pushData(mags, optTsNum, optTsString, optClockTimeStr) {
-        if (!mags || mags.length === 0) return;
+    pushData(magsOrArray, optTsNum, optTsString, optClockTimeStr) {
+        if (!magsOrArray || (magsOrArray.length === 0 && !Array.isArray(magsOrArray[0]))) return;
         
+        // Normalize to array of TypeArrays
+        let magsArray = [];
+        if (ArrayBuffer.isView(magsOrArray) || (magsOrArray.length > 0 && typeof magsOrArray[0] === 'number')) {
+            magsArray = [new Float32Array(magsOrArray)];
+        } else if (Array.isArray(magsOrArray) && ArrayBuffer.isView(magsOrArray[0])) {
+            // Already array of typed arrays, copy them
+            magsArray = magsOrArray.map(m => new Float32Array(m));
+        } else {
+            return; // Invalid format
+        }
+
         let tsString;
         let tsNum;
 
@@ -561,7 +725,6 @@ class WaterfallRenderer {
             tsNum = optTsNum;
             tsString = optTsString;
         } else {
-            // Read timestamp from DOM
             let tsEl = document.getElementById('timestamp');
             tsString = tsEl ? tsEl.textContent : "0.00";
             let parts = tsString.split(':');
@@ -574,22 +737,15 @@ class WaterfallRenderer {
         let clockTime = optClockTimeStr;
         if (!clockTime) {
             const now = new Date();
-            const hh = now.getHours().toString().padStart(2, '0');
-            const mm = now.getMinutes().toString().padStart(2, '0');
-            const ss = now.getSeconds().toString().padStart(2, '0');
-            const ms = now.getMilliseconds().toString().padStart(3, '0');
-            clockTime = `${hh}:${mm}:${ss}.${ms}`;
+            clockTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
         }
         
-        // 1. Buffer incoming data
-        this.history.push(new Float32Array(mags));
+        this.history.push(magsArray);
         this.timestamps.push(tsNum);
         this.timeStrings.push(tsString);
         this.clockStrings.push(clockTime);
         
-        if (this.scrollOffset > 0) {
-            this.scrollOffset++;
-        }
+        if (this.scrollOffset > 0) this.scrollOffset++;
         
         if (this.history.length > this.maxHistory) {
             this.history.shift();
@@ -597,12 +753,9 @@ class WaterfallRenderer {
             this.timeStrings.shift();
             this.clockStrings.shift();
             
-            if (this.scrollOffset > 0) {
-                this.scrollOffset--;
-            }
+            if (this.scrollOffset > 0) this.scrollOffset--;
         }
 
-        // 2. If scrolled away or tab is hidden, do not paint it live
         if (this.scrollOffset > 0 || !this.active) {
             if (this.active) {
                 this.updateLabels();
@@ -611,7 +764,6 @@ class WaterfallRenderer {
             return;
         }
         
-        // 3. Live Drawing Fast-Mode
         const w = this.canvas.width;
         const h = this.canvas.height;
         if (w === 0 || h === 0) return;
@@ -624,16 +776,8 @@ class WaterfallRenderer {
         const imgData = this.colCtx.createImageData(1, h);
         const data32 = new Uint32Array(imgData.data.buffer);
         const cropRatio = Math.min(1.0, this.maxDrawFreq / this.nyquistFreq);
-        const binsToDraw = Math.max(1, Math.floor(mags.length * cropRatio));
-
-        for (let y = 0; y < h; y++) {
-            const normalizedY = 1.0 - (y / h); 
-            const binIndex = Math.floor(normalizedY * binsToDraw);
-            const mag = mags[Math.min(mags.length - 1, binIndex)] || 0;
-            
-            const intensity = Math.max(0, Math.min(255, Math.floor((mag / this.maxMagnitude) * 255)));
-            data32[y] = this.colorTable[intensity];
-        }
+        
+        this.drawColumnIntoBuffer(data32, 1, h, 0, 1, magsArray, cropRatio);
 
         this.colCtx.putImageData(imgData, 0, 0);
         this.ctx.drawImage(this.colCanvas, 0, 0, 1, h, w - s, 0, s, h);

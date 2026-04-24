@@ -37,15 +37,18 @@
 #include "lwip/sockets.h"
 #include "keep_alive.h"
 #include "freertos/stream_buffer.h"
+#include "esp_http_client.h"
 
 #include "esp_flash.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h" // Required for spi_flash_get_chip_size()
 #include "esp_ota_ops.h"
 #include "esp_flash_partitions.h"
+#include "esp_now.h"
 #include "esp_heap_caps.h"
 #include "esp_psram.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "driver/temp_sensor.h"
 #include "cJSON.h"
 #ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
@@ -60,6 +63,15 @@
 
 #define STREAMBUFFER_SIZE 4096*32      // Mehr Luft fuer Bursts, bevor Backpressure einsetzt
 #define STREAM_TRIGGER_LEVEL 7      // Minimum: 1 gesamter Sample-Frame
+#define TAG "app"
+#define MASTER_LOSS_FAILOVER_MS 15000
+#define MASTER_RECONNECT_ATTEMPT_MS 4000
+
+static esp_netif_t *g_sta_netif = NULL;
+static esp_netif_t *g_ap_netif = NULL;
+static volatile bool g_is_master_role = false;
+static volatile bool g_role_transition_in_progress = false;
+static char g_target_wifi_ssid[32] = "senzIMU";
 
 
 // =========================================================================
@@ -83,9 +95,30 @@ typedef enum {
     LED_STATE_RED    // Error / Problem
 } rgb_led_state_t;
 
+typedef struct {
+    uint8_t ready_r, ready_g, ready_b;
+    uint8_t stream_r, stream_g, stream_b;
+    uint8_t error_r, error_g, error_b;
+    uint8_t ready_intensity;
+    uint8_t stream_intensity;
+    uint8_t error_intensity;
+} led_config_t;
+
+static const led_config_t kDefaultLedConfig = {
+    .ready_r = 0, .ready_g = 255, .ready_b = 0,
+    .stream_r = 0, .stream_g = 0, .stream_b = 25,
+    .error_r = 255, .error_g = 0, .error_b = 0,
+    .ready_intensity = 100,
+    .stream_intensity = 20,
+    .error_intensity = 100
+};
+static led_config_t g_led_config = kDefaultLedConfig;
+static led_config_t g_led_config_preview = kDefaultLedConfig;
+
 static volatile bool led_blinking_active = false;
 static rgb_led_state_t current_led_state = LED_STATE_OFF;
 static rgb_led_state_t pending_led_state = LED_STATE_OFF;
+static rgb_led_state_t override_preview_state = LED_STATE_OFF;
 
 static void set_rgb_pins_raw(int r_duty, int g_duty, int b_duty) {
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, r_duty);
@@ -96,23 +129,48 @@ static void set_rgb_pins_raw(int r_duty, int g_duty, int b_duty) {
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
 }
 
+static void apply_led_state(rgb_led_state_t state_to_apply) {
+    const led_config_t *cfg = (override_preview_state != LED_STATE_OFF) ? &g_led_config_preview : &g_led_config;
+
+    if (state_to_apply == LED_STATE_RED) {
+        uint8_t int_factor = cfg->error_intensity > 100 ? 100 : cfg->error_intensity;
+        set_rgb_pins_raw(cfg->error_r * int_factor / 100, 
+                         cfg->error_g * int_factor / 100, 
+                         cfg->error_b * int_factor / 100);
+    } else if (state_to_apply == LED_STATE_GREEN) {
+        uint8_t int_factor = cfg->ready_intensity > 100 ? 100 : cfg->ready_intensity;
+        set_rgb_pins_raw(cfg->ready_r * int_factor / 100, 
+                         cfg->ready_g * int_factor / 100, 
+                         cfg->ready_b * int_factor / 100);
+    } else if (state_to_apply == LED_STATE_BLUE) {
+        uint8_t int_factor = cfg->stream_intensity > 100 ? 100 : cfg->stream_intensity;
+        set_rgb_pins_raw(cfg->stream_r * int_factor / 100, 
+                         cfg->stream_g * int_factor / 100, 
+                         cfg->stream_b * int_factor / 100);
+    } else {
+        set_rgb_pins_raw(0, 0, 0);
+    }
+}
+
 static void set_rgb_state(rgb_led_state_t new_state) {
     pending_led_state = new_state;
 
     if (led_blinking_active) {
-        return; // Prevent unnecessary register writes while animating
+        return; 
     }
 
-    if (current_led_state == new_state) return; 
-    current_led_state = new_state;
+    rgb_led_state_t active_state = (override_preview_state != LED_STATE_OFF) ? override_preview_state : new_state;
 
-    // Assuming Common Cathode. 
-    // Blau wird auf 25/255 (ca. 10%) gedimmt, da der Stream dauerhaft an ist.
-    set_rgb_pins_raw(
-        (new_state == LED_STATE_RED) ? 255 : 0,
-        (new_state == LED_STATE_GREEN) ? 255 : 0,
-        (new_state == LED_STATE_BLUE) ? 25 : 0
-    );
+    if (current_led_state == active_state) return; 
+    current_led_state = active_state;
+
+    apply_led_state(active_state);
+}
+
+static void force_led_rgb_update() {
+    // Reset current_led_state to force register rewrite with identical state but new colors
+    current_led_state = (rgb_led_state_t)-1; 
+    set_rgb_state(pending_led_state);
 }
 
 static void led_boot_sequence_task(void *arg) {
@@ -153,9 +211,85 @@ static void led_disconnect_blink_task(void *arg) {
 }
 
 static int count_active_ws_clients();
+static bool scan_for_master_network(const char *ssid);
+static void start_master_ap_mode(void);
+
+// =========================================================================
+// ESP-NOW Zeitsynchronisation
+// =========================================================================
+volatile int64_t g_time_sync_offset = 0;
+
+typedef struct __attribute__((packed)) {
+    uint8_t packet_type; // 0x01 = TimeSync
+    int64_t master_timestamp;
+} esp_now_sync_pkt_t;
+
+void esp_now_trigger_sync() {
+    if (!g_is_master_role) return;
+    esp_now_sync_pkt_t sync_data;
+    sync_data.packet_type = 0x01;
+    sync_data.master_timestamp = esp_timer_get_time();
+    uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    esp_now_send(broadcast_mac, (uint8_t *)&sync_data, sizeof(sync_data));
+    // ESP_LOGI("ESP-NOW", "Gesendet: TimeSync Beacon an alle Nodes, ts=%lld", sync_data.master_timestamp);
+}
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+void on_esp_now_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t *data, int len) {
+#else
+void on_esp_now_recv(const uint8_t *mac_addr, const uint8_t *data, int len) {
+#endif
+    if (g_is_master_role || len < sizeof(esp_now_sync_pkt_t)) return;
+    esp_now_sync_pkt_t *pkt = (esp_now_sync_pkt_t *)data;
+    if (pkt->packet_type == 0x01) {
+        int64_t local_time = esp_timer_get_time();
+        int64_t offset = pkt->master_timestamp - local_time;
+        if (g_time_sync_offset == 0) {
+            g_time_sync_offset = offset;
+        } else {
+            g_time_sync_offset = (int64_t)(0.8 * g_time_sync_offset + 0.2 * offset);
+        }
+    }
+}
+
+void init_esp_now() {
+    if (esp_now_init() != ESP_OK) {
+        ESP_LOGE("ESP-NOW", "Init failed");
+        return;
+    }
+    #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    esp_now_register_recv_cb(on_esp_now_recv);
+    #else
+    esp_now_register_recv_cb(on_esp_now_recv);
+    #endif
+
+    esp_now_peer_info_t peerInfo = {};
+    memset(&peerInfo, 0, sizeof(peerInfo));
+    for (int i=0; i<6; i++) peerInfo.peer_addr[i] = 0xFF;
+    peerInfo.channel = 1;
+    peerInfo.ifidx = g_is_master_role ? WIFI_IF_AP : WIFI_IF_STA;
+    peerInfo.encrypt = false;
+    
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+        ESP_LOGE("ESP-NOW", "Failed to add broadcast peer");
+    } else {
+        ESP_LOGI("ESP-NOW", "Broadcast Peer aktiv. Offset: %lld", g_time_sync_offset);
+    }
+}
 
 static void wifi_watchdog_task(void *arg) {
+    TickType_t master_lost_since = 0;
+    TickType_t last_reconnect_attempt = 0;
+    TickType_t last_time_sync = 0;
+
     while (1) {
+        if (g_is_master_role) {
+            if (last_time_sync == 0 || (xTaskGetTickCount() - last_time_sync) > pdMS_TO_TICKS(30000)) {
+                last_time_sync = xTaskGetTickCount();
+                esp_now_trigger_sync();
+            }
+        }
+
         wifi_mode_t mode;
         if (esp_wifi_get_mode(&mode) == ESP_OK && mode != WIFI_MODE_NULL) {
             if (count_active_ws_clients() > 0) {
@@ -166,6 +300,44 @@ static void wifi_watchdog_task(void *arg) {
         } else {
             set_rgb_state(LED_STATE_RED);
         }
+
+        if (!g_is_master_role && !g_role_transition_in_progress) {
+            wifi_ap_record_t ap_info = {};
+            esp_netif_ip_info_t ip_info = {};
+            const bool sta_has_link = esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
+            const bool sta_has_ip = (g_sta_netif != NULL) &&
+                                    (esp_netif_get_ip_info(g_sta_netif, &ip_info) == ESP_OK) &&
+                                    (ip_info.ip.addr != 0);
+
+            if (sta_has_link && sta_has_ip) {
+                master_lost_since = 0;
+            } else {
+                TickType_t now = xTaskGetTickCount();
+                if (master_lost_since == 0) {
+                    master_lost_since = now;
+                    last_reconnect_attempt = 0;
+                    ESP_LOGW(TAG, "Master-Verbindung verloren. Starte Failover-Timer...");
+                }
+
+                if ((last_reconnect_attempt == 0) ||
+                    ((now - last_reconnect_attempt) >= pdMS_TO_TICKS(MASTER_RECONNECT_ATTEMPT_MS))) {
+                    last_reconnect_attempt = now;
+                    ESP_LOGI(TAG, "Versuche Reconnect zum Master...");
+                    esp_wifi_connect();
+                }
+
+                if ((now - master_lost_since) >= pdMS_TO_TICKS(MASTER_LOSS_FAILOVER_MS)) {
+                    if (!scan_for_master_network(g_target_wifi_ssid)) {
+                        ESP_LOGW(TAG, "Kein Master mehr gefunden. Promote zu Master/AP.");
+                        start_master_ap_mode();
+                    } else {
+                        ESP_LOGI(TAG, "Master-Netz wieder sichtbar. Bleibe Node.");
+                        master_lost_since = now;
+                    }
+                }
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
@@ -299,7 +471,6 @@ static void init_rgb_led() {
 #define CFG_ID_TEMPSAMPLERATE    106
 #define CFG_ID_FRQFINE           107
 
-#define TAG "app"
 
 
 // 7-Byte-Paketstruktur für Config
@@ -473,6 +644,16 @@ void send_config_value(uint8_t subId, uint16_t value) {
     xStreamBufferSend(sensorStream, buf, sizeof(buf), 0);
 
     ESP_LOGI("CONFIGSEND", "Config sent: mainTag=30 subId=%u value=%u", subId, value);
+}
+
+void send_config_float(uint8_t subId, float value) {
+    uint8_t buf[7];
+    buf[0] = (30 << 3);
+    buf[1] = subId;
+    memcpy(&buf[2], &value, sizeof(float)); 
+    buf[6] = 0;
+    xStreamBufferSend(sensorStream, buf, sizeof(buf), 0);
+    ESP_LOGI("CONFIGSEND", "Config sent float: mainTag=30 subId=%u value=%.6f", subId, value);
 }
 
 
@@ -654,6 +835,39 @@ static esp_err_t load_imu_config_from_nvs(imu_config_t *config) {
     return ESP_OK;
 }
 
+static const char *LED_CONFIG_NVS_NAMESPACE = "led_cfg";
+static const char *LED_CONFIG_NVS_KEY = "color_cfg";
+
+static esp_err_t save_led_config_to_nvs(const led_config_t *config) {
+    if (config == NULL) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(LED_CONFIG_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open for LED config save failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = nvs_set_blob(handle, LED_CONFIG_NVS_KEY, config, sizeof(*config));
+    if (ret == ESP_OK) nvs_commit(handle);
+    nvs_close(handle);
+    return ret;
+}
+
+static esp_err_t load_led_config_from_nvs(led_config_t *config) {
+    if (config == NULL) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(LED_CONFIG_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (ret != ESP_OK) return ret;
+    size_t required_size = sizeof(*config);
+    ret = nvs_get_blob(handle, LED_CONFIG_NVS_KEY, config, &required_size);
+    nvs_close(handle);
+    if (ret != ESP_OK) return ret;
+    if (required_size != sizeof(*config)) {
+        *config = kDefaultLedConfig;
+        return ESP_ERR_NVS_INVALID_LENGTH;
+    }
+    return ESP_OK;
+}
+
 static uint16_t normalize_odr_value(float rate) {
     if (rate < 0.8f) return 0;
     if (rate < 8.0f) return 16;
@@ -704,6 +918,7 @@ httpd_handle_t ws_server = NULL;
 
 #define MAX_CLIENTS 8
 int ws_clients[MAX_CLIENTS];
+int ws_clients_errors[MAX_CLIENTS];
 
 static int count_active_ws_clients() {
     int count = 0;
@@ -725,7 +940,7 @@ typedef struct {
 
 static volatile uint32_t g_ws_inflight_work_items = 0;
 
-#define WS_MAX_INFLIGHT_WORK_ITEMS 3
+#define WS_MAX_INFLIGHT_WORK_ITEMS 10
 
 static uint8_t *alloc_ws_payload_buffer(size_t len) {
     if (len == 0) {
@@ -759,15 +974,28 @@ static void ws_send_work(void *arg) {
         __atomic_add_fetch(&g_runtime_transport_stats.ws_send_errors, 1, __ATOMIC_RELAXED);
         ESP_LOGW("WS", "Send error async (FD %d): %s, entferne Client passiv", item->fd, esp_err_to_name(result));
         
-        // Passive Disconnect Erkennung: Wenn Send fehlschlug (z.B. ESP_ERR_INVALID_ARG oder ESP_FAIL),
-        // ist der Socket tot. Client aus der Liste nehmen (spart den ganzen Ping-Task Overhead).
+        // Wenn Senden fehlgeschlagen ist, Fehlerzähler erhöhen
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (ws_clients[i] == item->fd) {
-                ws_clients[i] = -1;
-                if (count_active_ws_clients() == 0) {
-                    set_rgb_state(LED_STATE_GREEN);
-                    xTaskCreate(led_disconnect_blink_task, "led_disconnect", 2048, NULL, 5, NULL);
+                ws_clients_errors[i]++;
+                // Drop erst nach 15 kumulativen, aufeinanderfolgenden Fehlern
+                if (ws_clients_errors[i] > 15) {
+                    ESP_LOGW("WS", "Zu viele Fehler (FD %d), entferne Client endgültig.", item->fd);
+                    ws_clients[i] = -1;
+                    ws_clients_errors[i] = 0;
+                    if (count_active_ws_clients() == 0) {
+                        set_rgb_state(LED_STATE_GREEN);
+                        xTaskCreate(led_disconnect_blink_task, "led_disconnect", 2048, NULL, 5, NULL);
+                    }
                 }
+                break;
+            }
+        }
+    } else {
+        // Erfolg: Fehlerzähler für diesen FD zurücksetzen!
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (ws_clients[i] == item->fd) {
+                ws_clients_errors[i] = 0;
                 break;
             }
         }
@@ -913,6 +1141,8 @@ typedef struct {
     char netmask[16];
 } my_wifi_config_t;
 
+static my_wifi_config_t g_wifi_cfg = {};
+
 bool read_wifi_config(const char* filepath, my_wifi_config_t* config) {
     FILE *f = fopen(filepath, "r");
     if (!f) {
@@ -955,80 +1185,325 @@ bool read_wifi_config(const char* filepath, my_wifi_config_t* config) {
 ////////////////////////////////////////////////////////////////////////////////
 // WIFI AP INITIALISIERUNG
 
-static void wifi_init_ap(const my_wifi_config_t *config) {
-    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+// Globals for Nodes
+#define MAX_NODES 10
+typedef struct {
+    char ip[16];
+    char mac[18];
+    uint32_t last_seen_ms;
+} active_node_t;
 
-    wifi_config_t wifi_config = {};
-    wifi_config.ap.channel = 1;
-    wifi_config.ap.authmode = WIFI_AUTH_OPEN;
-    wifi_config.ap.max_connection = 4;
-    wifi_config.ap.beacon_interval = 50;
+static active_node_t active_nodes[MAX_NODES];
+static int num_active_nodes = 0;
 
-    wifi_config.ap.max_connection = 4; // Auf 4 erhöhen (Maximum)
-    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G); // Nur 2.4GHz
+static void format_device_mac(char *out, size_t out_size) {
+    uint8_t mac[6] = {0};
+    if (esp_efuse_mac_get_default(mac) == ESP_OK) {
+        snprintf(out, out_size, "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        snprintf(out, out_size, "00:00:00:00:00:00");
+    }
+}
 
+static int compare_active_nodes(const void *lhs, const void *rhs) {
+    const active_node_t *a = (const active_node_t *)lhs;
+    const active_node_t *b = (const active_node_t *)rhs;
+
+    const bool a_has_mac = a->mac[0] != '\0';
+    const bool b_has_mac = b->mac[0] != '\0';
+    if (a_has_mac && b_has_mac) {
+        const int mac_cmp = strcmp(a->mac, b->mac);
+        if (mac_cmp != 0) return mac_cmp;
+    } else if (a_has_mac != b_has_mac) {
+        return a_has_mac ? -1 : 1;
+    }
+
+    return strcmp(a->ip, b->ip);
+}
+
+static void sort_active_nodes(void) {
+    if (num_active_nodes > 1) {
+        qsort(active_nodes, num_active_nodes, sizeof(active_node_t), compare_active_nodes);
+    }
+}
+
+static void add_active_node(const char* ip, const char* mac) {
+    if (!ip || ip[0] == '\0') return;
+
+    for (int i = 0; i < num_active_nodes; i++) {
+        const bool same_mac = mac && mac[0] != '\0' && strcmp(active_nodes[i].mac, mac) == 0;
+        const bool same_ip = strcmp(active_nodes[i].ip, ip) == 0;
+        if (same_mac || same_ip) {
+            strncpy(active_nodes[i].ip, ip, sizeof(active_nodes[i].ip) - 1);
+            active_nodes[i].ip[sizeof(active_nodes[i].ip) - 1] = '\0';
+            if (mac && mac[0] != '\0') {
+                strncpy(active_nodes[i].mac, mac, sizeof(active_nodes[i].mac) - 1);
+                active_nodes[i].mac[sizeof(active_nodes[i].mac) - 1] = '\0';
+            }
+            active_nodes[i].last_seen_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            sort_active_nodes();
+            ESP_LOGI("HTTP", "Node aktualisiert: ip=%s mac=%s", active_nodes[i].ip, active_nodes[i].mac);
+            return;
+        }
+    }
+
+    if (num_active_nodes < MAX_NODES) {
+        strncpy(active_nodes[num_active_nodes].ip, ip, sizeof(active_nodes[num_active_nodes].ip) - 1);
+        active_nodes[num_active_nodes].ip[sizeof(active_nodes[num_active_nodes].ip) - 1] = '\0';
+        if (mac && mac[0] != '\0') {
+            strncpy(active_nodes[num_active_nodes].mac, mac, sizeof(active_nodes[num_active_nodes].mac) - 1);
+            active_nodes[num_active_nodes].mac[sizeof(active_nodes[num_active_nodes].mac) - 1] = '\0';
+        } else {
+            active_nodes[num_active_nodes].mac[0] = '\0';
+        }
+        active_nodes[num_active_nodes].last_seen_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        num_active_nodes++;
+        sort_active_nodes();
+        ESP_LOGI("HTTP", "Neuer Node aktiv registriert: ip=%s mac=%s (Total: %d)", ip, active_nodes[num_active_nodes - 1].mac, num_active_nodes);
+        
+        // Notify WebSocket clients
+        char notify_buf[128];
+        int len = snprintf(notify_buf, sizeof(notify_buf), "{\"type\":\"node_registered\",\"ip\":\"%s\",\"mac\":\"%s\"}", ip, mac ? mac : "");
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (ws_clients[i] >= 0) {
+                queue_ws_frame_copy(ws_server, ws_clients[i], HTTPD_WS_TYPE_TEXT, (const uint8_t *)notify_buf, len);
+            }
+        }
+    }
+}
+
+static void cleanup_active_nodes(void) {
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    int originalCount = num_active_nodes;
+    for (int i = 0; i < num_active_nodes; ) {
+        // Timeout extrem erhöht, da Nodes sich derzeit nur beim Booten einmalig registrieren!
+        // Sonst schmeißt der Master sie nach 15 Sekunden heimlich aus der Liste.
+        if (now - active_nodes[i].last_seen_ms > 86400000) { 
+            ESP_LOGI("HTTP", "Entferne inaktiven Node (Timeout): ip=%s mac=%s", active_nodes[i].ip, active_nodes[i].mac);
+            for (int j = i; j < num_active_nodes - 1; j++) {
+                active_nodes[j] = active_nodes[j + 1];
+            }
+            num_active_nodes--;
+        } else {
+            i++;
+        }
+    }
+    if (originalCount != num_active_nodes) {
+        sort_active_nodes();
+    }
+}
+
+// HTTP API Handlers
+esp_err_t http_get_nodes_handler(httpd_req_t *req) {
+    cleanup_active_nodes();
+    
+    char buf[768] = "[";
+    char own_ip[16] = "192.168.4.1";
+    char own_mac[18] = "";
     esp_netif_ip_info_t ip_info;
-    ip4addr_aton(config->ip, (ip4_addr_t*)&ip_info.ip);
-    ip4addr_aton(config->gateway, (ip4_addr_t*)&ip_info.gw);
-    ip4addr_aton(config->netmask, (ip4_addr_t*)&ip_info.netmask);
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!netif) netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif) {
+        esp_netif_get_ip_info(netif, &ip_info);
+        esp_ip4addr_ntoa(&ip_info.ip, own_ip, sizeof(own_ip));
+    }
+    format_device_mac(own_mac, sizeof(own_mac));
+    
+    snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf),
+             "{\"ip\":\"%s\",\"mac\":\"%s\",\"isMaster\":true}", own_ip, own_mac);
+    for(int i=0; i<num_active_nodes; i++) {
+        if (strcmp(active_nodes[i].ip, own_ip) != 0) {
+            snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf),
+                     ",{\"ip\":\"%s\",\"mac\":\"%s\",\"isMaster\":false}",
+                     active_nodes[i].ip,
+                     active_nodes[i].mac[0] != '\0' ? active_nodes[i].mac : "");
+        }
+    }
+    strcat(buf, "]");
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
 
-    esp_netif_dhcps_stop(ap_netif);
-    esp_netif_set_ip_info(ap_netif, &ip_info);
-    esp_netif_dhcps_start(ap_netif);
+esp_err_t http_register_node_handler(httpd_req_t *req) {
+    char buf[128];
+    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    if (ret <= 0) return ESP_FAIL;
+    buf[ret] = '\0';
 
+    char ip[16] = "";
+    char mac[18] = "";
 
-//NEU
-ip4_addr_t dns_addr;
-IP4_ADDR(&dns_addr, 192, 168, 4, 1);   // AP selbst als DNS
-esp_netif_dhcps_option(ap_netif,
-                       ESP_NETIF_OP_SET,
-                       ESP_NETIF_DOMAIN_NAME_SERVER,
-                       &dns_addr, sizeof(dns_addr));
+    cJSON *json = cJSON_Parse(buf);
+    if (json) {
+        cJSON *ip_item = cJSON_GetObjectItem(json, "ip");
+        cJSON *mac_item = cJSON_GetObjectItem(json, "mac");
+        if (cJSON_IsString(ip_item) && ip_item->valuestring) {
+            strncpy(ip, ip_item->valuestring, sizeof(ip) - 1);
+            ip[sizeof(ip) - 1] = '\0';
+        }
+        if (cJSON_IsString(mac_item) && mac_item->valuestring) {
+            strncpy(mac, mac_item->valuestring, sizeof(mac) - 1);
+            mac[sizeof(mac) - 1] = '\0';
+        }
+        cJSON_Delete(json);
+    } else {
+        strncpy(ip, buf, sizeof(ip) - 1);
+        ip[sizeof(ip) - 1] = '\0';
+    }
 
-esp_netif_dhcps_option(
-    ap_netif, 
-    ESP_NETIF_OP_SET,
-    ESP_NETIF_DOMAIN_NAME_SERVER,
-    &dns_addr, // DNS
-    sizeof(ip_addr_t)
-);
-uint32_t lease_time = 60;
-esp_netif_dhcps_option(
-    ap_netif,
-    ESP_NETIF_OP_SET,
-    ESP_NETIF_REQUESTED_IP_ADDRESS,
-    &lease_time, // 60s Lease-Time
-    sizeof(uint32_t)
-);
+    add_active_node(ip, mac);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+static bool scan_for_master_network(const char *ssid) {
+    wifi_scan_config_t scan_config = {};
+    scan_config.ssid = (uint8_t *)(ssid && ssid[0] != '\0' ? ssid : "senzIMU");
+    scan_config.bssid = 0;
+    scan_config.channel = 0;
+    scan_config.show_hidden = false;
+
+    ESP_LOGI(TAG, "Suche nach Netz: %s...", (const char *)scan_config.ssid);
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi-Scan fehlgeschlagen: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    return ap_count > 0;
+}
+
+static void start_master_ap_mode(void) {
+    if (g_role_transition_in_progress) return;
+    g_role_transition_in_progress = true;
+
+    ESP_LOGI(TAG, "Starte als Master (AP)...");
+    g_is_master_role = true;
+    num_active_nodes = 0;
+
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 
-    strncpy((char*)wifi_config.ap.ssid, config->ssid, sizeof(wifi_config.ap.ssid));
-    strncpy((char*)wifi_config.ap.password, config->password, sizeof(wifi_config.ap.password));
-    wifi_config.ap.channel = config->channel;
+    wifi_config_t ap_config = {};
+    ap_config.ap.channel = 1;
+    ap_config.ap.authmode = WIFI_AUTH_OPEN;
+    ap_config.ap.max_connection = 8;
+    ap_config.ap.beacon_interval = 100;
+    strncpy((char*)ap_config.ap.ssid, g_target_wifi_ssid, sizeof(ap_config.ap.ssid));
 
-    if (strlen(config->password) >= 8) {
-        wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
-    } else {
-        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    esp_netif_ip_info_t ap_ip;
+    ip4addr_aton("192.168.4.1", (ip4_addr_t*)&ap_ip.ip);
+    ip4addr_aton("192.168.4.1", (ip4_addr_t*)&ap_ip.gw);
+    ip4addr_aton("255.255.255.0", (ip4_addr_t*)&ap_ip.netmask);
+
+    if (g_ap_netif) {
+        esp_netif_dhcps_stop(g_ap_netif);
+        esp_netif_set_ip_info(g_ap_netif, &ap_ip);
+
+        ip4_addr_t dns_addr;
+        IP4_ADDR(&dns_addr, 192, 168, 4, 1);
+        esp_netif_dhcps_option(g_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &dns_addr, sizeof(dns_addr));
+        uint32_t lease_time = 60;
+        esp_netif_dhcps_option(g_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_REQUESTED_IP_ADDRESS, &lease_time, sizeof(uint32_t));
+        esp_netif_dhcps_start(g_ap_netif);
     }
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_set_max_tx_power(84);
+
+    g_role_transition_in_progress = false;
+}
+
+// WIFI AUTO-ROLE INITIALISIERUNG
+static void wifi_init_auto_role(const my_wifi_config_t *config) {
+    g_sta_netif = esp_netif_create_default_wifi_sta();
+    g_ap_netif = esp_netif_create_default_wifi_ap();
+    
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    uint8_t mac[6];
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    int boot_delay = (mac[5] % 50) + (mac[4] % 10) * 100; // Bis zu 1000ms delay
+    ESP_LOGI(TAG, "Multi-Sensor: Verzögere Start um %d ms...", boot_delay);
+    vTaskDelay(pdMS_TO_TICKS(boot_delay));
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    int8_t max_tx_power;
-    esp_wifi_get_max_tx_power(&max_tx_power);
-    printf("Aktuelle maximale TX Power: %d dBm\n", max_tx_power);
+    const char *target_ssid = config->ssid[0] != '\0' ? config->ssid : "senzIMU";
+    strncpy(g_target_wifi_ssid, target_ssid, sizeof(g_target_wifi_ssid) - 1);
+    g_target_wifi_ssid[sizeof(g_target_wifi_ssid) - 1] = '\0';
+    bool found = scan_for_master_network(target_ssid);
 
-    esp_err_t ret = esp_wifi_set_max_tx_power(84); // 84 entspricht 20 dBm
-    if (ret != ESP_OK) {
-        printf("Fehler beim Setzen der TX Power: %s\n", esp_err_to_name(ret));
+    if (found) {
+        ESP_LOGI(TAG, "Netzwerk senzIMU gefunden! Verbinde als Node (STA)...");
+        g_is_master_role = false;
+        wifi_config_t sta_config = {};
+        strcpy((char*)sta_config.sta.ssid, target_ssid);
+        if (strlen((char*)config->password) > 0) {
+           strcpy((char*)sta_config.sta.password, config->password);
+        }
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+        esp_wifi_connect();
+        
+        int retries = 0;
+        esp_netif_ip_info_t ip_info;
+        while (retries < 20) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            esp_netif_get_ip_info(g_sta_netif, &ip_info);
+            if (ip_info.ip.addr != 0) {
+                char my_ip_str[16];
+                char my_mac_str[18];
+                char register_payload[96];
+                sprintf(my_ip_str, IPSTR, IP2STR(&ip_info.ip));
+                format_device_mac(my_mac_str, sizeof(my_mac_str));
+                snprintf(register_payload, sizeof(register_payload), "{\"ip\":\"%s\",\"mac\":\"%s\"}", my_ip_str, my_mac_str);
+                ESP_LOGI(TAG, "Verbunden! Meine IP: %s", my_ip_str);
+                
+                esp_http_client_config_t http_cfg = {};
+                http_cfg.url = "http://192.168.4.1/api/register_node";
+                http_cfg.method = HTTP_METHOD_POST;
+                http_cfg.timeout_ms = 3000;
+                
+                esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+                esp_http_client_set_post_field(client, register_payload, strlen(register_payload));
+                esp_http_client_set_header(client, "Content-Type", "application/json");
+                
+                for (int attempt = 0; attempt < 5; attempt++) {
+                    esp_err_t err = esp_http_client_perform(client);
+                    if (err == ESP_OK) {
+                        ESP_LOGI("HTTP_CLIENT", "Erfolgreich als Node registriert! ip=%s mac=%s", my_ip_str, my_mac_str);
+                        break;
+                    } else {
+                        ESP_LOGW("HTTP_CLIENT", "Registrierung fehlgeschlagen: %s, neuer Versuch...", esp_err_to_name(err));
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                    }
+                }
+                
+                esp_http_client_cleanup(client);
+                
+                return;
+            }
+            retries++;
+        }
+        ESP_LOGI(TAG, "IP Timeout. Fallback auf AP...");
+        start_master_ap_mode();
+        return;
     }
 
-    esp_wifi_get_max_tx_power(&max_tx_power);
-    printf("Aktuelle maximale TX Power: %d dBm\n", max_tx_power);
+    ESP_LOGI(TAG, "Netzwerk senzIMU NICHT gefunden. Starte als Master (AP)...");
+    start_master_ap_mode();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1099,7 +1574,8 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
     if (is_html) {
         httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
     } else if (is_static_asset) {
-        httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000"); // Lange Cachen erlauben!
+        // Cache-Control vorerst komplett auf no-cache für die Entwicklung!
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate"); 
     }
 
     // ACHTUNG: 'Connection: close' absichtlich entfernt,
@@ -1139,6 +1615,7 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
 ////////////////////////////////////////////////////////////////////////////////
 // HTTP(S) OTA UPDATE HANDLER
 esp_err_t http_ota_update_handler(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     ESP_LOGI("OTA", "Starte OTA Update...");
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
     if (update_partition == NULL) {
@@ -1205,6 +1682,7 @@ esp_err_t http_ota_update_handler(httpd_req_t *req) {
 ////////////////////////////////////////////////////////////////////////////////
 // HTTP(S) FILESYSTEM UPDATE HANDLER
 esp_err_t http_fs_update_handler(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     ESP_LOGI("OTA", "Starte FS Update...");
     const esp_partition_t *fs_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "littlefs");
     if (fs_partition == NULL) {
@@ -1253,8 +1731,112 @@ esp_err_t http_fs_update_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t http_get_led_config_handler(httpd_req_t *req) {
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"ready\":[%u,%u,%u],\"stream\":[%u,%u,%u],\"error\":[%u,%u,%u],\"ready_int\":%u,\"stream_int\":%u,\"error_int\":%u}",
+             g_led_config.ready_r, g_led_config.ready_g, g_led_config.ready_b,
+             g_led_config.stream_r, g_led_config.stream_g, g_led_config.stream_b,
+             g_led_config.error_r, g_led_config.error_g, g_led_config.error_b,
+             g_led_config.ready_intensity, g_led_config.stream_intensity, g_led_config.error_intensity);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+esp_err_t http_options_led_config_handler(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+esp_err_t http_post_led_config_handler(httpd_req_t *req) {
+    char buf[512];
+    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    if (ret <= 0) {
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty request");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    if (!json) {
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    bool save_to_nvs = false;
+    cJSON *save_flag = cJSON_GetObjectItem(json, "save");
+    if (cJSON_IsBool(save_flag) && save_flag->valueint) save_to_nvs = true;
+
+    led_config_t *target_cfg = save_to_nvs ? &g_led_config : &g_led_config_preview;
+
+    cJSON *ready = cJSON_GetObjectItem(json, "ready");
+    if (cJSON_IsArray(ready) && cJSON_GetArraySize(ready) == 3) {
+        target_cfg->ready_r = cJSON_GetArrayItem(ready, 0)->valueint;
+        target_cfg->ready_g = cJSON_GetArrayItem(ready, 1)->valueint;
+        target_cfg->ready_b = cJSON_GetArrayItem(ready, 2)->valueint;
+    }
+
+    cJSON *stream = cJSON_GetObjectItem(json, "stream");
+    if (cJSON_IsArray(stream) && cJSON_GetArraySize(stream) == 3) {
+        target_cfg->stream_r = cJSON_GetArrayItem(stream, 0)->valueint;
+        target_cfg->stream_g = cJSON_GetArrayItem(stream, 1)->valueint;
+        target_cfg->stream_b = cJSON_GetArrayItem(stream, 2)->valueint;
+    }
+
+    cJSON *error = cJSON_GetObjectItem(json, "error");
+    if (cJSON_IsArray(error) && cJSON_GetArraySize(error) == 3) {
+        target_cfg->error_r = cJSON_GetArrayItem(error, 0)->valueint;
+        target_cfg->error_g = cJSON_GetArrayItem(error, 1)->valueint;
+        target_cfg->error_b = cJSON_GetArrayItem(error, 2)->valueint;
+    }
+
+    cJSON *r_int = cJSON_GetObjectItem(json, "ready_int");
+    if (cJSON_IsNumber(r_int)) target_cfg->ready_intensity = r_int->valueint;
+
+    cJSON *s_int = cJSON_GetObjectItem(json, "stream_int");
+    if (cJSON_IsNumber(s_int)) target_cfg->stream_intensity = s_int->valueint;
+
+    cJSON *e_int = cJSON_GetObjectItem(json, "error_int");
+    if (cJSON_IsNumber(e_int)) target_cfg->error_intensity = e_int->valueint;
+
+    cJSON *preview = cJSON_GetObjectItem(json, "preview");
+    if (cJSON_IsString(preview)) {
+        if (strcmp(preview->valuestring, "ready") == 0) override_preview_state = LED_STATE_GREEN;
+        else if (strcmp(preview->valuestring, "stream") == 0) override_preview_state = LED_STATE_BLUE;
+        else if (strcmp(preview->valuestring, "error") == 0) override_preview_state = LED_STATE_RED;
+        else override_preview_state = LED_STATE_OFF;
+    }
+
+    cJSON_Delete(json);
+
+    if (save_to_nvs) {
+        save_led_config_to_nvs(&g_led_config);
+        g_led_config_preview = g_led_config;
+    }
+    force_led_rgb_update();
+
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HTTP(S) SERVER START
+
+#define FIRMWARE_VERSION "SenzIMU v1.0.3"
 
 void start_http_server() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -1273,6 +1855,8 @@ void start_http_server() {
     config.stack_size = 8192*2;  // Beispielwert, an deinen Bedarf anpassen
     config.max_open_sockets = safe_open_sockets;
     config.backlog_conn = safe_open_sockets;
+    config.recv_wait_timeout = 3600; // WICHTIG: Verhindert, dass idle WebSockets nach 5s von IDF getrennt werden!
+    config.send_wait_timeout = 30;   
     config.lru_purge_enable = true;  // Alte Verbindungen bereinigen
     config.max_uri_handlers = 25;
     config.max_req_hdr_len = 8192;
@@ -1342,8 +1926,87 @@ void start_http_server() {
             ESP_LOGE("HTTP", "WebSocket-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(ws_err));
         }
 
-        // Wildcard für andere Dateien
-        httpd_uri_t wildcard = {
+        // OTA OPTIONS Handlers (CORS)
+        httpd_uri_t ota_options_uri = {
+            .uri = "/update",
+            .method = HTTP_OPTIONS,
+            .handler = http_options_led_config_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        httpd_register_uri_handler(server, &ota_options_uri);
+
+        httpd_uri_t fs_ota_options_uri = {
+            .uri = "/update_fs",
+            .method = HTTP_OPTIONS,
+            .handler = http_options_led_config_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        httpd_register_uri_handler(server, &fs_ota_options_uri);
+
+        // LED Config Handlers
+        httpd_uri_t led_get_uri = {
+            .uri = "/api/led_config",
+            .method = HTTP_GET,
+            .handler = http_get_led_config_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        httpd_register_uri_handler(server, &led_get_uri);
+
+        httpd_uri_t led_post_uri = {
+            .uri = "/api/led_config",
+            .method = HTTP_POST,
+            .handler = http_post_led_config_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        httpd_register_uri_handler(server, &led_post_uri);
+
+        httpd_uri_t led_options_uri = {
+            .uri = "/api/led_config",
+            .method = HTTP_OPTIONS,
+            .handler = http_options_led_config_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        httpd_register_uri_handler(server, &led_options_uri);
+
+        httpd_uri_t get_nodes_uri = {
+            .uri = "/api/nodes",
+            .method = HTTP_GET,
+            .handler = http_get_nodes_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        httpd_register_uri_handler(server, &get_nodes_uri);
+
+        httpd_uri_t register_node_uri = {
+            .uri = "/api/register_node",
+            .method = HTTP_POST,
+            .handler = http_register_node_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = NULL
+        };
+        httpd_register_uri_handler(server, &register_node_uri);
+
+        // Wildcard für andere Dateien (MUSS als ALLERLETZTES registriert werden!)
+ httpd_uri_t wildcard = {
             .uri = "/*",
             .method = HTTP_GET,
             .handler = http_serve_static_file,
@@ -1356,42 +2019,33 @@ void start_http_server() {
         if (wildcard_err != ESP_OK) {
             ESP_LOGE("HTTP", "Wildcard-Handler Registrierung fehlgeschlagen: %s", esp_err_to_name(wildcard_err));
         }
-
         ws_server = server;  // global für ws senden
-
         ESP_LOGI("HTTP", "HTTP Server & WebSocket gestartet");
     } else {
         ESP_LOGE("HTTP", "httpd_start fehlgeschlagen: %s", esp_err_to_name(start_err));
     }
 }
-
 ////////////////////////////////////////////////////////////////////////////////
 // WS CLIENT-LISTE INITIALISIERUNG
-
 void init_ws_clients(void) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         ws_clients[i] = -1;
+        ws_clients_errors[i] = 0;
     }
 }
-
 ////////////////////////////////////////////////////////////////////////////////
 // WEBSOCKET HANDLER (robust, mit Duplikat-Schutz und EAGAIN handling)
-
-
 #define ESP_ERR_HTTPD_WS_CLIENT_DISCONNECTED  (ESP_ERR_HTTPD_BASE - 1)
-
 // ===== Der WebSocket-Handler =====
 esp_err_t websocket_handler(httpd_req_t *req)
 {
     int fd = httpd_req_to_sockfd(req);
-
     // ----------- Handshake / Connect ------------
     if (req->method == HTTP_GET) {
             ESP_LOGI("WS", "Handshake done, FD %d connected", fd);
              ESP_LOGI("WS", "Vor Neuaufnahme: ws_clients: %d %d %d %d %d %d %d %d",
              ws_clients[0], ws_clients[1], ws_clients[2], ws_clients[3],
              ws_clients[4], ws_clients[5], ws_clients[6], ws_clients[7]); // LOG
-
         // in Liste eintragen, falls nicht vorhanden
         bool already_in_list = false;
         for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -1401,37 +2055,27 @@ esp_err_t websocket_handler(httpd_req_t *req)
             for (int i = 0; i < MAX_CLIENTS; i++) {
                 if (ws_clients[i] == -1) {
                     ws_clients[i] = fd;
+                    ws_clients_errors[i] = 0;
                     break;
                 }
             }
         }
-
         // Neue Verbindung erkannt!
         set_rgb_state(LED_STATE_BLUE);
-
-        // aktuelle Config an neu Verbundenen schicken
-                send_config_value(CFG_ID_ACCELSAMPLERATE , pendingConfig.accelDataRate);
-                send_config_value(CFG_ID_ACCELRANGE, pendingConfig.accelRange);
-                send_config_value(CFG_ID_ACCELFILTER, pendingConfig.accelFilter);
-                send_config_value(CFG_ID_GYRORANGE, pendingConfig.gyroRange);
-                send_config_value(CFG_ID_GYROSAMPLERATE, pendingConfig.gyroDataRate);
-                send_config_value(CFG_ID_GYROFILTER, pendingConfig.gyroFilter);
-                send_config_value(CFG_ID_TEMPSAMPLERATE, pendingConfig.tempSampleRate);
+        // WICHTIG: Keine Config während HTTP_GET senden. Websocket Handshake ist asynchron.
+        // Die Config wird erst verschickt, wenn der Client "get_config" über Websocket anfrägt.
         return ESP_OK;
     }
-
     // ----------- Frame vorbereiten / Länge abrufen ------------
     httpd_ws_frame_t ws_pkt;
     memset(&ws_pkt, 0, sizeof(ws_pkt));
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) return ret;
-
     // ----------- Payload vorhanden? ------------
     if (ws_pkt.len > 0) {
         uint8_t *buf = (uint8_t *)calloc(1, ws_pkt.len + 1);
         if (!buf) return ESP_ERR_NO_MEM;
         ws_pkt.payload = buf;
-
         ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
         if (ret == ESP_OK) {
             // ------ TEXT: JSON Verarbeiten ------
@@ -1440,7 +2084,6 @@ esp_err_t websocket_handler(httpd_req_t *req)
                 if (strcmp((char*)buf, "ping") == 0) {
                     // Spezialfall: Client hat "ping" als Text gesendet
                     ESP_LOGI("WS", "Text-Ping empfangen, sende Pong als Text");
-                    // Entweder sende "pong" zurück als Text-Frame oder ignoriere
                     char pong_msg[] = "pong";
                     httpd_ws_frame_t pong_frame = {
                         .final = true,
@@ -1450,6 +2093,29 @@ esp_err_t websocket_handler(httpd_req_t *req)
                         .len = strlen(pong_msg)
                     };
                     httpd_ws_send_frame(req, &pong_frame);
+                } else if (strcmp((char*)buf, "get_config") == 0) {
+                    // Cient hat Handshake überlebt und fragt initial nach Config
+                    ESP_LOGI("WS", "Initial Config request empfangen");
+                    send_config_value(CFG_ID_ACCELSAMPLERATE , pendingConfig.accelDataRate);
+                    send_config_value(CFG_ID_ACCELRANGE, pendingConfig.accelRange);
+                    send_config_value(CFG_ID_ACCELFILTER, pendingConfig.accelFilter);
+                    send_config_value(CFG_ID_GYRORANGE, pendingConfig.gyroRange);
+                    send_config_value(CFG_ID_GYROSAMPLERATE, pendingConfig.gyroDataRate);
+                    send_config_value(CFG_ID_GYROFILTER, pendingConfig.gyroFilter);
+                    send_config_value(CFG_ID_TEMPSAMPLERATE, pendingConfig.tempSampleRate);
+                    send_config_float(107, FREQ_FINE);
+                    
+                    char fw_json[64];
+                    snprintf(fw_json, sizeof(fw_json), "{\"type\":\"firmwareVer\",\"version\":\"%s\"}", FIRMWARE_VERSION);
+                    httpd_ws_frame_t fw_frame = {
+                        .final = true,
+                        .fragmented = false,
+                        .type = HTTPD_WS_TYPE_TEXT,
+                        .payload = (uint8_t*)fw_json,
+                        .len = strlen(fw_json)
+                    };
+                    httpd_ws_send_frame(req, &fw_frame);
+
                 } else {
                                              
                 cJSON *root = cJSON_Parse((char*)buf);
@@ -1457,13 +2123,11 @@ esp_err_t websocket_handler(httpd_req_t *req)
                     cJSON *item = NULL;
                     cJSON_ArrayForEach(item, root) {
                         const char *key = item->string;
-
                         if (strcmp(key, "ACCELSAMPLERATE") == 0) {
                             uint16_t rate = parse_rate_config_value(item);
                             pendingConfig.accelDataRate = rate;
-                    
-                                                            imuConfigChanged = true;
-                                                        imuConfigPersistPending = true;
+                            imuConfigChanged = true;
+                            imuConfigPersistPending = true;
                             send_config_value(CFG_ID_ACCELSAMPLERATE, rate);
                         }
                         else if (strcmp(key, "ACCELRANGE") == 0) {
@@ -1518,6 +2182,13 @@ esp_err_t websocket_handler(httpd_req_t *req)
                                 ESP_LOGI("WS", "Shutdown vom Button empfangen");
                                 g_force_deep_sleep = true;
                             }
+                            else if (cJSON_IsString(item) && strcmp(item->valuestring, "IDENTIFY") == 0) {
+                                ESP_LOGI("WS", "Identify vom Button empfangen");
+                                xTaskCreate(led_boot_sequence_task, "led_ident", 2048, NULL, 5, NULL);
+                            }
+                            else if (cJSON_IsString(item) && strcmp(item->valuestring, "PING") == 0) {
+                                // Nur Keepalive, nichts tun. Ignoriert absichtlich, um Timeout zu verhindern.
+                            }
                         }
                         else {
                             ESP_LOGW("WS", "Unbekannter Key im JSON: %s", key);
@@ -1528,12 +2199,10 @@ esp_err_t websocket_handler(httpd_req_t *req)
                     ESP_LOGW("WS", "Fehler: Ungültiges JSON empfangen");
                 }
             }}
-
             // ------ BINARY ------
             else if (ws_pkt.type == HTTPD_WS_TYPE_BINARY) {
                 ESP_LOGI("WS", "Binary Frame von FD %d (%d Bytes)", fd, ws_pkt.len);
             }
-
             // ------ PING ------
             else if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
                 httpd_ws_frame_t pong_pkt = {
@@ -1545,12 +2214,10 @@ esp_err_t websocket_handler(httpd_req_t *req)
                 };
                 httpd_ws_send_frame(req, &pong_pkt);
             }
-
             // ------ PONG ------
             else if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
                 // Pong wird jetzt passiv ignoriert, wir verlassen uns auf Socket-Errors
             }
-
             // ------ CLOSE ------
             else if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
                 ESP_LOGI("WS", "CLOSE von FD %d – entferne aus Liste", fd);
@@ -1568,25 +2235,18 @@ esp_err_t websocket_handler(httpd_req_t *req)
                     }
                 }
             }
-
         } else {
             ESP_LOGW("WS", "Fehler beim Empfang: %s", esp_err_to_name(ret));
         }
-
         free(buf);
     }
-
     return ESP_OK;
 }
-
-
 ////////////////////////////////////////////////////////////////////////////////
 // Ringbuffer Init
-
 void init_ringbuffer() {
     sensor_ringbuf = xRingbufferCreate(RINGBUF_SIZE, RINGBUF_TYPE_NOSPLIT);
     assert(sensor_ringbuf != NULL);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1742,6 +2402,7 @@ void sensor_task(void* pvParameters) {
                 send_config_value(CFG_ID_GYROSAMPLERATE, pendingConfig.gyroDataRate);
                 send_config_value(CFG_ID_GYROFILTER, pendingConfig.gyroFilter);
                 send_config_value(CFG_ID_TEMPSAMPLERATE, pendingConfig.tempSampleRate);
+                send_config_float(107, FREQ_FINE);
 
         if (imuConfigPersistPending) {
             if (save_imu_config_to_nvs(&pendingConfig) == ESP_OK) {
@@ -1749,7 +2410,7 @@ void sensor_task(void* pvParameters) {
             }
         }
 
-
+        esp_now_trigger_sync(); // Trigger sync after settings tweak
     }
 
    // Hier können weitere Konfigurationen hinzugefügt werden
@@ -1811,7 +2472,7 @@ void sensor_task(void* pvParameters) {
 #define MIN_PACKETS_PER_FRAME 32
 #define MAX_FRAME_SIZE (PACKET_SIZE * MAX_PACKETS_PER_FRAME)
 #define WS_FRAME_WAIT_MS 8
-#define WS_FRAME_ACCUMULATION_MS 3
+#define WS_FRAME_ACCUMULATION_MS 20
 #define WS_SEND_NOMEM_BACKOFF_MS 40
 #define WS_SEND_FAIL_BACKOFF_MS 120
 #define WS_STREAM_HIGH_WATERMARK_BYTES (STREAMBUFFER_SIZE * 3 / 4)
@@ -1844,6 +2505,11 @@ void ws_net_task(void *arg) {
 
         if (loop_now_us < ws_send_backoff_until_us) {
             vTaskDelay(pdMS_TO_TICKS(WS_SEND_NOMEM_BACKOFF_MS));
+            continue;
+        }
+
+        if (__atomic_load_n(&g_ws_inflight_work_items, __ATOMIC_RELAXED) >= WS_MAX_INFLIGHT_WORK_ITEMS) {
+            vTaskDelay(1);
             continue;
         }
 
@@ -1958,11 +2624,12 @@ void ws_net_task(void *arg) {
             const uint32_t inflight_ws_items = __atomic_load_n(&g_ws_inflight_work_items, __ATOMIC_RELAXED);
             const uint32_t frame_limit_packets = (uint32_t)(current_frame_size_limit / PACKET_SIZE);
 
-            char stats_payload[512];
+            uint64_t synced_time_us = (uint64_t)((int64_t)esp_timer_get_time() + g_time_sync_offset);
+            char stats_payload[600];
             const int stats_len = snprintf(
                 stats_payload,
                 sizeof(stats_payload),
-                "{\"type\":\"espStats\",\"activeClients\":%d,\"sensorBytes\":%u,\"sensorPackets\":%u,\"fifoPeakBytes\":0,\"streamDroppedBytes\":%u,\"streamPartialWrites\":0,\"streamBacklogPeak\":%u,\"wsBytes\":%u,\"wsFrames\":%u,\"wsSendErrors\":%u,\"freeHeap\":%u,\"minFreeHeap\":%u,\"largestHeapBlock\":%u,\"psramAvailable\":%u,\"psramTotal\":%u,\"freePsram\":%u,\"minFreePsram\":%u,\"largestPsramBlock\":%u,\"cpuLoadPct\":%d,\"cpuTempC\":%.2f,\"inflightWs\":%u,\"frameLimitPackets\":%u}",
+                "{\"type\":\"espStats\",\"activeClients\":%d,\"sensorBytes\":%u,\"sensorPackets\":%u,\"fifoPeakBytes\":0,\"streamDroppedBytes\":%u,\"streamPartialWrites\":0,\"streamBacklogPeak\":%u,\"wsBytes\":%u,\"wsFrames\":%u,\"wsSendErrors\":%u,\"freeHeap\":%u,\"minFreeHeap\":%u,\"largestHeapBlock\":%u,\"psramAvailable\":%u,\"psramTotal\":%u,\"freePsram\":%u,\"minFreePsram\":%u,\"largestPsramBlock\":%u,\"cpuLoadPct\":%d,\"cpuTempC\":%.2f,\"inflightWs\":%u,\"frameLimitPackets\":%u,\"syncedEspTime\":%llu}",
                 active_clients,
                 (unsigned int)stats.sensor_bytes_read,
                 (unsigned int)stats.sensor_packets_read,
@@ -1982,7 +2649,8 @@ void ws_net_task(void *arg) {
                 cpu_load_pct,
                 (double)cpu_temp_c,
                 (unsigned int)inflight_ws_items,
-                (unsigned int)frame_limit_packets
+                (unsigned int)frame_limit_packets,
+                (unsigned long long)synced_time_us
             );
 
             if (stats_len > 0 && active_clients > 0) {
@@ -2148,6 +2816,17 @@ extern "C" void app_main() {
         pendingConfig = kDefaultImuConfig;
     }
 
+    ret = load_led_config_from_nvs(&g_led_config);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "LED-Konfiguration aus NVS geladen");
+        set_rgb_state(pending_led_state); // Reapply current state with new colors
+    } else if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "Keine gespeicherte LED-Konfiguration gefunden, verwende Defaults");
+    } else {
+        ESP_LOGE(TAG, "Fehler beim Laden der LED-Konfiguration: %s", esp_err_to_name(ret));
+        g_led_config = kDefaultLedConfig;
+    }
+
     ret = mount_littlefs();
     if (ret != ESP_OK) {
         set_rgb_state(LED_STATE_RED);
@@ -2164,13 +2843,14 @@ extern "C" void app_main() {
 
     list_files("/littlefs");
 
-    my_wifi_config_t wifi_cfg;
-    if (!read_wifi_config("/littlefs/wifi_config.ini", &wifi_cfg)) {
+    memset(&g_wifi_cfg, 0, sizeof(g_wifi_cfg));
+    if (!read_wifi_config("/littlefs/wifi_config.ini", &g_wifi_cfg)) {
         ESP_LOGE(TAG, "Failed to read WiFi config, using default values");
     }
 
     init_ringbuffer();
-    wifi_init_ap(&wifi_cfg);
+    wifi_init_auto_role(&g_wifi_cfg);
+    init_esp_now(); // ESP-NOW initialisieren
 
     init_ws_clients();
     start_http_server();
@@ -2188,7 +2868,7 @@ extern "C" void app_main() {
 
     xTaskCreatePinnedToCore(sensor_task, "sensor_task", 12288, NULL, 15, NULL, 1); // Sensorlast auf Core 1, damit WiFi/HTTP auf Core 0 Luft behalten
     xTaskCreatePinnedToCore(ws_net_task, "ws_net_task", 16384, NULL, 5, NULL, 0); // WS-Transport nahe am WiFi/HTTP-Stack auf Core 0
-    xTaskCreate(wifi_watchdog_task, "wifi_wd_task", 2048, NULL, 2, NULL);
+    xTaskCreate(wifi_watchdog_task, "wifi_wd_task", 4096, NULL, 2, NULL);
                             
     return; // app_main Task sauber beenden
 }

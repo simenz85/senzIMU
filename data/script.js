@@ -600,7 +600,7 @@ const accelSampleRateDD = new UniDropdown(document.getElementById('accelSampleRa
   label: 'Sample Rate',
   items: [
     { value: 0, label: "OFF" },
-    { value: 12.5, label: "12.5 Hz" },
+    { value: 125, label: "12.5 Hz" },
     { value: 26, label: "26 Hz" },
     { value: 52, label: "52 Hz"  },
     { value: 104, label: "104 Hz"  },
@@ -620,10 +620,10 @@ const acelFFilterDD = new UniDropdown(document.getElementById('accelFilterDD'), 
   type: 'select',
   label: 'Accel Filter',
   items: [
-    { value: "OFF", label: "OFF" },
-    { value: "LOWPASS", label: "LOWPASS" },
-    { value: "HIGHPASS1", label: "HIGHPASS 1" },    
-    { value: "HIGHPASS2", label: "HIGHPASS 2"  },
+    { value: 0, label: "OFF" },
+    { value: 1, label: "LOWPASS" },
+    { value: 2, label: "HIGHPASS 1" },    
+    { value: 3, label: "HIGHPASS 2"  },
 
   ],
   onChange: (value, label) => {
@@ -653,7 +653,7 @@ const gyroSampleRateDD = new UniDropdown(document.getElementById('gyroSampleRate
   label: 'Gyro Sample Rate',
   items: [
     { value: 0, label: "OFF" },
-    { value: 12.5, label: "12.5 Hz" },
+    { value: 125, label: "12.5 Hz" },
     { value: 26, label: "26 Hz" },
     { value: 52, label: "52 Hz"  },
     { value: 104, label: "104 Hz"  },
@@ -673,10 +673,10 @@ const gyroFilterDD = new UniDropdown(document.getElementById('gyroFilterDD'), {
   type: 'select',
   label: 'Gyro Filter',
   items: [
-    { value: "OFF", label: "OFF" },
-    { value: "LOWPASS", label: "LOWPASS" },
-    { value: "HIGHPASS1", label: "HIGHPASS 1" },    
-    { value: "HIGHPASS2", label: "HIGHPASS 2"  },
+    { value: 0, label: "OFF" },
+    { value: 1, label: "LOWPASS" },
+    { value: 2, label: "HIGHPASS 1" },    
+    { value: 3, label: "HIGHPASS 2"  },
 
   ],
   onChange: (value, label) => {
@@ -711,7 +711,7 @@ const accelSampleRateDD2 = new UniDropdown(document.getElementById('accelSampleR
   label: 'Sample Rate',
   items: [
     { value: 0, label: "OFF" },
-    { value: 12.5, label: "12.5 Hz" },
+    { value: 125, label: "12.5 Hz" },
     { value: 26, label: "26 Hz" },
     { value: 52, label: "52 Hz"  },
     { value: 104, label: "104 Hz"  },
@@ -736,10 +736,10 @@ const accelFilterDD2 = new UniDropdown(document.getElementById('accelFilterDD2')
   type: 'select',
   label: 'Accel Filter',
   items: [
-    { value: "OFF", label: "OFF" },
-    { value: "LOWPASS", label: "LOWPASS" },
-    { value: "HIGHPASS1", label: "HIGHPASS 1" },    
-    { value: "HIGHPASS2", label: "HIGHPASS 2"  },
+    { value: 0, label: "OFF" },
+    { value: 1, label: "LOWPASS" },
+    { value: 2, label: "HIGHPASS 1" },    
+    { value: 3, label: "HIGHPASS 2"  },
 
   ],
   onChange: (value, label) => {
@@ -777,7 +777,7 @@ const gyroSampleRateDD2 = new UniDropdown(document.getElementById('gyroSampleRat
   label: 'Gyro Sample Rate',
   items: [
     { value: 0, label: "OFF" },
-    { value: 12.5, label: "12.5 Hz" },
+    { value: 125, label: "12.5 Hz" },
     { value: 26, label: "26 Hz" },
     { value: 52, label: "52 Hz"  },
     { value: 104, label: "104 Hz"  },
@@ -802,10 +802,10 @@ const gyroFilterDD2 = new UniDropdown(document.getElementById('gyroFilterDD2'), 
   type: 'select',
   label: 'Gyro Filter',
   items: [
-    { value: "OFF", label: "OFF" },
-    { value: "LOWPASS", label: "LOWPASS" },
-    { value: "HIGHPASS1", label: "HIGHPASS 1" },    
-    { value: "HIGHPASS2", label: "HIGHPASS 2"  },
+    { value: 0, label: "OFF" },
+    { value: 1, label: "LOWPASS" },
+    { value: 2, label: "HIGHPASS 1" },    
+    { value: 3, label: "HIGHPASS 2"  },
 
   ],
   onChange: (value, label) => {
@@ -822,10 +822,10 @@ const tempSampleRateDD2 = new UniDropdown(document.getElementById('tempSampleRat
   type: 'select',
   label: 'Temp Samplerate',
   items: [
-    { value: "0", label: "OFF" },
-    { value: "1", label: "1.6 Hz" },
-    { value: "2", label: "12.5 Hz" },
-    { value: "3", label: "52 Hz"   },
+    { value: 0, label: "OFF" },
+    { value: 1, label: "1.6 Hz" },
+    { value: 2, label: "12.5 Hz" },
+    { value: 3, label: "52 Hz"   },
 
   ],
   onChange: (value, label) => {
