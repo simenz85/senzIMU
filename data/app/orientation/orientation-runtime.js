@@ -350,6 +350,7 @@ export function syncViewportBaseQuaternion({ accVectorViewport, baseQuaternion, 
 
 export function syncViewportPostTransformQuaternion({
     decodeWorker,
+    quaternion,
     persistState = false,
     resetLiveBuffers = false,
     onResetLiveBuffers,
@@ -358,7 +359,7 @@ export function syncViewportPostTransformQuaternion({
     decodeWorker.postMessage({
         type: 'postTransformQuaternion',
         payload: {
-            quaternion: getIdentityQuaternionXYZW(),
+            quaternion: quaternion || getIdentityQuaternionXYZW(),
         }
     });
 

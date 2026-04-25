@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <title>ESP IOT DASHBOARD</title>
+  <title>senzIMU | Vibration Analytics</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <link rel="icon" type="image/png" href="icons/favicon.png">
@@ -454,10 +454,10 @@
       <div id="bootOverlayHint" class="boot-hint">Der ESP bereitet Weboberfläche und Sensorverbindung vor.</div>
     </div>
     
-    <button id="btnStartOfflineReplay" onclick="if(window.initOfflineReplay) window.initOfflineReplay()" style="position: absolute; bottom: 20px; left: 20px; padding: 10px 20px; background: rgba(255, 214, 0, 0.15); border: 1px solid #FFD600; color: #FFD600; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;">
+    <button id="btnStartOfflineReplay" class="sz-btn sz-btn-secondary" onclick="if(window.initOfflineReplay) window.initOfflineReplay()" style="position: absolute; bottom: 20px; left: 20px; text-transform: uppercase; letter-spacing: 1px;">
       Offline Replay (CSV)
     </button>
-    <button id="btnFirmwareUpload" onclick="document.getElementById('firmwareFileInput').click()" style="position: absolute; bottom: 20px; right: 20px; padding: 10px 20px; background: rgba(0, 150, 255, 0.15); border: 1px solid #0096ff; color: #0096ff; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;">
+    <button id="btnFirmwareUpload" class="sz-btn sz-btn-secondary" onclick="document.getElementById('firmwareFileInput').click()" style="position: absolute; bottom: 20px; right: 20px; text-transform: uppercase; letter-spacing: 1px;">
       Firmware Update
     </button>
     <input type="file" id="firmwareFileInput" style="display: none;" accept=".bin" onchange="if(window.uploadFirmware) window.uploadFirmware(this.files[0])">
@@ -468,8 +468,8 @@
       <div class="shutdown-title">System herunterfahren?</div>
       <p>Gerät wirklich in den Deep Sleep versetzen?</p>
       <div class="shutdown-buttons">
-        <button id="shutdownConfirmNo" class="shutdown-btn-no">Abbrechen</button>
-        <button id="shutdownConfirmYes" class="shutdown-btn-yes">Herunterfahren</button>
+        <button id="shutdownConfirmNo" class="sz-btn sz-btn-secondary">Abbrechen</button>
+        <button id="shutdownConfirmYes" class="sz-btn sz-btn-danger">Herunterfahren</button>
       </div>
     </div>
   </div>
@@ -562,11 +562,11 @@
 
 
       <!-- KALIBRIERUNGSTYP-->
-      <div class="button-row" id="buttonRow1">
-        <button id="btnWorldSimple">World Simple</button>
-        <button id="btnWorldAxis">World + Axis</button>
-        <button id="btnTwoAxis">Two Axis</button>
-        <button id="btnReferenceState">Reference</button>
+      <div class="button-row" id="buttonRow1" style="display:flex; gap:8px;">
+        <button id="btnWorldSimple" class="sz-btn sz-btn-secondary">World Simple</button>
+        <button id="btnWorldAxis" class="sz-btn sz-btn-secondary">World + Axis</button>
+        <button id="btnTwoAxis" class="sz-btn sz-btn-secondary">Two Axis</button>
+        <button id="btnReferenceState" class="sz-btn sz-btn-secondary">Reference</button>
       </div>
 
 
@@ -575,7 +575,7 @@
 
         <!-- Simple World Calibration -->
         <div class="button-row" id="action1">
-          <button id="btn1">Starte Kalibrierung</button>
+          <button id="btn1" class="sz-btn sz-btn-primary">Starte Kalibrierung</button>
           <div class="statusbar">
             <span id="statusText1">Bereit</span>
             <div class="progress" id="progress1"></div>
@@ -588,7 +588,7 @@
 
 
 
-          <button id="btn2" disabled>Aktion 2</button>
+          <button id="btn2" class="sz-btn sz-btn-primary" disabled>Aktion 2</button>
           <div class="statusbar">
             <span id="statusText2">Bereit</span>
             <div class="progress" id="progress2"></div>
@@ -607,7 +607,7 @@
             </div>
           </div>
 
-          <button id="btn3" disabled>Aktion 3</button>
+          <button id="btn3" class="sz-btn sz-btn-primary" disabled>Aktion 3</button>
           <div class="statusbar">
             <span id="statusText3">Bereit</span>
             <div class="progress" id="progress3"></div>
@@ -619,10 +619,10 @@
 
 
 
-      <div class="popup-footer">
-        <button id="cancelBtn">Abbrechen</button>
-        <button id="resetBtn">Zurück</button>
-        <button id="okBtn">OK</button>
+      <div class="popup-footer" style="display:flex; gap:8px;">
+        <button id="cancelBtn" class="sz-btn sz-btn-secondary">Abbrechen</button>
+        <button id="resetBtn" class="sz-btn sz-btn-secondary">Zurück</button>
+        <button id="okBtn" class="sz-btn sz-btn-primary">OK</button>
       </div>
     </div>
   </div>
@@ -781,7 +781,7 @@
           </div>
           
           <div style="display:flex; gap:8px;">
-            <button id="btnSyncSettingsAll" style="flex:1; background:rgba(0, 150, 255, 0.2); border:1px solid #0096ff; color:#0096ff; padding:6px; border-radius:4px; cursor:pointer; font-weight:bold; transition:all 0.2s; white-space:nowrap; font-size:0.8rem;" onmouseover="this.style.background='rgba(0,150,255,0.4)'" onmouseout="this.style.background='rgba(0,150,255,0.2)'">🔄 SYNC ALL</button>
+            <button id="btnSyncSettingsAll" class="sz-btn sz-btn-primary" style="flex:1; white-space:nowrap; font-size:0.8rem;">🔄 SYNC ALL</button>
           </div>
           
         </div>
@@ -791,7 +791,7 @@
         </div>
 
         <div class="label1" style="margin-top:20px; display:none;">LED SIGNALE</div>
-        <button id="btnOpenLedConfigOverlay" style="display:none; padding:8px 12px; margin-bottom:12px; background:#386596; color:#fff; border:none; border-radius:4px; cursor:pointer;">LEDs konfigurieren</button>
+        <button id="btnOpenLedConfigOverlay" class="sz-btn sz-btn-secondary" style="display:none; margin-bottom:12px;">LEDs konfigurieren</button>
 
       </div>
 
@@ -870,11 +870,11 @@
 
 
 
-                <div class="filter-toolbar">
+                <div class="filter-toolbar" style="margin-right: 12px; padding-right: 20px; border-right: 1px solid rgba(255,255,255,0.1);">
                   <label class="filter-toggle"><input type="checkbox" id="showAccChartToggle" checked /> Acc Chart</label>
                   <label class="filter-toggle"><input type="checkbox" id="showGyroChartToggle" checked /> Gyro Chart</label>
                   <label class="filter-toggle"><input type="checkbox" id="syncFilterToggle" /> Filter sync</label>
-                  <button id="filterDrawerToggle" type="button" class="filter-drawer-toggle">Filter</button>
+                  <button id="filterDrawerToggle" type="button" class="sz-btn sz-btn-secondary filter-drawer-toggle">Filter <span class="arrow" style="font-size:0.8em; margin-left:4px;">▼</span></button>
                 </div>
 
                 <div id="filterDrawer" class="filter-drawer" aria-hidden="true">
@@ -916,20 +916,17 @@
                 </div>
                 </div>
 
-                <button id="pauseBtn" title="Chart pausieren/wieder starten"><i class="fas fa-pause"></i> Pause</button>
-                <button id="resetZoomBtn" title="Zoom/Scroll zurücksetzen"><i class="fas fa-expand-arrows-alt"></i>
-                  Reset</button>
-                <button id="recordBtn" title="Daten recording starten/stoppen"><i class="fas fa-circle"></i>
-                  Record</button>
-                <button id="btnSonification" onclick="window.toggleSonification()" title="Audioausgabe der Z-Achse aktivieren"><i class="fas fa-volume-up"></i> Audio: OFF</button>
-                <button id="downloadBtn" style="display:none;" title="CSV herunterladen"><i class="fas fa-download"></i>
-                  Download CSV</button>
-                <button id="chartLayoutToggle" title="Charts nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
-                <button id="comboSSBtn" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
-                <label for="fpsSlider">FPS: <span id="fpsValue">33</span></label>
-                <input id="fpsSlider" type="range" min="1" max="100" value="33" step="1" />
+                <button id="pauseBtn" class="sz-btn sz-btn-secondary" title="Chart pausieren/wieder starten"><i class="fas fa-pause"></i> Pause</button>
+                <button id="resetZoomBtn" class="sz-btn sz-btn-secondary" title="Zoom/Scroll zurücksetzen"><i class="fas fa-expand-arrows-alt"></i> Reset</button>
+                <button id="recordBtn" class="sz-btn sz-btn-secondary" title="Daten recording starten/stoppen"><i class="fas fa-circle"></i> Record</button>
+                <button id="btnSonification" class="sz-btn sz-btn-secondary" onclick="window.toggleSonification()" title="Audioausgabe der Z-Achse aktivieren"><i class="fas fa-volume-up"></i> Audio: OFF</button>
+                <button id="downloadBtn" class="sz-btn sz-btn-secondary" style="display:none;" title="CSV herunterladen"><i class="fas fa-download"></i> Download CSV</button>
+                <button id="chartLayoutToggle" class="sz-btn sz-btn-secondary" title="Charts nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+                <button id="comboSSBtn" class="sz-btn sz-btn-secondary" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
+                <label for="fpsSlider">FPS: <span id="fpsValue">20</span></label>
+                <input id="fpsSlider" class="sz-slider" type="range" min="1" max="100" value="20" step="1" />
                 <label for="timeSlider">Anzeigezeit: <span id="timeValue">5</span>s</label>
-                <input id="timeSlider" type="range" min="1" max="60" value="5" step="1" />
+                <input id="timeSlider" class="sz-slider" type="range" min="1" max="60" value="5" step="1" />
               </div>
               <!--  <div id="tester" style="width:100%;height:600px;"></div> -->
 
@@ -939,10 +936,10 @@
                 <div id="accChartHost" class="chart-plot-host"></div>
                 <div id="accChartLegendHost" class="chart-legend-host"></div>
                 <div id="inchartcontrols" class="chart-overlay-controls">
-                  <button id="syncYAxesBtn" class="sync-axes-btn" title="Beide Y-Achsen synchronisieren" style="display:none;">🔗 Sync</button>
-                  <button id="pauseBtn2" title="Liveanzeige pausieren">Pause</button>
-                  <button id="recBtn2" title="CSV erzeugen">🔴</button>
-                  <button id="SSBtn2" title="Screenshot speichern">⎙</button>
+                  <button id="syncYAxesBtn" class="sz-btn sz-btn-secondary sync-axes-btn" title="Beide Y-Achsen synchronisieren" style="display:none;">🔗 Sync</button>
+                  <button id="pauseBtn2" class="sz-btn sz-btn-secondary" title="Liveanzeige pausieren">Pause</button>
+                  <button id="recBtn2" class="sz-btn sz-btn-secondary" title="CSV erzeugen">🔴</button>
+                  <button id="SSBtn2" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern">⎙</button>
                 </div>
                 <div id="y-axis-overlay" title="Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 <div id="y2-axis-overlay" title="Y2-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
@@ -953,8 +950,8 @@
                 <div id="gyroChartHost" class="chart-plot-host"></div>
                 <div id="gyroChartLegendHost" class="chart-legend-host"></div>
                 <div class="chart-overlay-controls gyro-controls">
-                  <button id="syncGyroYAxesBtn" class="sync-axes-btn" title="Beide Gyro-Y-Achsen synchronisieren" style="display:none;">🔗 Sync</button>
-                  <button id="gyroSSBtn" title="Screenshot speichern">⎙</button>
+                  <button id="syncGyroYAxesBtn" class="sz-btn sz-btn-secondary sync-axes-btn" title="Beide Gyro-Y-Achsen synchronisieren" style="display:none;">🔗 Sync</button>
+                  <button id="gyroSSBtn" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern">⎙</button>
                 </div>
                 <div id="gyro-y-axis-overlay" title="Gyro Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                 <div id="gyro-y2-axis-overlay" title="Gyro Y2-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
@@ -1049,10 +1046,10 @@
               </div>
 
               <div class="chart-controls" id="fftRmsChartControls">
-                <button id="fftRmsLayoutToggle" title="FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
-                <button id="comboFftRmsSSBtn" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
+                <button id="fftRmsLayoutToggle" class="sz-btn sz-btn-secondary" title="FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+                <button id="comboFftRmsSSBtn" class="sz-btn sz-btn-secondary" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
                 <label for="rmsTimeSlider" style="margin-left:auto;">Zeit: <span id="rmsTimeValue">20</span>s</label>
-                <input id="rmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
+                <input id="rmsTimeSlider" class="sz-slider" type="range" min="1" max="300" value="20" step="1" />
               </div>
 
               <div class="livecharts-grid" id="fftRmsGrid">
@@ -1060,7 +1057,8 @@
                   <div id="fftChart" class="chart-plot-host"></div>
                   <div id="fftChartLegendHost" class="chart-legend-host"></div>
                   <div id="fftInChartControls" class="chart-overlay-controls rms-controls">
-                    <button id="fftSSBtn" title="Screenshot speichern">⎙</button>
+                    <label class="filter-toggle" style="margin-right: 8px; font-size: 0.85em; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);"><input type="checkbox" id="enableHarmonicCursorAcc" checked /> Harmonics</label>
+                    <button id="fftSSBtn" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern">⎙</button>
                   </div>
                   <div id="fftPeakBadge" class="chart-info-badge">Peak -- Hz</div>
                 </div>
@@ -1069,9 +1067,9 @@
                   <div id="rmsChart" class="chart-plot-host"></div>
                   <div id="rmsChartLegendHost" class="chart-legend-host"></div>
                   <div id="rmsInChartControls" class="chart-overlay-controls rms-controls">
-                    <button id="rmsPauseBtn" title="RMS-Anzeige pausieren">Pause</button>
-                    <button id="rmsRecordBtn" title="CSV erzeugen">🔴</button>
-                    <button id="rmsSSBtn" title="Screenshot speichern">⎙</button>
+                    <button id="rmsPauseBtn" class="sz-btn sz-btn-secondary" title="RMS-Anzeige pausieren">Pause</button>
+                    <button id="rmsRecordBtn" class="sz-btn sz-btn-secondary" title="CSV erzeugen">🔴</button>
+                    <button id="rmsSSBtn" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern">⎙</button>
                   </div>
                   <div id="rms-y-axis-overlay" title="RMS Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                   <div id="rms-x-axis-overlay" title="RMS X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
@@ -1141,11 +1139,11 @@
               </div>
 
               <div class="chart-controls" id="gyroFftRmsChartControls">
-                <button id="gyroFftRmsLayoutToggle" title="Gyro FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
-                <button id="comboGyroFftRmsSSBtn" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
+                <button id="gyroFftRmsLayoutToggle" class="sz-btn sz-btn-secondary" title="Gyro FFT und RMS nebeneinander oder untereinander anzeigen"><i class="fas fa-columns"></i> Split</button>
+                <button id="comboGyroFftRmsSSBtn" class="sz-btn sz-btn-secondary" title="Screenshot beider Charts speichern"><i class="fas fa-camera"></i> Screenshot</button>
 
                 <label for="gyroRmsTimeSlider" style="margin-left:auto;">Zeit: <span id="gyroRmsTimeValue">20</span>s</label>
-                <input id="gyroRmsTimeSlider" type="range" min="1" max="300" value="20" step="1" />
+                <input id="gyroRmsTimeSlider" class="sz-slider" type="range" min="1" max="300" value="20" step="1" />
               </div>
 
               <div class="livecharts-grid" id="gyroFftRmsGrid">
@@ -1153,7 +1151,8 @@
                   <div id="gyroFftChart" class="chart-plot-host"></div>
                   <div id="gyroFftChartLegendHost" class="chart-legend-host"></div>
                   <div id="gyroFftInChartControls" class="chart-overlay-controls rms-controls">
-                    <button id="gyroFftSSBtn" title="Screenshot speichern">⎙</button>
+                    <label class="filter-toggle" style="margin-right: 8px; font-size: 0.85em; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);"><input type="checkbox" id="enableHarmonicCursorGyro" checked /> Harmonics</label>
+                    <button id="gyroFftSSBtn" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern">⎙</button>
                   </div>
                   <div id="gyroFftPeakBadge" class="chart-info-badge">Peak -- Hz</div>
                 </div>
@@ -1162,9 +1161,9 @@
                   <div id="gyroRmsChart" class="chart-plot-host"></div>
                   <div id="gyroRmsChartLegendHost" class="chart-legend-host"></div>
                   <div id="gyroRmsInChartControls" class="chart-overlay-controls rms-controls">
-                    <button id="gyroRmsPauseBtn" title="Gyro RMS-Anzeige pausieren">Pause</button>
-                    <button id="gyroRmsRecordBtn" title="CSV erzeugen">🔴</button>
-                    <button id="gyroRmsSSBtn" title="Screenshot speichern">⎙</button>
+                    <button id="gyroRmsPauseBtn" class="sz-btn sz-btn-secondary" title="Gyro RMS-Anzeige pausieren">Pause</button>
+                    <button id="gyroRmsRecordBtn" class="sz-btn sz-btn-secondary" title="CSV erzeugen">🔴</button>
+                    <button id="gyroRmsSSBtn" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern">⎙</button>
                   </div>
                   <div id="gyro-rms-y-axis-overlay" title="Gyro RMS Y-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
                   <div id="gyro-rms-x-axis-overlay" title="Gyro RMS X-Achse: Mausrad zum Zoomen, links-klick & ziehen zum Pan"></div>
@@ -1184,7 +1183,7 @@
                 <div style="display: flex; gap: 15px; align-items: center; font-size: 13px;">
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Theme:</label>
-                     <select id="waterfallTheme" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold; font-size: 13px;">
+                     <select id="waterfallTheme" class="sz-select" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold; font-size: 13px;">
                        <option value="fire">Fire</option>
                        <option value="ocean">Ocean</option>
                        <option value="mono">Mono</option>
@@ -1195,17 +1194,17 @@
                    </div>
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Speed:</label>
-                     <input type="range" id="waterfallSpeed" min="1" max="10" value="1" step="1" style="vertical-align: middle; width: 60px;">
+                     <input type="range" id="waterfallSpeed" class="sz-slider" min="1" max="10" value="1" step="1" style="vertical-align: middle; width: 60px;">
                      <span id="waterfallSpeedValue" style="color: #FFD600; font-weight: bold; width: 15px; display: inline-block;">1</span>
                    </div>
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Max Hz:</label>
-                     <input type="range" id="waterfallMaxHz" min="10" max="3300" value="3300" step="10" style="vertical-align: middle; width: 80px;">
+                     <input type="range" id="waterfallMaxHz" class="sz-slider" min="10" max="3300" value="3300" step="10" style="vertical-align: middle; width: 80px;">
                      <span id="waterfallMaxHzValue" style="color: #FFD600; font-weight: bold; width: 35px; display: inline-block;">3300</span>
                    </div>
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Mag Limit:</label>
-                     <input type="range" id="waterfallMagFilter" min="10" max="5000" value="1000" step="10" style="vertical-align: middle; width: 80px;">
+                     <input type="range" id="waterfallMagFilter" class="sz-slider" min="10" max="5000" value="1000" step="10" style="vertical-align: middle; width: 80px;">
                      <span id="waterfallMagValue" style="color: #FFD600; font-weight: bold; min-width: 65px; text-align: right; display: inline-block;">1000</span>
                    </div>
                    <div style="display: flex; gap: 5px; align-items: center; margin-left: 5px; background: rgba(0,0,0,0.5); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
@@ -1213,7 +1212,7 @@
                      <label for="waterfallDiffMode" style="color: #FFD600; cursor: pointer; font-family: monospace; font-size: 13px;">Diff Mode</label>
                    </div>
                    <div style="margin-left: 5px;">
-                     <button id="wfBtnScreenshot" title="Screenshot speichern (Taste P)" onclick="if(window.waterfallRenderer) window.waterfallRenderer.downloadScreenshot();" style="background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.2); height: 26px; width: 32px; border-radius: 4px; outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)';" onmouseout="this.style.background='rgba(255,255,255,0.15)';">⎙</button>
+                     <button id="wfBtnScreenshot" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern (Taste P)" onclick="if(window.waterfallRenderer) window.waterfallRenderer.downloadScreenshot();">⎙</button>
                    </div>
                 </div>
               </div>
@@ -1229,7 +1228,7 @@
                 <div id="waterfallTimeTracker" style="position: absolute; left: 80px; top: 15px; display: flex; gap: 10px; align-items: center; color: #FFD600; font-family: monospace; font-weight: bold; opacity: 0.9; font-size: 11px; z-index: 10; pointer-events: none;">
                   <span id="wfLblSpan" style="background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Fenster: 0.0 s</span>
                   <span id="wfLblPos" style="background: rgba(0,0,0,0.6); color: #4caf50; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Pos: LIVE</span>
-                  <button id="wfBtnLive" onclick="if(window.waterfallRenderer) window.waterfallRenderer.returnToLive();" style="display: none; pointer-events: auto; background: #FFD600; color: black; font-weight: bold; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: 0.2s;" onmouseover="this.style.filter='brightness(1.2)';" onmouseout="this.style.filter='brightness(1)';">⏵ ZURÜCK ZU LIVE</button>
+                  <button id="wfBtnLive" class="sz-btn sz-btn-primary" onclick="if(window.waterfallRenderer) window.waterfallRenderer.returnToLive();" style="display: none;">⏵ ZURÜCK ZU LIVE</button>
                 </div>
 
 
@@ -1286,7 +1285,7 @@
                 <div style="display: flex; gap: 15px; align-items: center; font-size: 13px;">
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Theme:</label>
-                     <select id="gyroWaterfallTheme" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold; font-size: 13px;">
+                     <select id="gyroWaterfallTheme" class="sz-select" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold; font-size: 13px;">
                        <option value="fire">Fire</option>
                        <option value="ocean">Ocean</option>
                        <option value="mono">Mono</option>
@@ -1297,17 +1296,17 @@
                    </div>
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Speed:</label>
-                     <input type="range" id="gyroWaterfallSpeed" min="1" max="10" value="1" step="1" style="vertical-align: middle; width: 60px;">
+                     <input type="range" id="gyroWaterfallSpeed" class="sz-slider" min="1" max="10" value="1" step="1" style="vertical-align: middle; width: 60px;">
                      <span id="gyroWaterfallSpeedValue" style="color: #FFD600; font-weight: bold; width: 15px; display: inline-block;">1</span>
                    </div>
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Max Hz:</label>
-                     <input type="range" id="gyroWaterfallMaxHz" min="10" max="3300" value="3300" step="10" style="vertical-align: middle; width: 80px;">
+                     <input type="range" id="gyroWaterfallMaxHz" class="sz-slider" min="10" max="3300" value="3300" step="10" style="vertical-align: middle; width: 80px;">
                      <span id="gyroWaterfallMaxHzValue" style="color: #FFD600; font-weight: bold; width: 35px; display: inline-block;">3300</span>
                    </div>
                    <div>
                      <label style="color: var(--secondary-text); margin-right: 5px;">Mag Limit:</label>
-                     <input type="range" id="gyroWaterfallMagFilter" min="100" max="2000000" value="100000" step="1000" style="vertical-align: middle; width: 80px;">
+                     <input type="range" id="gyroWaterfallMagFilter" class="sz-slider" min="100" max="2000000" value="100000" step="1000" style="vertical-align: middle; width: 80px;">
                      <span id="gyroWaterfallMagValue" style="color: #FFD600; font-weight: bold; min-width: 65px; text-align: right; display: inline-block;">100000</span>
                    </div>
                    <div style="display: flex; gap: 5px; align-items: center; margin-left: 5px; background: rgba(0,0,0,0.5); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
@@ -1315,7 +1314,7 @@
                      <label for="gyroWaterfallDiffMode" style="color: #FFD600; cursor: pointer; font-family: monospace; font-size: 13px;">Diff Mode</label>
                    </div>
                    <div style="margin-left: 5px;">
-                     <button id="gwfBtnScreenshot" title="Screenshot speichern (Taste P)" onclick="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.downloadScreenshot();" style="background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.2); height: 26px; width: 32px; border-radius: 4px; outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)';" onmouseout="this.style.background='rgba(255,255,255,0.15)';">⎙</button>
+                     <button id="gwfBtnScreenshot" class="sz-btn sz-btn-icon sz-btn-secondary" title="Screenshot speichern (Taste P)" onclick="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.downloadScreenshot();">⎙</button>
                    </div>
                 </div>
               </div>
@@ -1331,7 +1330,7 @@
                 <div id="gyroWaterfallTimeTracker" style="position: absolute; left: 80px; top: 15px; display: flex; gap: 10px; align-items: center; color: #FFD600; font-family: monospace; font-weight: bold; opacity: 0.9; font-size: 11px; z-index: 10; pointer-events: none;">
                   <span id="gwfLblSpan" style="background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Fenster: 0.0 s</span>
                   <span id="gwfLblPos" style="background: rgba(0,0,0,0.6); color: #4caf50; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">Pos: LIVE</span>
-                  <button id="gwfBtnLive" onclick="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.returnToLive();" style="display: none; pointer-events: auto; background: #FFD600; color: black; font-weight: bold; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: 0.2s;" onmouseover="this.style.filter='brightness(1.2)';" onmouseout="this.style.filter='brightness(1)';">⏵ ZURÜCK ZU LIVE</button>
+                  <button id="gwfBtnLive" class="sz-btn sz-btn-primary" onclick="if(window.gyroWaterfallRenderer) window.gyroWaterfallRenderer.returnToLive();" style="display: none;">⏵ ZURÜCK ZU LIVE</button>
                 </div>
 
                 <div id="gyroWaterfallColorLegend" style="position: absolute; right: 15px; top: 15px; display: flex; align-items: center; gap: 8px; color: #FFD600; font-family: monospace; font-weight: bold; font-size: 11px; text-shadow: 1px 1px 2px black; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); pointer-events: none;">
@@ -1362,19 +1361,18 @@
             <div class="filter-toolbar" style="margin-bottom: 20px; background: rgba(22, 27, 34, 0.6); padding: 10px 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); display: flex; flex-wrap: wrap; align-items: center; gap: 15px;">
                 <label style="font-weight: bold; color: #ffd600; font-size: 16px;"><i class="fas fa-project-diagram" style="margin-right:8px;"></i>Motion-Analyse</label>
                 
-                <!-- Sub-Navigation Pills -->
                 <div class="relativ-nav-pills" style="display: flex; gap: 8px; flex-grow: 1;">
-                    <button class="filter-toggle" id="btnRelativKinematic" style="padding: 6px 16px; border-radius: 20px; border: 1px solid #0096ff; background: rgba(0, 150, 255, 0.2); color: #fff; cursor: pointer; font-weight: bold; transition: all 0.2s;">1. Kinematik (3D)</button>
-                    <button class="filter-toggle" id="btnRelativTranslation" style="padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #aaa; cursor: pointer; transition: all 0.2s;">2. Translation (Chart)</button>
-                    <button class="filter-toggle" id="btnRelativLissajous" style="padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #aaa; cursor: pointer; transition: all 0.2s;">3. Phasen-Lissajous</button>
-                    <button class="filter-toggle" id="btnRelativDiffRms" style="padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #aaa; cursor: pointer; transition: all 0.2s;">4. Diff Vibration (RMS)</button>
+                    <button id="btnRelativKinematic" class="sz-btn sz-btn-secondary active">1. Kinematik (3D)</button>
+                    <button id="btnRelativTranslation" class="sz-btn sz-btn-secondary">2. Translation (Chart)</button>
+                    <button id="btnRelativLissajous" class="sz-btn sz-btn-secondary">3. Phasen-Lissajous</button>
+                    <button id="btnRelativDiffRms" class="sz-btn sz-btn-secondary">4. Diff Vibration (RMS)</button>
                 </div>
                 
                 <!-- Target Selector -->
                 <div style="display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
                     <span style="font-size: 0.85rem; color: #a3aab3;">Differenz bilden:</span>
                     <span style="font-size: 0.85rem; color: white; opacity:0.8;">CH1 (Master) minus</span>
-                    <select id="relativSecondaryNodeSelect" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold;">
+                    <select id="relativSecondaryNodeSelect" class="sz-select" style="background: rgba(0,0,0,0.6); color: #FFD600; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; outline: none; cursor: pointer; font-family: monospace; font-weight: bold;">
                         <option value="none">- Warten auf CH2 -</option>
                     </select>
                 </div>
@@ -1384,8 +1382,8 @@
             <div id="relativDiffRmsTab" style="flex-grow: 1; display: none; flex-direction: column;">
                 <div class="livechart-panel" style="flex-grow: 1; position: relative; margin-top: 5px;">
                     <div class="chart-controls" style="position: absolute; top: 10px; right: 20px; z-index: 10; padding: 0; margin: 0; background: transparent; border: none; display: flex; gap: 8px;">
-                        <button id="relativDiffRmsPauseBtn" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);" title="Diff-RMS pausieren"><i class="fas fa-pause"></i> Pause</button>
-                        <button id="relativDiffRmsSSBtn" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);" title="Screenshot speichern"><i class="fas fa-camera"></i> Screenshot</button>
+                        <button id="relativDiffRmsPauseBtn" class="sz-btn sz-btn-secondary" title="Diff-RMS pausieren"><i class="fas fa-pause"></i> Pause</button>
+                        <button id="relativDiffRmsSSBtn" class="sz-btn sz-btn-secondary" title="Screenshot speichern"><i class="fas fa-camera"></i> Screenshot</button>
                     </div>
                     <div id="relativDiffRmsChart" class="chart-plot-host" style="flex: 1 1 0; min-height: 0; position: relative; overflow: hidden;"></div>
                     <div id="relativDiffRmsChartLegendHost" class="chart-legend-host"></div>
@@ -1403,7 +1401,7 @@
             <div id="relativTranslationTab" style="display: none; flex-grow: 1; flex-direction: column;">
                 <div class="livechart-panel" style="flex-grow: 1; display: flex; flex-direction: column; position: relative; margin-top: 5px;">
                     <div class="chart-controls" style="position: absolute; top: 10px; right: 20px; z-index: 10; padding: 0; margin: 0; background: transparent; border: none; display: flex; gap: 8px;">
-                        <select id="relativTranslationTimespan" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2); outline: none; cursor: pointer;">
+                        <select id="relativTranslationTimespan" class="sz-select" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2); outline: none; cursor: pointer; padding:4px 10px; border-radius:6px;">
                             <option value="1">1s</option>
                             <option value="5">5s</option>
                             <option value="10" selected>10s</option>
@@ -1411,7 +1409,7 @@
                             <option value="60">60s</option>
                             <option value="all">All</option>
                         </select>
-                        <button id="relativTranslationPauseBtn" class="filter-toggle" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);" title="Translation Chart pausieren"><i class="fas fa-pause"></i> Pause</button>
+                        <button id="relativTranslationPauseBtn" class="sz-btn sz-btn-secondary" title="Translation Chart pausieren"><i class="fas fa-pause"></i> Pause</button>
                     </div>
                     <div id="relativTranslationChart" class="chart-plot-host" style="flex: 1 1 0; min-height: 0; position: relative; overflow: hidden;"></div>
                     <div id="relativTranslationChartLegendHost" class="chart-legend-host" style="flex-shrink: 0; min-height: 60px; display: flex; justify-content: center; align-items: center; overflow: hidden; font-size: 0.9em; background: rgba(0,0,0,0.3); border-radius: 6px; margin-top: 10px;"></div>
@@ -1431,14 +1429,14 @@
               <div class="vector-align-stage">
                 <div class="vector-align-toolbar">
                   <div class="vector-align-toolbar-primary">
-                    <div class="vector-align-source-switch" role="group" aria-label="ACC Datenquelle">
-                      <select id="alignNodeSelect" class="vector-align-source-btn" style="background:#555; color:#fff; border-color: rgba(255,255,255,0.2); outline: none; cursor: pointer; border-radius: 4px; padding: 4px 8px; font-weight: bold; margin-right: 15px;">
+                    <div class="vector-align-source-switch" role="group" aria-label="ACC Datenquelle" style="display:flex; gap:8px;">
+                      <select id="alignNodeSelect" class="sz-select" style="background:rgba(0,0,0,0.6); color:#FFD600; border-color:rgba(255,255,255,0.2); outline:none; cursor:pointer; border-radius:4px; padding:4px 8px; font-weight:bold; margin-right:8px;">
                         <option value="master">Master (CH1)</option>
                       </select>
-                      <button id="alignSourceRawBtn" class="vector-align-source-btn active" type="button">Rohwerte</button>
-                      <button id="alignSourceCalibratedBtn" class="vector-align-source-btn" type="button">Kalibriert</button>
-                      <button id="alignSourceCalibratedCutBtn" class="vector-align-source-btn" type="button">Kalibriert - g</button>
-                      <button id="alignGyroToggleBtn" class="vector-align-source-btn active" type="button">Gyro ausblenden</button>
+                      <button id="alignSourceRawBtn" class="sz-btn sz-btn-secondary active" type="button">Rohwerte</button>
+                      <button id="alignSourceCalibratedBtn" class="sz-btn sz-btn-secondary" type="button">Kalibriert</button>
+                      <button id="alignSourceCalibratedCutBtn" class="sz-btn sz-btn-secondary" type="button">Kalibriert - g</button>
+                      <button id="alignGyroToggleBtn" class="sz-btn sz-btn-secondary active" type="button">Gyro ausblenden</button>
                     </div>
                   </div>
                   <div class="vector-align-toolbar-meta">
@@ -1567,8 +1565,8 @@
                   <div class="vector-align-card-title">Rotation</div>
                   <div class="vector-align-slider-row">
                     <label for="alignRotX">X</label>
-                    <input id="alignRotX" type="range" min="-180" max="180" value="0" step="1" />
-                    <input id="alignRotXInput" class="vector-align-slider-input" type="number" min="-180" max="180" value="0" step="1" inputmode="numeric" aria-label="Rotation X in Grad" />
+                    <input id="alignRotX" class="sz-slider" type="range" min="-180" max="180" value="0" step="1" />
+                    <input id="alignRotXInput" class="vector-align-slider-input sz-input" type="number" min="-180" max="180" value="0" step="1" inputmode="numeric" aria-label="Rotation X in Grad" style="width: 70px;" />
                     <div class="vector-align-stepper" aria-hidden="true">
                       <button class="vector-align-stepper-btn" type="button" data-axis="x" data-step="1" tabindex="-1">+</button>
                       <button class="vector-align-stepper-btn" type="button" data-axis="x" data-step="-1" tabindex="-1">-</button>
@@ -1577,8 +1575,8 @@
                   </div>
                   <div class="vector-align-slider-row">
                     <label for="alignRotY">Y</label>
-                    <input id="alignRotY" type="range" min="-180" max="180" value="0" step="1" />
-                    <input id="alignRotYInput" class="vector-align-slider-input" type="number" min="-180" max="180" value="0" step="1" inputmode="numeric" aria-label="Rotation Y in Grad" />
+                    <input id="alignRotY" class="sz-slider" type="range" min="-180" max="180" value="0" step="1" />
+                    <input id="alignRotYInput" class="vector-align-slider-input sz-input" type="number" min="-180" max="180" value="0" step="1" inputmode="numeric" aria-label="Rotation Y in Grad" style="width: 70px;" />
                     <div class="vector-align-stepper" aria-hidden="true">
                       <button class="vector-align-stepper-btn" type="button" data-axis="y" data-step="1" tabindex="-1">+</button>
                       <button class="vector-align-stepper-btn" type="button" data-axis="y" data-step="-1" tabindex="-1">-</button>
@@ -1587,18 +1585,20 @@
                   </div>
                   <div class="vector-align-slider-row">
                     <label for="alignRotZ">Z</label>
-                    <input id="alignRotZ" type="range" min="-180" max="180" value="0" step="1" />
-                    <input id="alignRotZInput" class="vector-align-slider-input" type="number" min="-180" max="180" value="0" step="1" inputmode="numeric" aria-label="Rotation Z in Grad" />
+                    <input id="alignRotZ" class="sz-slider" type="range" min="-180" max="180" value="0" step="1" />
+                    <input id="alignRotZInput" class="vector-align-slider-input sz-input" type="number" min="-180" max="180" value="0" step="1" inputmode="numeric" aria-label="Rotation Z in Grad" style="width: 70px;" />
                     <div class="vector-align-stepper" aria-hidden="true">
                       <button class="vector-align-stepper-btn" type="button" data-axis="z" data-step="1" tabindex="-1">+</button>
                       <button class="vector-align-stepper-btn" type="button" data-axis="z" data-step="-1" tabindex="-1">-</button>
                     </div>
                     <span id="alignRotZValue">0°</span>
                   </div>
-                  <button id="accVectorResetBtn" class="vector-align-reset-btn" type="button">Rotation zurücksetzen</button>
-                  <div class="vector-align-action-row">
-                    <button id="alignLoadQuatBtn" class="vector-align-reset-btn" type="button">Basisrotation neu laden</button>
-                    <button id="alignApplyQuatBtn" class="vector-align-reset-btn" type="button">Livewerte neu synchronisieren</button>
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <button id="accVectorResetBtn" class="sz-btn sz-btn-secondary" type="button">Rotation zurücksetzen</button>
+                    <div class="vector-align-action-row" style="display:flex; gap:8px; margin-top:8px;">
+                      <button id="alignLoadQuatBtn" class="sz-btn sz-btn-secondary" type="button" style="flex:1;">Basisrotation neu laden</button>
+                      <button id="alignApplyQuatBtn" class="sz-btn sz-btn-primary" type="button" style="flex:1;">Livewerte neu synchronisieren</button>
+                    </div>
                   </div>
                 </section>
 
@@ -1895,28 +1895,133 @@
 
           <div id="impactTestArea" style="display:none; padding: 20px; color: white;">
             <style>
-              .impact-card { background: rgba(20,25,30,0.8); border: 1px solid rgba(255,214,0,0.2); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
-              .impact-btn { background: #ffd600; color: #111; border: none; padding: 10px 20px; font-weight:bold; border-radius: 6px; cursor: pointer; transition: 0.2s; }
-              .impact-btn:hover { background: #ffea00; }
-              .impact-btn.armed { background: #ff4a4a !important; color: white; animation: pulse 1.5s infinite; }
-              @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,74,74, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(255,74,74, 0); } 100% { box-shadow: 0 0 0 0 rgba(255,74,74, 0); } }
-              .impact-result-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-              .impact-result-table th, .impact-result-table td { border: 1px solid rgba(255,255,255,0.1); padding: 8px; text-align: center; }
-              .impact-result-table th { background: rgba(255,214,0,0.1); color: #ffd600; }
-              .danger-rpm { color: #ff6b6b; font-weight: bold; }
+              .impact-card {
+                  background: linear-gradient(145deg, rgba(22, 28, 36, 0.85), rgba(15, 19, 25, 0.95));
+                  border: 1px solid rgba(255, 214, 0, 0.15);
+                  border-radius: 16px;
+                  padding: 24px;
+                  margin-bottom: 24px;
+                  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.05);
+                  backdrop-filter: blur(12px);
+              }
+              .impact-btn {
+                  background: linear-gradient(135deg, #ffd600, #ffea00);
+                  color: #111;
+                  border: none;
+                  padding: 12px 24px;
+                  font-weight: 800;
+                  font-size: 0.95rem;
+                  letter-spacing: 0.05em;
+                  text-transform: uppercase;
+                  border-radius: 8px;
+                  cursor: pointer;
+                  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+                  box-shadow: 0 4px 15px rgba(255, 214, 0, 0.3);
+              }
+              .impact-btn:hover {
+                  transform: translateY(-2px);
+                  box-shadow: 0 8px 25px rgba(255, 214, 0, 0.4);
+                  background: linear-gradient(135deg, #ffea00, #fff566);
+              }
+              .impact-btn:active {
+                  transform: translateY(1px);
+                  box-shadow: 0 2px 8px rgba(255, 214, 0, 0.3);
+              }
+              .impact-btn.armed {
+                  background: linear-gradient(135deg, #ff4a4a, #ff6b6b) !important;
+                  color: white;
+                  box-shadow: 0 4px 15px rgba(255, 74, 74, 0.4);
+                  animation: pulse-danger 1.5s infinite;
+              }
+              @keyframes pulse-danger { 
+                  0% { box-shadow: 0 0 0 0 rgba(255,74,74, 0.6); } 
+                  70% { box-shadow: 0 0 0 12px rgba(255,74,74, 0); } 
+                  100% { box-shadow: 0 0 0 0 rgba(255,74,74, 0); } 
+              }
+              .impact-result-table {
+                  width: 100%;
+                  border-collapse: separate;
+                  border-spacing: 0;
+                  margin-top: 15px;
+                  border-radius: 8px;
+                  overflow: hidden;
+                  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+              }
+              .impact-result-table th, .impact-result-table td {
+                  border-bottom: 1px solid rgba(255,255,255,0.05);
+                  border-right: 1px solid rgba(255,255,255,0.05);
+                  padding: 12px 10px;
+                  text-align: center;
+                  transition: background 0.2s ease;
+              }
+              .impact-result-table th {
+                  background: linear-gradient(180deg, rgba(255,214,0,0.15) 0%, rgba(255,214,0,0.05) 100%);
+                  color: #ffd600;
+                  font-weight: 600;
+                  letter-spacing: 0.05em;
+              }
+              .danger-rpm { color: #ff6b6b; font-weight: bold; text-shadow: 0 0 8px rgba(255, 107, 107, 0.4); }
+              
+              .impact-input {
+                  background: rgba(10, 15, 20, 0.6);
+                  color: #fff;
+                  border: 1px solid rgba(255, 255, 255, 0.15);
+                  padding: 8px 12px;
+                  border-radius: 6px;
+                  font-family: inherit;
+                  transition: all 0.2s ease;
+              }
+              .impact-input:focus {
+                  outline: none;
+                  border-color: #ffd600;
+                  box-shadow: 0 0 0 3px rgba(255, 214, 0, 0.2);
+                  background: rgba(10, 15, 20, 0.9);
+              }
+              
+              .impact-target-radio { display: none; }
+              .impact-target-label {
+                  flex: 1; text-align: center; padding: 10px 15px; 
+                  background: linear-gradient(180deg, #2a2d35 0%, #1d2127 100%);
+                  border: 1px solid #444;
+                  border-radius: 8px; color: #888; font-size: 0.95em; font-weight: bold; 
+                  cursor: pointer; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+                  display: flex; align-items: center; justify-content: center;
+                  box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+              }
+              .impact-target-label:hover { 
+                  background: linear-gradient(180deg, #333842 0%, #262a33 100%);
+                  transform: translateY(-1px);
+              }
+              .impact-target-radio:checked + .impact-target-label.wp {
+                  background: linear-gradient(180deg, rgba(255, 214, 0, 0.2) 0%, rgba(255, 214, 0, 0.05) 100%);
+                  border-color: #ffd600; color: #ffd600; 
+                  box-shadow: 0 0 15px rgba(255, 214, 0, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+              }
+              .impact-target-radio:checked + .impact-target-label.tl {
+                  background: linear-gradient(180deg, rgba(77, 166, 255, 0.2) 0%, rgba(77, 166, 255, 0.05) 100%);
+                  border-color: #4da6ff; color: #4da6ff; 
+                  box-shadow: 0 0 15px rgba(77, 166, 255, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+              }
+              
+              .impact-size-btn {
+                  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;
+                  color: #fff; padding: 4px 10px; font-size: 0.85em; cursor: pointer; margin-left: 4px;
+                  transition: all 0.2s ease;
+              }
+              .impact-size-btn:hover { background: rgba(255, 214, 0, 0.15); border-color: #ffd600; color: #ffd600; }
             </style>
             <h1 style="color:#ffd600; font-size:1.5rem; margin-top:0; margin-bottom:15px; display:flex; align-items:center; justify-content:space-between;">
                 <span>Modal Analysis (Impact Test)</span>
                 <div style="font-size:0.9rem;">
-                    <button id="btnSaveSession" style="background:#333; color:#fff; border:1px solid #555; padding:6px 12px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:0.9em; margin-right:5px;">💾 Save</button>
-                    <button id="btnLoadSession" style="background:#333; color:#fff; border:1px solid #555; padding:6px 12px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:0.9em;">📂 Load</button>
+                    <button id="btnSaveSession" class="sz-btn sz-btn-secondary" style="margin-right:5px;">💾 Save</button>
+                    <button id="btnLoadSession" class="sz-btn sz-btn-secondary">📂 Load</button>
                     <input type="file" id="impactFileInput" accept=".json" style="display:none;">
                 </div>
             </h1>
             <div class="impact-card">
               <!-- ZENTRALER PROZESSPARAMETER-BLOCK -->
-              <div id="processParamsBlock" style="background:#111; border:1px solid #444; border-left:4px solid #ff4a4a; border-radius:8px; padding:15px; margin-bottom:20px;">
-                <span style="display:block; font-size:0.85em; color:#ff4a4a; margin-bottom:15px; text-transform:uppercase; font-weight:bold;">🔧 Maschinendaten & Prozessparameter</span>
+              <div id="processParamsBlock" style="background: rgba(10, 14, 18, 0.8); border: 1px solid rgba(255,255,255,0.08); border-left: 4px solid #ff4a4a; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);">
+                <span style="display:block; font-size:0.85em; color:#ff4a4a; margin-bottom:15px; text-transform:uppercase; font-weight:bold; letter-spacing:0.05em;">🔧 Maschinendaten & Prozessparameter</span>
                 
                 <!-- Zeile 1: Prozess & Schnittdaten -->
                 <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end; margin-bottom:15px; border-bottom:1px solid #333; padding-bottom:15px;">
@@ -1931,7 +2036,7 @@
                   <div id="unifiedFrasenConfig" style="display:flex; flex-wrap:wrap; gap:15px; align-items:flex-end;">
                     <div id="impactFluteContainer">
                       <label style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Zähnezahl (Z)</label>
-                        <select id="impactFluteCount" style="padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                        <select id="impactFluteCount" class="sz-select" style="background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; outline: none; cursor: pointer;">
                           <option value="1">1 Schneide</option>
                           <option value="2">2 Schneiden</option>
                           <option value="3">3 Schneiden</option>
@@ -1941,47 +2046,47 @@
                           <option value="8">8 Schneiden</option>
                           <option value="custom">Manuell</option>
                         </select>
-                        <input type="number" id="impactFluteCountCustom" placeholder="Z" value="4" style="background:#222; color:#fff; border:1px solid #555; padding:6px; border-radius:4px; width:50px; display:none;" min="1">
+                        <input type="number" id="impactFluteCountCustom" placeholder="Z" value="4" class="sz-input" style="width:50px; display:none;" min="1">
                     </div>
                     <div>
                       <label for="ssvDiameterInput" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Durchmesser D (mm)</label>
-                      <input type="number" id="ssvDiameterInput" value="100" step="1" min="1" style="width:100px; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                      <input type="number" id="ssvDiameterInput" value="100" step="1" min="1" class="sz-input" style="width:80px;">
                     </div>
                     <div>
                       <label for="ssvVcInput" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Schnittgeschw. v_c (m/min)</label>
-                      <input type="number" id="ssvVcInput" value="200" step="5" min="1" style="width:110px; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                      <input type="number" id="ssvVcInput" value="200" step="5" min="1" class="sz-input" style="width:80px;">
                     </div>
                   </div>
                   
                   <div>
                     <label for="ssvRpmInput" style="display:block; font-size:0.85em; color:#ffd600; margin-bottom:4px; font-weight:bold;">Zieldrehzahl N_0</label>
-                    <input type="number" id="ssvRpmInput" value="637" style="width:110px; padding:6px; background:#222; color:#ffd600; border:1px solid #555; border-radius:4px; font-weight:bold;">
+                    <input type="number" id="ssvRpmInput" value="637" class="sz-input" style="width:90px; color:#ffd600; border-color:rgba(255,214,0,0.4); font-weight:bold;">
                   </div>
                 </div>
 
                 <!-- Zeile 2: SSV-Limits & Resonanz -->
                 <div style="display:flex; flex-wrap:wrap; gap:15px; align-items:flex-end;">
-                  <div style="flex:1; min-width:140px; display:flex; gap:10px;">
-                    <div style="flex:1;">
+                  <div style="display:flex; gap:10px;">
+                    <div>
                         <label for="ssvFreqWp" style="display:block; font-size:0.85em; color:#ffd600; margin-bottom:4px; opacity:0.9;">f_c Werkstück (Hz)</label>
-                        <input type="number" id="ssvFreqWp" placeholder="WP Hz" step="0.1" style="width:100%; padding:6px; background:#222; color:#ffd600; border:1px solid #ffd600; border-radius:4px; font-weight:bold;">
+                        <input type="number" id="ssvFreqWp" placeholder="WP Hz" step="0.1" class="sz-input" style="width:80px; color:#ffd600; border-color:rgba(255,214,0,0.4); font-weight:bold;">
                     </div>
-                    <div style="flex:1;">
+                    <div>
                         <label for="ssvFreqTool" style="display:block; font-size:0.85em; color:#00ffff; margin-bottom:4px; opacity:0.9;">f_c Werkzeug (Hz)</label>
-                        <input type="number" id="ssvFreqTool" placeholder="TZ Hz" step="0.1" style="width:100%; padding:6px; background:#222; color:#00ffff; border:1px solid #00ffff; border-radius:4px; font-weight:bold;">
+                        <input type="number" id="ssvFreqTool" placeholder="TZ Hz" step="0.1" class="sz-input" style="width:80px; color:#00ffff; border-color:rgba(0,255,255,0.4); font-weight:bold;">
                     </div>
                   </div>
-                  <div style="flex:1; min-width:140px;">
+                  <div>
                     <label for="ssvAmpPercent" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">SSV-Amplitude ΔN (%)</label>
-                    <input type="number" id="ssvAmpPercent" value="10" min="1" max="50" style="width:100%; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                    <input type="number" id="ssvAmpPercent" value="10" min="1" max="50" class="sz-input" style="width:80px;">
                   </div>
-                  <div style="flex:1; min-width:140px;">
+                  <div>
                     <label for="ssvAccelInput" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Spindelbeschl. a_max</label>
-                    <input type="number" id="ssvAccelInput" value="6000" style="width:100%; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                    <input type="number" id="ssvAccelInput" value="6000" class="sz-input" style="width:80px;">
                   </div>
-                  <div style="flex:1; min-width:140px;">
+                  <div>
                     <label for="ssvMaxFreqLimit" style="display:block; font-size:0.85em; color:#888; margin-bottom:4px;">Max. SSV-Frequenz (Hz)</label>
-                    <input type="number" id="ssvMaxFreqLimit" value="2.0" step="0.1" style="width:100%; padding:6px; background:#222; color:#fff; border:1px solid #555; border-radius:4px;">
+                    <input type="number" id="ssvMaxFreqLimit" value="2.0" step="0.1" class="sz-input" style="width:80px;">
                   </div>
                   <div style="display:flex; flex-direction:column; justify-content:flex-end;">
                     <span style="display:block; font-size:0.8em; color:#666; margin-bottom:4px;">Dämpfung</span>
@@ -1991,21 +2096,7 @@
               </div>
 
               <!-- ROW 1: Measurement Targets (Pills) -->
-              <style>
-                .impact-target-radio { display: none; }
-                .impact-target-label {
-                    flex: 1; text-align: center; padding: 6px 10px; background: #2a2a2a; border: 2px solid #444;
-                    border-radius: 6px; color: #888; font-size: 0.95em; font-weight: bold; cursor: pointer; transition: all 0.2s ease;
-                    display: flex; align-items: center; justify-content: center;
-                }
-                .impact-target-label:hover { background: #333; }
-                .impact-target-radio:checked + .impact-target-label.wp {
-                    background: rgba(255, 214, 0, 0.15); border-color: #ffd600; color: #ffd600; box-shadow: 0 0 8px rgba(255, 214, 0, 0.2);
-                }
-                .impact-target-radio:checked + .impact-target-label.tl {
-                    background: rgba(77, 166, 255, 0.15); border-color: #4da6ff; color: #4da6ff; box-shadow: 0 0 8px rgba(77, 166, 255, 0.2);
-                }
-              </style>
+
               <div style="display:flex; gap:10px; margin-bottom: 12px;">
                 <input type="radio" name="impactTarget" id="targetWorkpiece" value="workpiece" class="impact-target-radio" checked>
                 <label for="targetWorkpiece" class="impact-target-label wp">🎯 Werkstück <span id="lblImpactCountWp" style="background:rgba(0,0,0,0.4); padding:2px 7px; border-radius:10px; font-size:0.85em; margin-left:8px; color:#ffd600;">(0)</span></label>
@@ -2015,67 +2106,66 @@
               </div>
 
               <!-- ROW 2: Primary Control Bar -->
-              <div style="display:flex; gap: 10px; align-items:center; margin-bottom: 10px; background: #222; padding: 10px; border-radius: 6px; border: 1px solid #444; flex-wrap:wrap;">
-                <button id="btnArmImpactV2" class="impact-btn" style="flex-shrink:0;">Start Test (Arm Trigger)</button>
-                <div style="display:flex; flex-direction:column; justify-content:center; padding: 0 10px; width:120px; border-left: 1px solid #444;">
-                  <label for="impactTriggerThresholdV2" style="font-size:0.75em; color:#aaa; margin-bottom:2px;">Trigger: <span id="lblImpactTriggerValue" style="color:#ffd600; font-weight:bold;">4g</span></label>
-                  <input type="range" id="impactTriggerThresholdV2" min="0.1" max="16" value="4" step="0.1" style="accent-color:#ffd600; width:100%; margin:0;">
+              <div style="display:flex; gap: 15px; align-items:center; margin-bottom: 12px; background: rgba(10, 15, 20, 0.6); padding: 12px 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); flex-wrap:wrap; box-shadow: inset 0 2px 10px rgba(0,0,0,0.3);">
+                <button id="btnArmImpactV2" class="sz-btn sz-btn-primary" style="flex-shrink:0; width:140px; justify-content:center;">Start Test</button>
+                <div style="display:flex; flex-direction:column; justify-content:center; padding: 0 15px; width:140px; border-left: 1px solid rgba(255,255,255,0.1);">
+                  <label for="impactTriggerThresholdV2" style="font-size:0.75em; color:#aaa; margin-bottom:4px; letter-spacing:0.03em;">Trigger: <span id="lblImpactTriggerValue" style="color:#ffd600; font-weight:bold;">0.2g</span></label>
+                  <input type="range" id="impactTriggerThresholdV2" class="sz-slider" min="0.1" max="16" value="0.2" step="0.1" style="width:100%; margin:0;">
                 </div>
-                <div style="display:flex; align-items:center; gap:5px; border-left: 1px solid #444; padding-left: 10px;">
+                <div style="display:flex; align-items:center; gap:8px; border-left: 1px solid rgba(255,255,255,0.1); padding-left: 15px;">
                   <input type="checkbox" id="impactAutoRestart" style="accent-color:#ffd600; width:16px; height:16px;">
                   <label for="impactAutoRestart" style="font-size:0.9em; color:#fff; cursor:pointer;">Auto-Restart</label>
                 </div>
                 <div style="flex:1;"></div>
-                <button id="btnImpactClear" style="background:#333; color:#ddd; border:1px solid #555; padding:4px 12px; border-radius:4px; cursor:pointer; font-size: 0.9em; transition: 0.2s;" onmouseover="this.style.background='#555'" onmouseout="this.style.background='#333'">Memory leeren</button>
+                <button id="btnImpactClear" class="sz-btn sz-btn-danger">Memory leeren</button>
                 <div style="font-family: monospace; font-size: 1.1rem; text-align:right; margin-left: 15px;" id="impactStatusStr">STATUS: IDLE</div>
               </div>
 
-              <style>
-                  .impact-size-btn {
-                      background: rgba(255,255,255,0.1); border: 1px solid #555; border-radius: 4px;
-                      color: #fff; padding: 2px 8px; font-size: 0.8em; cursor: pointer; margin-left: 4px;
-                  }
-                  .impact-size-btn:hover { background: rgba(255, 214, 0, 0.2); border-color: #ffd600; color: #ffd600; }
-              </style>
 
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
-                  <div style="font-size: 0.9em; color: #aaa;">
-                      Rohsignal (Zeitanalyse)
+
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all 0.2s;" class="impact-section-header" onclick="if(window.toggleImpactChart) window.toggleImpactChart('impactTimeChartContainer')">
+                  <div class="impact-section-title" style="display:flex; align-items:center; gap:10px;">
+                      <span id="chevronLeft_impactTimeChartContainer" style="color:#ffd600; font-weight:bold; font-size:1.1em; transition: transform 0.2s;">▼</span>
+                      <span>📈 Rohsignal (Zeitanalyse)</span>
                   </div>
-                  <div>
+                  <div onclick="event.stopPropagation()">
                       <button id="btnExt_impactTimeChartContainer" class="impact-size-btn" onclick="if(window.extendImpactChart) window.extendImpactChart('impactTimeChartContainer')">⛶ Extend</button>
                       <button id="btnToggle_impactTimeChartContainer" class="impact-size-btn" style="color:#ffd600; font-weight:bold;" onclick="if(window.toggleImpactChart) window.toggleImpactChart('impactTimeChartContainer')">
                           <span id="chevron_impactTimeChartContainer">▲</span>
                       </button>
                   </div>
               </div>
-              <div id="impactTimeChartContainer" style="width: 100%; height: 250px; background: #111; border-radius:8px; overflow:hidden; margin-bottom: 20px; transition: height 0.3s ease;"></div>
+              <div id="impactTimeChartContainer" class="impact-chart-box" style="width: 100%; height: 250px;"></div>
 
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
-                  <div style="font-size: 0.9em; color: #aaa; display: flex; align-items: center; gap: 15px;">
-                      <span>Frequenzspektrum (FFT)</span>
-                      <div style="display:flex; gap: 10px; font-weight: normal; font-size: 0.85em;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all 0.2s;" class="impact-section-header" onclick="if(window.toggleImpactChart) window.toggleImpactChart('impactChartContainer')">
+                  <div class="impact-section-title" style="display: flex; align-items: center; gap: 15px;">
+                      <div style="display:flex; align-items:center; gap:10px;">
+                          <span id="chevronLeft_impactChartContainer" style="color:#ffd600; font-weight:bold; font-size:1.1em; transition: transform 0.2s;">▼</span>
+                          <span>📊 Frequenzspektrum (FFT)</span>
+                      </div>
+                      <div style="display:flex; gap: 10px; font-weight: normal; font-size: 0.85em;" onclick="event.stopPropagation()">
                           <label style="cursor:pointer; color:#ff4a4a; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="impactAxisX" checked style="accent-color:#ff4a4a;"> X</label>
                           <label style="cursor:pointer; color:#4caf50; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="impactAxisY" checked style="accent-color:#4caf50;"> Y</label>
                           <label style="cursor:pointer; color:#4da6ff; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="impactAxisZ" checked style="accent-color:#4da6ff;"> Z</label>
                       </div>
                   </div>
-                  <div>
+                  <div onclick="event.stopPropagation()">
                       <button id="btnExt_impactChartContainer" class="impact-size-btn" onclick="if(window.extendImpactChart) window.extendImpactChart('impactChartContainer')">⛶ Extend</button>
                       <button id="btnToggle_impactChartContainer" class="impact-size-btn" style="color:#ffd600; font-weight:bold;" onclick="if(window.toggleImpactChart) window.toggleImpactChart('impactChartContainer')">
                           <span id="chevron_impactChartContainer">▲</span>
                       </button>
                   </div>
               </div>
-              <div id="impactChartContainer" style="width: 100%; height: 250px; background: #111; border-radius:8px; overflow:hidden; margin-bottom: 20px; transition: height 0.3s ease;"></div>
+              <div id="impactChartContainer" class="impact-chart-box" style="width: 100%; height: 250px;"></div>
 
               <!-- Drehzahldiagramm Bundle (Nur für Fräsen) -->
               <div id="rpmChartWrapper" style="display:block;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 5px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all 0.2s;" class="impact-section-header" onclick="if(window.toggleImpactChart) window.toggleImpactChart('rpmChartContainer')">
                     <div style="display:flex; align-items:center;">
-                        <div style="font-size: 0.9em; color: #aaa; margin-right: 15px; display:flex; align-items:center; gap:8px;">
-                            Spindeldrehzahl Risiko-Analyse
-                            <button id="rpmInfoDocBtn" onclick="document.getElementById('rpmInfoDocOverlay').style.display='flex';" title="Ausführliche Erklärung zur Spindeldrehzahl Risiko-Analyse" style="background: rgba(255,214,0,0.15); border: 1px solid #FFD600; color: #FFD600; cursor: pointer; border-radius: 50%; width: 22px; height: 22px; font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center; padding: 0; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,214,0,0.4)';" onmouseout="this.style.background='rgba(255,214,0,0.15)';">?</button>
+                        <div class="impact-section-title" style="margin-right: 15px; display:flex; align-items:center; gap:10px;">
+                            <span id="chevronLeft_rpmChartContainer" style="color:#ffd600; font-weight:bold; font-size:1.1em; transition: transform 0.2s;">▼</span>
+                            <span>⚙️ Spindeldrehzahl Risiko-Analyse</span>
+                            <button id="rpmInfoDocBtn" onclick="event.stopPropagation(); document.getElementById('rpmInfoDocOverlay').style.display='flex';" title="Ausführliche Erklärung zur Spindeldrehzahl Risiko-Analyse" style="background: rgba(255,214,0,0.15); border: 1px solid #FFD600; color: #FFD600; cursor: pointer; border-radius: 50%; width: 22px; height: 22px; font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center; padding: 0; transition: background 0.2s; margin-left: 5px;" onmouseover="this.style.background='rgba(255,214,0,0.4)';" onmouseout="this.style.background='rgba(255,214,0,0.15)';">?</button>
                         </div>
                         <div style="font-size: 0.85em;">
                             <label style="margin-left:10px; cursor:pointer; color:#fff;"><input type="radio" name="impactViewFilter" value="combined" checked style="accent-color:#ffd600;"> Kombiniert</label>
@@ -2083,14 +2173,14 @@
                             <label style="margin-left:10px; cursor:pointer; color:#00ffff;"><input type="radio" name="impactViewFilter" value="tool" style="accent-color:#ffd600;"> Nur Werkzeug</label>
                         </div>
                     </div>
-                    <div>
+                    <div onclick="event.stopPropagation()">
                         <button id="btnExt_rpmChartContainer" class="impact-size-btn" onclick="if(window.extendImpactChart) window.extendImpactChart('rpmChartContainer')">⛶ Extend</button>
                         <button id="btnToggle_rpmChartContainer" class="impact-size-btn" style="color:#ffd600; font-weight:bold;" onclick="if(window.toggleImpactChart) window.toggleImpactChart('rpmChartContainer')">
                             <span id="chevron_rpmChartContainer">▲</span>
                         </button>
                     </div>
                 </div>
-                <div id="rpmChartContainer" style="width: 100%; height: 250px; background: #111; border-radius:8px; overflow:hidden; transition: height 0.3s ease;"></div>
+                <div id="rpmChartContainer" class="impact-chart-box" style="width: 100%; height: 250px;"></div>
                 
                 <details style="margin-top: 15px; margin-bottom: 20px; background: rgba(255,255,255,0.05); border: 1px solid #333; border-radius: 8px; padding: 10px;">
                     <summary style="cursor: pointer; color: #4da6ff; font-weight: bold; outline: none; user-select: none;">ℹ️ Wie werden "Gute" und "Schlechte" Drehzahlen berechnet?</summary>
@@ -2154,7 +2244,7 @@
 
 
               <div style="margin-top: 25px; border-top: 1px solid #333; padding-top: 15px; text-align: right;">
-                <button id="btnImpactPdf" style="background:#4caf50; color:#fff; border:none; padding:8px 15px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:0.9em;">📄 Als PDF exportieren</button>
+                <button id="btnImpactPdf" class="sz-btn sz-btn-primary" style="font-weight:bold;">📄 Als PDF exportieren</button>
               </div>
             </div>
           </div>
@@ -2256,7 +2346,7 @@
               <div style="margin-bottom:30px; padding:15px; border:1px solid rgba(255, 255, 255, 0.08); border-radius:14px; background:rgba(21, 27, 35, 0.86); color:#eef3f8; box-shadow:0 14px 40px rgba(0,0,0,0.28);">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                   <div style="font-size:0.85rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:rgba(255, 214, 0, 0.92);">Verbundene Sensoren</div>
-                  <button id="btnDiscoverNodes" style="background:#333; border:none; color:#ffd600; cursor:pointer; padding: 6px 12px; border-radius:4px; font-weight:bold;">↻ Neu suchen</button>
+                  <button id="btnDiscoverNodes" class="sz-btn sz-btn-secondary">↻ Neu suchen</button>
                 </div>
                 <div id="nodesList" style="display:flex; flex-direction:column; gap:8px; font-size:0.9rem;">
                   <div style="color:rgba(255,255,255,0.5);">Suche im Netzwerk...</div>
@@ -2268,9 +2358,9 @@
 
 
                 <div class="dropdown" id="accelRangeDD">
-                  <button class="dropdown-button">
+                  <button class="dropdown-button sz-btn sz-btn-secondary" style="width: 100%; display: flex; justify-content: space-between; align-items: center;">
                     <span class="label"></span>
-                    <span class="arrow">▼</span>
+                    <span class="arrow" style="font-size: 0.8em;">▼</span>
                   </button>
                   <div class="dropdown-content">
                     <!-- Optionen werden dynamisch eingefügt -->
@@ -2278,9 +2368,9 @@
                 </div>
 
                 <div class="dropdown" id="accelSampleRateDD">
-                  <button class="dropdown-button">
+                  <button class="dropdown-button sz-btn sz-btn-secondary" style="width: 100%; display: flex; justify-content: space-between; align-items: center;">
                     <span class="label"></span>
-                    <span class="arrow">▼</span>
+                    <span class="arrow" style="font-size: 0.8em;">▼</span>
                   </button>
                   <div class="dropdown-content">
                     <!-- Optionen werden dynamisch eingefügt -->
@@ -2288,9 +2378,9 @@
                 </div>
 
                 <div class="dropdown" id="accelFilterDD">
-                  <button class="dropdown-button">
+                  <button class="dropdown-button sz-btn sz-btn-secondary" style="width: 100%; display: flex; justify-content: space-between; align-items: center;">
                     <span class="label"></span>
-                    <span class="arrow">▼</span>
+                    <span class="arrow" style="font-size: 0.8em;">▼</span>
                   </button>
                   <div class="dropdown-content">
                     <!-- Optionen werden dynamisch eingefügt -->
@@ -2298,9 +2388,9 @@
                 </div>
 
                 <div class="dropdown" id="gyroRangeDD">
-                  <button class="dropdown-button">
+                  <button class="dropdown-button sz-btn sz-btn-secondary" style="width: 100%; display: flex; justify-content: space-between; align-items: center;">
                     <span class="label"></span>
-                    <span class="arrow">▼</span>
+                    <span class="arrow" style="font-size: 0.8em;">▼</span>
                   </button>
                   <div class="dropdown-content">
                     <!-- Optionen werden dynamisch eingefügt -->
@@ -2308,9 +2398,9 @@
                 </div>
 
                 <div class="dropdown" id="gyroSampleRateDD">
-                  <button class="dropdown-button">
+                  <button class="dropdown-button sz-btn sz-btn-secondary" style="width: 100%; display: flex; justify-content: space-between; align-items: center;">
                     <span class="label"></span>
-                    <span class="arrow">▼</span>
+                    <span class="arrow" style="font-size: 0.8em;">▼</span>
                   </button>
                   <div class="dropdown-content">
                     <!-- Optionen werden dynamisch eingefügt -->
@@ -2318,9 +2408,9 @@
                 </div>
 
                 <div class="dropdown" id="gyroFilterDD">
-                  <button class="dropdown-button">
+                  <button class="dropdown-button sz-btn sz-btn-secondary" style="width: 100%; display: flex; justify-content: space-between; align-items: center;">
                     <span class="label"></span>
-                    <span class="arrow">▼</span>
+                    <span class="arrow" style="font-size: 0.8em;">▼</span>
                   </button>
                   <div class="dropdown-content">
                     <!-- Optionen werden dynamisch eingefügt -->
@@ -2513,19 +2603,19 @@
 
   <div id="replayControlBar" style="display: none; position: fixed; bottom: 0; left: 0; width: 100vw; height: 60px; background: rgba(15, 15, 15, 0.95); border-top: 1px solid #FFD600; z-index: 9999; align-items: center; padding: 0 20px; gap: 15px; box-sizing: border-box; backdrop-filter: blur(10px); box-shadow: 0 -5px 20px rgba(0,0,0,0.5);">
     <div style="color: #FFD600; font-weight: bold; font-family: 'Courier New', monospace; letter-spacing: 1px; font-size: 14px;">REPLAY MODE</div>
-    <button id="replayBtnTriggerLoad" onclick="window.triggerReplayLoad();" style="background: transparent; color: #FFD600; border: 1px solid #FFD600; padding: 6px 12px; border-radius: 4px; cursor: pointer; height: 32px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="1.2em" height="1.2em" style="vertical-align: middle; margin-right: 4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Datei laden</button>
+    <button id="replayBtnTriggerLoad" class="sz-btn sz-btn-secondary" onclick="window.triggerReplayLoad();" style="height: 32px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="1.2em" height="1.2em" style="vertical-align: middle; margin-right: 4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Datei laden</button>
     <div style="width: 1px; height: 30px; background: #333; margin: 0 5px;"></div>
     
-    <button id="replayPlayBtn" style="background: #FFD600; color: black; border: none; padding: 6px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; height: 32px; width: 85px; display: flex; align-items: center; justify-content: center; gap: 6px;"><svg viewBox="0 0 24 24" fill="currentColor" width="1.2em" height="1.2em"><path d="M8 5v14l11-7z"/></svg> PLAY</button>
+    <button id="replayPlayBtn" class="sz-btn sz-btn-primary" style="height: 32px; width: 85px; display: flex; align-items: center; justify-content: center; gap: 6px;"><svg viewBox="0 0 24 24" fill="currentColor" width="1.2em" height="1.2em"><path d="M8 5v14l11-7z"/></svg> PLAY</button>
     
     <div style="flex-grow: 1; display: flex; align-items: center; gap: 12px; margin-left: 10px;">
       <span id="replayTimeDisplay" style="color: #ccc; font-family: 'Courier New', monospace; font-size: 14px; min-width: 65px;">00:00.0</span>
-      <input type="range" id="replayTimeSlider" min="0" max="1000" value="0" style="flex-grow: 1; accent-color: #FFD600; cursor: pointer;" />
+      <input type="range" id="replayTimeSlider" class="sz-slider" min="0" max="1000" value="0" style="flex-grow: 1;" />
       <span id="replayDurationDisplay" style="color: #666; font-family: 'Courier New', monospace; font-size: 14px; min-width: 65px;">00:00.0</span>
     </div>
 
     <div style="width: 1px; height: 30px; background: #333; margin: 0 5px;"></div>
-    <select id="replaySpeedSelect" style="background: #222; color: #FFD600; border: 1px solid #444; padding: 6px; border-radius: 4px; font-family: monospace; outline: none;">
+    <select id="replaySpeedSelect" class="sz-select" style="background: #222; color: #FFD600; border: 1px solid #444; padding: 4px 8px; border-radius: 4px; font-family: monospace; outline: none; cursor: pointer;">
       <option value="0.1">0.1x Speed</option>
       <option value="0.25">0.25x Speed</option>
       <option value="0.5">0.5x Speed</option>
@@ -2847,7 +2937,7 @@
         <div style="display:flex; justify-content:space-between; align-items:center;">
            <div style="flex:1;">
              <label style="font-size:0.9em; display:block;">Ready (<span id="ledReadyIntVal">100</span>%)</label>
-             <input type="range" id="ledConfigReadyInt" min="0" max="100" value="100" style="width:100px; cursor:pointer;" oninput="document.getElementById('ledReadyIntVal').textContent=this.value" />
+             <input type="range" id="ledConfigReadyInt" class="sz-slider" min="0" max="100" value="100" style="width:100px;" oninput="document.getElementById('ledReadyIntVal').textContent=this.value" />
            </div>
            <input type="color" id="ledConfigReady" value="#00ff00" style="width:36px; height:36px; padding:0; border:none; cursor:pointer; border-radius:4px;" />
         </div>
@@ -2855,7 +2945,7 @@
         <div style="display:flex; justify-content:space-between; align-items:center;">
            <div style="flex:1;">
              <label style="font-size:0.9em; display:block;">Stream (<span id="ledStreamIntVal">100</span>%)</label>
-             <input type="range" id="ledConfigStreamInt" min="0" max="100" value="100" style="width:100px; cursor:pointer;" oninput="document.getElementById('ledStreamIntVal').textContent=this.value" />
+             <input type="range" id="ledConfigStreamInt" class="sz-slider" min="0" max="100" value="100" style="width:100px;" oninput="document.getElementById('ledStreamIntVal').textContent=this.value" />
            </div>
            <input type="color" id="ledConfigStream" value="#0000ff" style="width:36px; height:36px; padding:0; border:none; cursor:pointer; border-radius:4px;" />
         </div>
@@ -2863,17 +2953,17 @@
         <div style="display:flex; justify-content:space-between; align-items:center;">
            <div style="flex:1;">
              <label style="font-size:0.9em; display:block;">Error (<span id="ledErrorIntVal">100</span>%)</label>
-             <input type="range" id="ledConfigErrorInt" min="0" max="100" value="100" style="width:100px; cursor:pointer;" oninput="document.getElementById('ledErrorIntVal').textContent=this.value" />
+             <input type="range" id="ledConfigErrorInt" class="sz-slider" min="0" max="100" value="100" style="width:100px;" oninput="document.getElementById('ledErrorIntVal').textContent=this.value" />
            </div>
            <input type="color" id="ledConfigError" value="#ff0000" style="width:36px; height:36px; padding:0; border:none; cursor:pointer; border-radius:4px;" />
         </div>
       </div>
       
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:20px;">
-        <button id="btnDefaultsLedConfig" style="padding:8px 16px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:4px; color:#fff; cursor:pointer; font-size:0.85em;">Standardwerte</button>
+        <button id="btnDefaultsLedConfig" class="sz-btn sz-btn-secondary" style="font-size:0.85em;">Standardwerte</button>
         <div style="display:flex; gap:10px;">
-          <button id="btnCancelLedConfig" style="padding:8px 16px; background:rgba(255,255,255,0.1); border:none; border-radius:4px; color:#fff; cursor:pointer;">Abbrechen</button>
-          <button id="btnSaveLedConfig" style="padding:8px 16px; background:#386596; border:none; border-radius:4px; color:#fff; font-weight:bold; cursor:pointer;">Speichern</button>
+          <button id="btnCancelLedConfig" class="sz-btn sz-btn-secondary">Abbrechen</button>
+          <button id="btnSaveLedConfig" class="sz-btn sz-btn-primary">Speichern</button>
         </div>
       </div>
     </div>

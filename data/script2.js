@@ -327,7 +327,12 @@ function createNoopMotionViewport() {
     };
 }
 
-const accVectorViewport = new AccVectorViewport();
+const accVectorViewport = new AccVectorViewport({
+    onQuaternionChange: ({ commit }) => {
+        syncViewportPostTransformQuaternion({ persistState: commit, resetLiveBuffers: commit });
+        syncMotionWorkerTransform({ reset: commit });
+    }
+});
 const motionViewport = ENABLE_MOTION_VIEW ? new MotionViewport() : createNoopMotionViewport();
 const motionWorker = ENABLE_MOTION_VIEW ? new Worker('motion-worker.js') : createNoopWorker();
 
@@ -1917,11 +1922,14 @@ function syncViewportPostTransformQuaternion({ persistState = false, resetLiveBu
 
     syncViewportPostTransformQuaternionPure({
         decodeWorker: targetWorker,
+        quaternion: getViewportAdjustmentQuaternionXYZW(),
         persistState,
         resetLiveBuffers,
         onResetLiveBuffers: resetOrientationLiveBuffers,
         onPersistState: () => {
              if (targetNode) {
+                 targetNode.calibrationState = targetNode.calibrationState || {};
+                 targetNode.calibrationState.adjustmentQuat = getViewportAdjustmentQuaternionXYZW();
                  window.persistNodeCalibration(targetNode);
              } else {
                  persistCalibrationCookie();
@@ -1933,8 +1941,20 @@ function syncViewportPostTransformQuaternion({ persistState = false, resetLiveBu
 window.onAccVectorNodeChanged = function(ip) {
     if (!accVectorViewport) return;
     
-    if (typeof accVectorViewport.resetRotation === 'function') {
-        accVectorViewport.resetRotation();
+    if (ip !== 'master') {
+        const node = window.getNodeByIp(ip);
+        if (node && node.calibrationState && node.calibrationState.adjustmentQuat && typeof accVectorViewport.setAdjustmentQuaternion === 'function') {
+             accVectorViewport.setAdjustmentQuaternion(node.calibrationState.adjustmentQuat, { silent: true });
+        } else if (typeof accVectorViewport.resetRotation === 'function') {
+             accVectorViewport.resetRotation({ silent: true });
+        }
+    } else {
+        const state = typeof readCalibrationCookieState === 'function' ? readCalibrationCookieState()?.state : null;
+        if (state && state.viewportAdjustmentQuaternion && typeof accVectorViewport.setAdjustmentQuaternion === 'function') {
+             accVectorViewport.setAdjustmentQuaternion(state.viewportAdjustmentQuaternion, { silent: true });
+        } else if (typeof accVectorViewport.resetRotation === 'function') {
+             accVectorViewport.resetRotation({ silent: true });
+        }
     }
     
     syncViewportBaseQuaternion({ silent: true });
@@ -2010,29 +2030,8 @@ if (alignLoadQuatBtn) {
 
 if (alignApplyQuatBtn) {
     alignApplyQuatBtn.addEventListener('click', () => {
-        let qArray = null;
-        if (typeof accVectorViewport.getAppliedQuaternionObject === 'function') {
-            const obj = accVectorViewport.getAppliedQuaternionObject();
-            if (obj) qArray = [obj.x, obj.y, obj.z, obj.w];
-        }
-
-        if (accVectorViewport && accVectorViewport.activeNodeIp && accVectorViewport.activeNodeIp !== 'master') {
-             const node = window.getNodeByIp(accVectorViewport.activeNodeIp);
-             if (node && qArray) {
-                 node.calibrationState = node.calibrationState || {};
-                 node.calibrationState.quat = qArray;
-                 if (node.decodeWorker) {
-                      node.decodeWorker.postMessage({ type: 'calibdata', payload: { type: 2, quaternion: qArray }});
-                 }
-                 window.persistNodeCalibration(node);
-             }
-        } else {
-             if (qArray) setOrientationCalibrationQuaternion(qArray, { persistState: true });
-        }
-        
-        syncViewportBaseQuaternion({ silent: true });
-        syncViewportPostTransformQuaternion({ persistState: true, resetLiveBuffers: true });
-        accVectorViewport.setStatus('Live-Pipeline mit Zusatzrotation synchronisiert');
+        syncViewportPostTransformQuaternion({ persistState: true, resetLiveBuffers: false });
+        accVectorViewport.setStatus('Zusatzrotation gespeichert & synchronisiert');
     });
 }
 
@@ -4045,7 +4044,8 @@ window.persistNodeCalibration = function(node) {
                 scale: node.calibrationState?.scale || 1,
                 quat: serializedQuat,
                 accNoise: node.calibrationState?.accNoise,
-                gyroZero: node.calibrationState?.gyroZero
+                gyroZero: node.calibrationState?.gyroZero,
+                adjustmentQuat: node.calibrationState?.adjustmentQuat
             },
             gravityCutEnabled: node.gravityCutEnabled
         };
@@ -4116,6 +4116,9 @@ window.restoreNodeCalibration = function(node) {
                           }
                       }
                       if (q) node.decodeWorker.postMessage({ type: 'calibdata', payload: { type: 2, quaternion: q }});
+                 }
+                 if (node.calibrationState.adjustmentQuat) {
+                      node.decodeWorker.postMessage({ type: 'postTransformQuaternion', payload: { quaternion: node.calibrationState.adjustmentQuat }});
                  }
                  node.decodeWorker.postMessage({ type: 'calibmode', payload: { mode: node.orientationMode }});
                  node.decodeWorker.postMessage({ type: 'setgravity', payload: { gravity: node.gravityCutEnabled }});
@@ -5784,6 +5787,9 @@ function bindFftTooltip(plot, hostEl, unit) {
         document.body.appendChild(tooltip);
     }
 
+    const harmonics = [2, 3, 4];
+    const harmonicColors = ['rgba(255, 214, 0, 0.7)', 'rgba(255, 150, 0, 0.6)', 'rgba(255, 100, 0, 0.5)'];
+
     hostEl.addEventListener("mousemove", (e) => {
         // Fix for orphaned plot instances: always use the latest module-scoped reference
         const activePlot = hostEl.id === "gyroFftChart" ? gyroFftPlot : fftPlot;
@@ -5792,6 +5798,7 @@ function bindFftTooltip(plot, hostEl, unit) {
         const over = hostEl.querySelector(".u-over");
         if (!over) {
             tooltip.style.display = "none";
+            hideHarmonics(hostEl.id);
             return;
         }
 
@@ -5800,6 +5807,7 @@ function bindFftTooltip(plot, hostEl, unit) {
         // Check if mouse is strictly inside the chart area
         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
             tooltip.style.display = "none";
+            hideHarmonics(hostEl.id);
             return;
         }
 
@@ -5812,6 +5820,7 @@ function bindFftTooltip(plot, hostEl, unit) {
         const idx = activePlot.cursor.idx;
         if (idx == null || idx < 0 || !activePlot.data[0] || idx >= activePlot.data[0].length) {
             tooltip.style.display = "none";
+            hideHarmonics(hostEl.id);
             return;
         }
 
@@ -5819,6 +5828,7 @@ function bindFftTooltip(plot, hostEl, unit) {
 
         if (valX == null || !Number.isFinite(valX)) {
             tooltip.style.display = "none";
+            hideHarmonics(hostEl.id);
             return;
         }
 
@@ -5836,10 +5846,81 @@ function bindFftTooltip(plot, hostEl, unit) {
 
         tooltip.style.left = Math.round(posX) + "px";
         tooltip.style.top = Math.round(posY) + "px";
+
+        // Check if Harmonics are enabled via UI checkbox
+        const isGyro = hostEl.id === "gyroFftChart";
+        const cbId = isGyro ? "enableHarmonicCursorGyro" : "enableHarmonicCursorAcc";
+        const cb = document.getElementById(cbId);
+        const harmonicsEnabled = cb ? cb.checked : true;
+
+        if (!harmonicsEnabled) {
+            hideHarmonics(hostEl.id);
+            return;
+        }
+
+        // Update Harmonic Cursors
+        let xMax = activePlot.scales.x.max;
+        for (let i = 0; i < harmonics.length; i++) {
+            let mult = harmonics[i];
+            let hId = hostEl.id + '-harmonic-' + mult;
+            let hLine = document.getElementById(hId);
+            
+            // Recreate or re-append if missing (e.g. after uPlot.destroy during rebuildFftChart)
+            if (!hLine || !over.contains(hLine)) {
+                if (!hLine) {
+                    hLine = document.createElement("div");
+                    hLine.id = hId;
+                    hLine.style.position = "absolute";
+                    hLine.style.top = "0";
+                    hLine.style.bottom = "0";
+                    hLine.style.width = "1px";
+                    hLine.style.borderLeft = `2px dashed ${harmonicColors[i]}`;
+                    hLine.style.display = "none";
+                    hLine.style.pointerEvents = "none";
+                    hLine.style.zIndex = "10";
+                    
+                    let hLabel = document.createElement("div");
+                    hLabel.textContent = mult + "x";
+                    hLabel.style.position = "absolute";
+                    hLabel.style.top = (10 + i * 22) + "px"; // Stagger labels vertically to prevent overlap if frequencies are tight
+                    hLabel.style.left = "4px";
+                    hLabel.style.color = harmonicColors[i];
+                    hLabel.style.fontSize = "11px";
+                    hLabel.style.fontWeight = "bold";
+                    hLabel.style.background = "rgba(0,0,0,0.6)";
+                    hLabel.style.padding = "2px 4px";
+                    hLabel.style.borderRadius = "3px";
+                    
+                    hLine.appendChild(hLabel);
+                }
+                over.appendChild(hLine);
+            }
+
+            let hFreq = valX * mult;
+            if (hFreq > 0 && hFreq <= xMax) {
+                let hPos = activePlot.valToPos(hFreq, "x");
+                if (hPos >= 0 && hPos <= over.clientWidth) {
+                    hLine.style.left = Math.round(hPos) + "px";
+                    hLine.style.display = "block";
+                } else {
+                    hLine.style.display = "none";
+                }
+            } else {
+                hLine.style.display = "none";
+            }
+        }
     });
+
+    function hideHarmonics(hostId) {
+        for (let mult of harmonics) {
+            let hLine = document.getElementById(hostId + '-harmonic-' + mult);
+            if (hLine) hLine.style.display = "none";
+        }
+    }
 
     hostEl.addEventListener("mouseleave", () => {
         tooltip.style.display = "none";
+        hideHarmonics(hostEl.id);
     });
 }
 

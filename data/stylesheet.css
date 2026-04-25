@@ -307,32 +307,7 @@ body {
 }
 
 
-.chart-controls button {
-  background: #222;
-  color: #eee;          /* Standard-Textfarbe */
-  border: none;
-  padding: 5px 10px;
-  margin: 0 2px;
-  border-radius: 4px;
-  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
 
-.chart-controls button:hover, 
-.chart-controls button:focus {
-  background: #444;
-  color: #ffd700;       /* Neue Textfarbe beim Hover */
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-  transform: translateY(-2px) scale(1.025);
-}
-
-.chart-controls button:hover i {
-  color: #ffd700;       /* Symbolfarbe beim Hover (optional) */
-  
-   
-
-}
 
 
 
@@ -509,39 +484,38 @@ body {
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 8px;
 }
 
 .filter-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.05);
-  font-size: 0.82rem;
-  line-height: 1;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #eef3f8;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.filter-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .filter-drawer-toggle {
-  background: rgba(22, 27, 34, 0.6);
-  backdrop-filter: blur(10px);
-  color: #eee;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0,0,0,0.3);
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-size: 0.92rem;
-  font-weight: bold;
-  cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Inherits from sz-btn */
 }
 .filter-drawer-toggle:hover {
-  background: rgba(26, 32, 44, 0.8);
-  color: #FFD600;
-  border-color: rgba(255, 214, 0, 0.5);
-  box-shadow: 0 0 12px rgba(255, 214, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  transform: translateY(-2px) scale(1.02);
+  /* Inherits from sz-btn */
 }
 
 .filter-drawer {
@@ -678,7 +652,7 @@ body {
 
 .chart-info-badge {
   position: absolute;
-  top: 16px;
+  top: 56px;
   right: 55px;
   z-index: 19;
   padding: 11px 18px;
@@ -802,37 +776,7 @@ body {
   }
 }
 
-.chart-controls button {
-  background: rgba(22, 27, 34, 0.6);
-  backdrop-filter: blur(10px);
-  color: #eee;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0,0,0,0.3);
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-size: 0.92rem;
-  cursor: pointer;
-  font-weight: bold;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
 
-.chart-controls button.active {
-  background: rgba(26, 32, 44, 0.9);
-  color: #FFD600;
-  border-color: rgba(255, 214, 0, 0.6);
-  box-shadow: 0 0 16px rgba(255, 214, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  transform: translateY(-1px) scale(1.01);
-}
-
-.chart-controls button:hover,
-.chart-controls button:focus-visible {
-  background: rgba(26, 32, 44, 0.8);
-  color: #FFD600;
-  border-color: rgba(255, 214, 0, 0.5);
-  box-shadow: 0 0 12px rgba(255, 214, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  transform: translateY(-2px) scale(1.02);
-  outline: none;
-}
 
 .zoom-box {
     position: absolute;
@@ -2478,4 +2422,181 @@ input[type="number"]:focus {
     flex-wrap: wrap;
     justify-content: stretch;
   }
+}
+
+/* ==============================================================
+   SENZIMU DESIGN SYSTEM - GLOBAL UI CONTROLS
+   ============================================================== */
+
+/* --- Buttons --- */
+.sz-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-family: 'Segoe UI', 'Roboto', 'Arial', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.sz-btn:active {
+  transform: scale(0.96);
+}
+
+.sz-btn-primary {
+  background: linear-gradient(135deg, #FFD600 0%, #ff9d00 100%);
+  color: #111;
+  box-shadow: 0 4px 14px rgba(255, 214, 0, 0.25);
+}
+
+.sz-btn-primary:hover, .sz-btn-primary:focus-visible {
+  box-shadow: 0 6px 20px rgba(255, 214, 0, 0.4);
+  transform: translateY(-1px);
+  filter: brightness(1.1);
+}
+
+.sz-btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  color: #eef3f8;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.sz-btn-secondary:hover, .sz-btn-secondary:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  color: #FFD600;
+  border-color: rgba(255, 214, 0, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  transform: translateY(-1px);
+}
+
+.sz-btn-danger {
+  background: rgba(255, 74, 74, 0.15);
+  color: #ff4a4a;
+  border: 1px solid rgba(255, 74, 74, 0.3);
+}
+
+.sz-btn-danger:hover, .sz-btn-danger:focus-visible {
+  background: #ff4a4a;
+  color: #fff;
+  box-shadow: 0 4px 15px rgba(255, 74, 74, 0.4);
+  transform: translateY(-1px);
+}
+
+.sz-btn-icon {
+  padding: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sz-btn-icon i, .sz-btn-icon svg {
+  font-size: 1rem;
+}
+
+/* --- Inputs & Selects --- */
+.sz-input {
+  background: rgba(0, 0, 0, 0.4);
+  color: #FFD600;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.sz-input:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.sz-input:focus {
+  border-color: #FFD600;
+  box-shadow: 0 0 0 2px rgba(255, 214, 0, 0.2);
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.sz-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23FFD600%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px top 50%;
+  background-size: 10px auto;
+  padding-right: 30px;
+  cursor: pointer;
+}
+
+/* --- Range Sliders --- */
+.sz-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sz-slider:focus {
+  outline: none;
+}
+
+.sz-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  transition: all 0.2s ease;
+}
+
+.sz-slider:hover::-webkit-slider-runnable-track {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.sz-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: #FFD600;
+  margin-top: -6px;
+  box-shadow: 0 0 10px rgba(255, 214, 0, 0.5), inset 0 0 0 2px rgba(255, 255, 255, 0.5);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sz-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+  box-shadow: 0 0 14px rgba(255, 214, 0, 0.7), inset 0 0 0 2px #fff;
+}
+
+.sz-slider::-moz-range-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+.sz-slider::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: #FFD600;
+  border: none;
+  box-shadow: 0 0 10px rgba(255, 214, 0, 0.5), inset 0 0 0 2px rgba(255, 255, 255, 0.5);
 }

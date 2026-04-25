@@ -1,7 +1,9 @@
 // c:\SENZIMU_github_sicherung\data\ui\impact-test.js
+import { generateImpactPdfReport } from './pdf-report-generator.js';
+import { buildImpactTableSection } from './impact-table-generator.js';
 
 let state = 'IDLE'; // IDLE, ARMED, TRIGGERED, ANALYZING
-let triggerThresholdRaw = 4000; // 4g in mg
+let triggerThresholdRaw = 200; // 0.2g in mg
 let base_x = null, base_y = null, base_z = null;
 let bufferSize = 2048;
 let captureX = new Float32Array(bufferSize);
@@ -179,7 +181,7 @@ function wheelZoomPlugin(factor = 0.85) {
 
 window.rebuildFftChart = function() {
     if (!chartContainer) chartContainer = document.getElementById('impactChartContainer');
-    if (!chartContainer || chartContainer.clientWidth === 0) return;
+    if (!chartContainer) return;
 
     if (chartInstance) {
         chartInstance.destroy();
@@ -264,8 +266,8 @@ window.rebuildFftChart = function() {
     }
 
     const opts = {
-        width: chartContainer.clientWidth,
-        height: 250,
+        width: chartContainer.clientWidth || chartContainer.parentElement.clientWidth || 800,
+        height: chartContainer.clientHeight || 350,
         axes: [
             { stroke: "#fff", grid: { stroke: "#333" } },
             { scale: "y", stroke: "#fff", grid: { stroke: "#333" } }
@@ -278,7 +280,17 @@ window.rebuildFftChart = function() {
         cursor: { 
             drag: { x: true, y: true, setScale: true } 
         },
-        plugins: [createCursorTooltipPlugin("Hz"), wheelZoomPlugin()]
+        plugins: [createCursorTooltipPlugin("Hz"), wheelZoomPlugin()],
+        hooks: {
+            ready: [
+                (u) => {
+                    u.root.addEventListener('dblclick', () => {
+                        u.setScale('x', { min: u.data[0][0], max: u.data[0][u.data[0].length - 1] });
+                        u.setScale('y', { auto: true });
+                    });
+                }
+            ]
+        }
     };
 
     chartInstance = new uPlot(opts, chartData, chartContainer);
@@ -327,7 +339,17 @@ function initChart() {
             cursor: { 
                 drag: { x: true, y: true, setScale: true } 
             },
-            plugins: [createCursorTooltipPlugin("U/min"), wheelZoomPlugin()]
+            plugins: [createCursorTooltipPlugin("U/min"), wheelZoomPlugin()],
+            hooks: {
+                ready: [
+                    (u) => {
+                        u.root.addEventListener('dblclick', () => {
+                            u.setScale('x', { min: u.data[0][0], max: u.data[0][u.data[0].length - 1] });
+                            u.setScale('y', { auto: true });
+                        });
+                    }
+                ]
+            }
         };
         
         const N = 3001;
@@ -401,178 +423,23 @@ export function initImpactTest() {
 
     if (btnImpactPdf) {
         btnImpactPdf.addEventListener('click', () => {
-            // --- 1. ZOOM RESET ---
-            const resetChartZoom = (inst) => {
-                if(inst && inst.data && inst.data[0] && inst.data[0].length > 0) {
-                    let xData = inst.data[0];
-                    inst.setScale('x', { min: xData[0], max: xData[xData.length - 1] });
-                }
-            };
-            resetChartZoom(timeChartInstance);
-            resetChartZoom(chartInstance);
-            resetChartZoom(rpmChartInstance);
+            let operationMode = 'fraesen';
+            const modBtns = document.querySelectorAll('input[name="impactMode"]');
+            if(modBtns) modBtns.forEach(r => { if(r.checked) operationMode = r.value; });
 
-            // Kurz warten, bis Canvas durch Scale-Reset neu gezeichnet wurden
-            setTimeout(() => {
-                const now = new Date();
-                let flutes = 2;
-                if(fluteSelect && fluteSelect.value !== 'custom') flutes = parseInt(fluteSelect.value);
-                else if(fluteCustom) flutes = parseInt(fluteCustom.value);
+            let flutes = 2;
+            if(fluteSelect && fluteSelect.value !== 'custom') flutes = parseInt(fluteSelect.value);
+            else if(fluteCustom) flutes = parseInt(fluteCustom.value);
 
-                // --- 2. NATIVE DRUCK UMGEBUNG AUFBAUEN ---
-                const printContainer = document.createElement('div');
-                printContainer.id = 'senzimu-print-report';
-                printContainer.style.width = '100%'; 
-                printContainer.style.backgroundColor = '#ffffff';
-                printContainer.style.color = '#000000';
-                printContainer.style.padding = '0';
-                printContainer.style.fontFamily = 'Arial, sans-serif';
-
-                // CSS Injektion: Verstecke das Dashboard, zeige nur den Report beim Drucken!
-                const printStyle = document.createElement('style');
-                printStyle.id = 'senzimu-print-styles';
-                printStyle.textContent = `
-                    @media print {
-                        body > :not(#senzimu-print-report) { display: none !important; }
-                        body { background: white !important; margin: 0; padding: 0; }
-                        #senzimu-print-report { display: block !important; position: static !important; }
-                        @page { size: auto; margin: 15mm; }
-                    }
-                    #senzimu-print-report { display: none; } /* Unsichtbar auf dem Bildschirm */
-                `;
-                document.head.appendChild(printStyle);
-
-                let operationMode = 'fraesen';
-                const modBtns = document.querySelectorAll('input[name="impactMode"]');
-                if(modBtns) modBtns.forEach(r => { if(r.checked) operationMode = r.value; });
-
-                let htmlStr = `
-                    <div style="border-bottom: 2px solid #ffd600; padding-bottom: 10px; margin-bottom: 20px;">
-                        <h1 style="color: #333; margin: 0;">Senz<span style="color:#ffd600;">IMU</span> Diagnose-Bericht</h1>
-                        <h3 style="color: #666; margin: 5px 0 0 0;">Modalanalyse (${operationMode === 'drehen' ? 'Drehen' : 'Fräsen'})</h3>
-                        <div style="margin-top: 10px; font-size: 0.9em; color: #555;">
-                            <strong>Datum & Uhrzeit:</strong> ${now.toLocaleString()}<br/>
-                            <strong>Trigger-Schwelle:</strong> ${triggerThresholdRaw / 1000} g<br/>
-                            ${operationMode !== 'drehen' ? `<strong>Zähnezahl (Z):</strong> ${flutes}` : ''}
-                        </div>
-                    </div>
-                `;
-                
-                // Inject SSV Results permanently for turning
-                if (operationMode === 'drehen') {
-                    let s_amp = document.getElementById('ssvResultAmp') ? document.getElementById('ssvResultAmp').textContent : '--';
-                    let s_fre = document.getElementById('ssvResultFreq') ? document.getElementById('ssvResultFreq').textContent : '--';
-                    htmlStr += `
-                    <div style="margin-bottom:20px; background:#f4f4f4; padding:15px; border-left:5px solid #4caf50;">
-                        <h2 style="margin-top:0; color:#333;">Optimale SSV-Prozessparameter (Drehen):</h2>
-                        <div style="font-size:1.3em;">
-                            <strong>SSV Amplitude:</strong> <span style="color:#4caf50;">${s_amp}</span><br/>
-                            <strong>SSV Frequenz (f_m):</strong> <span style="color:#4caf50;">${s_fre}</span>
-                        </div>
-                    </div>`;
-                }
-
-                // --- 3. GRAPHICS & LEGENDS ---
-                const getChartImg = (instance, title, legendHtml) => {
-                    if (!instance || !instance.ctx) return '';
-                    const base64 = instance.ctx.canvas.toDataURL("image/png");
-                    return `
-                        <div style="margin-bottom: 30px; page-break-inside: avoid;">
-                            <h4 style="margin: 0 0 5px 0; color: #333; font-size: 1.1em;">${title}</h4>
-                            <div style="background: #111; padding: 10px; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
-                                <img src="${base64}" style="width: 100%; height: auto; display: block;" />
-                            </div>
-                            <div style="margin-top: 8px; font-size: 0.85em; color: #444; border-left: 3px solid #ccc; padding-left: 8px;">
-                                ${legendHtml}
-                            </div>
-                        </div>
-                    `;
-                };
-
-                htmlStr += getChartImg(timeChartInstance, "Rohsignal (Zeitanalyse)", "<strong>Legende:</strong> <span style='color:#b89900; font-weight:bold;'>Gelb = Werkstück</span> | <span style='color:#0066cc; font-weight:bold;'>Blau = Werkzeug</span> (Transparente Linien = Historie)");
-                htmlStr += getChartImg(chartInstance, "Frequenzspektrum (FFT)", "<strong>Legende:</strong> <span style='color:#b89900; font-weight:bold;'>Gelb = Werkstück</span> | <span style='color:#0066cc; font-weight:bold;'>Blau = Werkzeug</span>");
-                
-                if (operationMode === 'fraesen') {
-                    htmlStr += getChartImg(rpmChartInstance, "Spindeldrehzahl Risiko-Analyse", "<strong>Legende:</strong> <span style='color:#cc0000; font-weight:bold;'>Rot = Resonanz-Gefahr</span> | <span style='color:#008800; font-weight:bold;'>Grün = Optimaler Bereich</span>");
-                }
-
-                // --- 4. EXPLICIT TABLES GENERATION ---
-                const harmonische = [1.0, 0.5, 0.3333, 0.25];
-                const kNames = ["1. Ordnung", "2. Ordnung", "3. Ordnung", "4. Ordnung"];
-                
-                function buildPdfTable(title, peaksList, meanDecay) {
-                    if (!peaksList || peaksList.length === 0) return '';
-                    let sectionHtml = `
-                    <div style="margin-bottom: 25px; page-break-inside: avoid; border: 1px solid #ddd; background: #fff; padding: 15px; border-radius: 5px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                        <h4 style="margin:0 0 10px 0; color:#000; border-bottom: 1px solid #ccc; padding-bottom:5px;">${title}`;
-                    
-                    if(meanDecay !== undefined && meanDecay > 0 && peaksList.length > 0) {
-                        let avgD = (47679 / (peaksList[0].freq * meanDecay));
-                        let decayText = (avgD >= 4.0) ? "HERVORRAGEND" : (avgD >= 1.5) ? "GUT" : (avgD >= 0.5) ? "KRITISCH" : "GEFÄHRLICH";
-                        sectionHtml += `<span style="display:block; font-size:0.85em; color:#555; font-weight:normal; margin-top:4px;">Dämpfungsmaß D: <strong>${avgD.toFixed(2)} % (${decayText})</strong></span>`;
-                    }
-                    sectionHtml += `</h4>
-                        <table style="width: 100%; border-collapse: collapse; font-size: 0.85em; color: #000;">
-                            <thead>
-                                <tr>
-                                    <th style="border-bottom: 2px solid #555; text-align: left; padding: 4px;">Harmonische</th>
-                                    <th style="border-bottom: 2px solid #555; text-align: left; padding: 4px;">Eingriffsfrequenz</th>
-                                    ${operationMode !== 'drehen' ? `<th style="border-bottom: 2px solid #555; text-align: left; padding: 4px;">Avoid (U/min)</th>` : ''}
-                                </tr>
-                            </thead>
-                            <tbody>`;
-                    
-                    let displayPeaks = [...peaksList].sort((a,b) => b.mag - a.mag).slice(0, 3);
-                    displayPeaks.forEach((p, pIdx) => {
-                        let stdStr = (p.std !== undefined && p.std > 0) ? ` (±${p.std.toFixed(2)})` : '';
-                        sectionHtml += `<tr><td colspan="3" style="background: #f5f5f5; border-bottom: 1px solid #ccc; padding: 6px; font-weight:bold; color:#333;">Peak ${pIdx+1}: ${p.freq.toFixed(1)} Hz <span style="font-weight:normal; font-size:0.9em;">(Magnitude: ${p.mag.toFixed(1)}${stdStr})</span></td></tr>`;
-                        for(let i=0; i<4; i++) {
-                            let k = harmonische[i];
-                            let f_anregung = p.freq * k;
-                            let rpm = f_anregung * 60 / flutes;
-                            sectionHtml += `
-                                <tr>
-                                    <td style="padding: 4px; border-bottom: 1px solid #eee;">${kNames[i]}</td>
-                                    <td style="padding: 4px; border-bottom: 1px solid #eee;">${f_anregung.toFixed(1)} Hz</td>
-                                    ${operationMode !== 'drehen' ? `<td style="padding: 4px; border-bottom: 1px solid #eee; font-weight:bold;">~${Math.round(rpm)}</td>` : ''}
-                                </tr>
-                            `;
-                        }
-                    });
-                    sectionHtml += `</tbody></table></div>`;
-                    return sectionHtml;
-                }
-
-                htmlStr += `<h3 style="border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 30px; color: #333; page-break-before: auto;">Identifizierte Resonanzen</h3>`;
-                
-                // FORCE BOTH TABLES IF DATA EXISTS
-                let hasTables = false;
-                if(savedProfiles && savedProfiles.workpiece && savedProfiles.workpiece.peaks && savedProfiles.workpiece.peaks.length > 0) {
-                    htmlStr += buildPdfTable("📊 Werkstück Resonanzen", savedProfiles.workpiece.peaks, savedProfiles.workpiece.meanDecayMs);
-                    hasTables = true;
-                }
-                if(savedProfiles && savedProfiles.tool && savedProfiles.tool.peaks && savedProfiles.tool.peaks.length > 0) {
-                    htmlStr += buildPdfTable("⚙️ Werkzeug Resonanzen", savedProfiles.tool.peaks, savedProfiles.tool.meanDecayMs);
-                    hasTables = true;
-                }
-                if(!hasTables) {
-                    htmlStr += `<p style="color:#666;"><em>Noch keine Messergebnisse vorhanden.</em></p>`;
-                }
-
-                printContainer.innerHTML = htmlStr;
-                document.body.appendChild(printContainer);
-                
-                // --- 5. Nativer Web-Print aufrufen ---
-                setTimeout(() => {
-                    window.print();
-                    
-                    // Cleanup nach Beenden des Druckdialogs
-                    setTimeout(() => {
-                        if(printContainer.parentNode) printContainer.parentNode.removeChild(printContainer);
-                        if(printStyle.parentNode) printStyle.parentNode.removeChild(printStyle);
-                    }, 1000); 
-                }, 500); 
-            }, 100); 
+            generateImpactPdfReport({
+                timeChartInstance,
+                chartInstance,
+                rpmChartInstance,
+                triggerThresholdRaw,
+                savedProfiles,
+                flutes,
+                operationMode
+            });
         });
     }
 
@@ -687,7 +554,7 @@ function armTrigger() {
     preBufferCount = 0;
     base_x = null; base_y = null; base_z = null;
     
-    btnArm.textContent = "Arming... (Wait)";
+    btnArm.textContent = "Arming...";
     btnArm.style.background = '#ff9800'; 
     btnArm.classList.remove('armed');
     statusStr.textContent = `STATUS: ARMING (Bias wird gelernt...)`;
@@ -697,9 +564,9 @@ function armTrigger() {
         if (state === 'ARMING') {
             state = 'ARMED';
             let gThreshold = (triggerThresholdRaw / 1000).toFixed(1);
-            btnArm.textContent = "Cancel (Armed)";
+            btnArm.textContent = "READY";
             btnArm.classList.add('armed');
-            btnArm.style.background = '';
+            btnArm.style.background = '#4CAF50';
             statusStr.textContent = `STATUS: ARMED (> ${gThreshold}g | Puffer: ${bufferSize})`;
         }
     }, 1000);
@@ -707,8 +574,12 @@ function armTrigger() {
 
 function resetTrigger() {
     state = 'IDLE';
-    btnArm.textContent = "Start Test (Arm Trigger)";
+    btnArm.textContent = "Start Test";
     btnArm.classList.remove('armed');
+    btnArm.style.background = '';
+    btnArm.style.boxShadow = '';
+    btnArm.style.color = '';
+    btnArm.style.transform = '';
     statusStr.textContent = "STATUS: IDLE";
 }
 
@@ -729,9 +600,6 @@ window.feedImpactTestData = function(ax, ay, az, timeUs) {
     }
 
     if (state === 'ARMED') {
-        // Bias bleibt jetzt während dem Armed und Triggering komplett EINGEFROREN, 
-        // um das Signal des Hammerschlags nicht versehentlich wegzufiltern!
-        
         let dx = ax - base_x;
         let dy = ay - base_y;
         let dz = az - base_z;
@@ -742,7 +610,10 @@ window.feedImpactTestData = function(ax, ay, az, timeUs) {
         if (dynamicChange > triggerThresholdRaw) {
             state = 'TRIGGERED';
             statusStr.textContent = "STATUS: TRIGGERED (Recording...)";
-            btnArm.style.background = '#4caf50';
+            btnArm.style.background = '#ff4a4a';
+            btnArm.style.boxShadow = '0 0 15px rgba(255, 74, 74, 0.6)';
+            btnArm.style.color = '#fff';
+            btnArm.style.transform = 'scale(1.05)';
             btnArm.textContent = "REC!";
             
             // Kopiere Pre-Trigger-Puffer in den Capture-Buffer
@@ -762,6 +633,19 @@ window.feedImpactTestData = function(ax, ay, az, timeUs) {
             captureTime[captureIndex] = timeUs || 0;
             captureIndex++;
         } else {
+            // Rolling High-Pass um DC-Drift (Gleichanteil) durch minimale Sensor-Bewegung zu verhindern!
+            // Nur aktualisieren, wenn keine große Dynamik anliegt, um den Beginn des Hammerschlags nicht zu dämpfen.
+            if (dynamicChange < triggerThresholdRaw * 0.2) {
+                base_x = (0.005 * ax) + (0.995 * base_x);
+                base_y = (0.005 * ay) + (0.995 * base_y);
+                base_z = (0.005 * az) + (0.995 * base_z);
+                
+                // Recalculate dx/dy/dz for the preBuffer to ensure perfectly centered zero-line
+                dx = ax - base_x;
+                dy = ay - base_y;
+                dz = az - base_z;
+            }
+
             // Schreibe fortlaufend in den Ringpuffer
             preX[preBufferIndex] = dx;
             preY[preBufferIndex] = dy;
@@ -783,10 +667,62 @@ window.feedImpactTestData = function(ax, ay, az, timeUs) {
             statusStr.textContent = "STATUS: ANALYZING";
             btnArm.classList.remove('armed');
             btnArm.style.background = '';
-            btnArm.textContent = "Start Test (Arm Trigger)";
+            btnArm.style.boxShadow = '';
+            btnArm.style.color = '';
+            btnArm.style.transform = '';
+            btnArm.textContent = "Analyzing...";
             processData();
         }
     }
+}
+
+// Neue Helper-Funktion für konsistente Peak-Erkennung mit Prominenz und Scoring
+function detectAndScorePeaks(mags, freqs, stdMags) {
+    let peaks = [];
+    for (let i = 2; i < mags.length - 2; i++) { 
+        if (mags[i] > mags[i-1] && mags[i] > mags[i+1] && mags[i] > mags[i-2] && mags[i] > mags[i+2]) {
+            if (mags[i] > 1.0) { 
+                let leftMin = mags[i];
+                for(let j=i-1; j>=0; j--) {
+                    if (mags[j] > mags[i]) break; 
+                    if (mags[j] < leftMin) leftMin = mags[j];
+                }
+                let rightMin = mags[i];
+                for(let j=i+1; j<mags.length; j++) {
+                    if (mags[j] > mags[i]) break;
+                    if (mags[j] < rightMin) rightMin = mags[j];
+                }
+                let prominence = mags[i] - Math.max(leftMin, rightMin);
+                
+                if (prominence > mags[i] * 0.15 && prominence > 0.5) {
+                    peaks.push({ freq: freqs[i], mag: mags[i], std: stdMags ? stdMags[i] : 0, prom: prominence, idx: i });
+                }
+            }
+        }
+    }
+    
+    peaks.forEach(p => { p.score = p.mag * (1.0 + (p.prom / p.mag) * 0.5); });
+    peaks.sort((a, b) => b.score - a.score);
+
+    if (peaks.length > 1) {
+        let topPeak = peaks[0];
+        let searchDepth = Math.min(peaks.length, 6);
+        for (let i = 1; i < searchDepth; i++) {
+            let candidate = peaks[i];
+            if (candidate.freq < topPeak.freq - 2.0) { 
+                let ratio = topPeak.freq / candidate.freq;
+                let k = Math.round(ratio);
+                if (Math.abs(ratio - k) < 0.15 && k >= 2 && k <= 4) {
+                    if (candidate.mag > (topPeak.mag * 0.30)) {
+                        peaks[0] = candidate;
+                        peaks[i] = topPeak;
+                        break; 
+                    }
+                }
+            }
+        }
+    }
+    return peaks;
 }
 
 window.recalculateImpactAverages = function(targetKey) {
@@ -853,43 +789,8 @@ window.recalculateImpactAverages = function(targetKey) {
     targetArea.magsX = avgMagsX;
     targetArea.magsY = avgMagsY;
     targetArea.magsZ = avgMagsZ;
-    let avgMags = avgMagsTotal;
     
-    let peaks = [];
-    for (let i = 2; i < avgMags.length - 2; i++) { 
-        if (avgMags[i] > avgMags[i-1] && avgMags[i] > avgMags[i+1] && avgMags[i] > avgMags[i-2] && avgMags[i] > avgMags[i+2]) {
-            if (avgMags[i] > 1.0) { 
-                peaks.push({ freq: freqs[i], mag: avgMags[i], std: stdMags[i] });
-            }
-        }
-    }
-    
-    peaks.sort((a, b) => b.mag - a.mag);
-    
-    // --> GRUNDSCHWINGUNGS-KORREKTUR (HARMONIC DOWN-SHIFT) <--
-    // Falls die lauteste Schwingung eine Harmonische ist (z.B. 60Hz), priorisieren 
-    // wir die tiefere Grundschwingung (z.B. 30Hz), da diese physisch deutlich gefährlicher ist.
-    if (peaks.length > 1) {
-        let maxPeak = peaks[0];
-        let searchDepth = Math.min(peaks.length, 5); // Check top 5 peaks
-        
-        for (let i = 1; i < searchDepth; i++) {
-            let candidate = peaks[i];
-            if (candidate.freq < maxPeak.freq - 2.0) { 
-                let ratio = maxPeak.freq / candidate.freq;
-                let isIntegerMultiple = Math.abs(ratio - Math.round(ratio)) < 0.15;
-                
-                if (isIntegerMultiple && Math.round(ratio) >= 2 && Math.round(ratio) <= 3) {
-                    if (candidate.mag > (maxPeak.mag * 0.40)) {
-                        peaks[0] = candidate;
-                        peaks[i] = maxPeak;
-                        break; 
-                    }
-                }
-            }
-        }
-    }
-    
+    let peaks = detectAndScorePeaks(avgMagsTotal, freqs, stdMags);
     let currentTopPeaks = peaks.slice(0, 3);
     
     if (currentTopPeaks.length === 0) {
@@ -1013,18 +914,40 @@ function processData() {
             displayResults();
             
             if (autoRestartCb && autoRestartCb.checked) {
-                setTimeout(() => { if (state === 'IDLE' || state === 'ANALYZING' || state === 'DONE') armTrigger(); }, 2000);
+                setTimeout(() => { if (state === 'IDLE' || state === 'ANALYZING' || state === 'DONE') armTrigger(); }, 300);
             }
         }
     };
 
-    // Startimpuls aus FFT ausschließen, um das Ergebnis auf die reine Abklingkurve zu fokussieren.
+    // Startimpuls weich ausblenden anstatt hart abzuschneiden (verhindert Artefakte)
     let cutoffIdx = maxIdx + Math.floor(srate * 0.002); // ca. 2ms nach dem Peak
     if (cutoffIdx >= bufferSize) cutoffIdx = bufferSize - 1;
-    for(let i = 0; i <= cutoffIdx; i++) {
-        cleanX[i] = 0;
-        cleanY[i] = 0;
-        cleanZ[i] = 0;
+    let fadeSamples = Math.floor(srate * 0.005); // 5ms Fade-In
+
+    for(let i = 0; i < cutoffIdx; i++) {
+        cleanX[i] = 0; cleanY[i] = 0; cleanZ[i] = 0;
+    }
+    for(let i = 0; i < fadeSamples; i++) {
+        let idx = cutoffIdx + i;
+        if (idx < bufferSize) {
+            let fade = 0.5 * (1 - Math.cos(Math.PI * (i / fadeSamples))); // Hann Fade-In
+            cleanX[idx] *= fade;
+            cleanY[idx] *= fade;
+            cleanZ[idx] *= fade;
+        }
+    }
+
+    // Sanfter Fade-Out (Tukey-ähnlich) am Ende des Buffers um FFT-Leakage bei nicht abgeklungenen Signalen zu verhindern
+    let endFadeSamples = Math.floor(bufferSize * 0.25); // Fade out last 25%
+    let startFadeOut = bufferSize - endFadeSamples;
+    for (let i = 0; i < endFadeSamples; i++) {
+        let idx = startFadeOut + i;
+        if (idx < bufferSize) {
+            let fade = 0.5 * (1 + Math.cos(Math.PI * (i / endFadeSamples))); // Hann Fade-Out
+            cleanX[idx] *= fade;
+            cleanY[idx] *= fade;
+            cleanZ[idx] *= fade;
+        }
     }
 
     worker.postMessage({ buffer: cleanX.buffer, sampleRate: srate, windowType: 'RECTANGULAR', dcCutoff: true, fftDBoutput: false, axis: 'X' }, [cleanX.buffer]);
@@ -1033,8 +956,13 @@ function processData() {
 }
 
 function displayResults() {
-    state = 'DONE';
-    statusStr.textContent = "STATUS: DONE";
+    if (state === 'ANALYZING' || state === 'DONE' || state === 'IDLE') {
+        state = 'DONE';
+        statusStr.textContent = "STATUS: DONE";
+        if (!(autoRestartCb && autoRestartCb.checked)) {
+            btnArm.textContent = "Start Test";
+        }
+    }
     if (resultsCard) resultsCard.style.display = 'block';
     
     let viewMode = 'combined';
@@ -1129,34 +1057,7 @@ function displayResults() {
             let sMagX = 0, sMagY = 0, sMagZ = 0;
             let peakIdx = -1;
             
-            let sPeaks = [];
-            for(let j=2; j<sample.mags.length-2; j++) {
-                if (sample.mags[j] > sample.mags[j-1] && sample.mags[j] > sample.mags[j+1] &&
-                    sample.mags[j] > sample.mags[j-2] && sample.mags[j] > sample.mags[j+2]) {
-                    if (sample.mags[j] > 1.0) {
-                        sPeaks.push({ freq: sample.freqs[j], mag: sample.mags[j], idx: j });
-                    }
-                }
-            }
-            
-            sPeaks.sort((a, b) => b.mag - a.mag);
-            
-            if (sPeaks.length > 1) {
-                let maxPk = sPeaks[0];
-                for (let k = 1; k < Math.min(sPeaks.length, 5); k++) {
-                    let cand = sPeaks[k];
-                    if (cand.freq < maxPk.freq - 2.0) {
-                        let ratio = maxPk.freq / cand.freq;
-                        if (Math.abs(ratio - Math.round(ratio)) < 0.15 && Math.round(ratio) >= 2 && Math.round(ratio) <= 3) {
-                            if (cand.mag > maxPk.mag * 0.40) {
-                                sPeaks[0] = cand;
-                                sPeaks[k] = maxPk;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            let sPeaks = detectAndScorePeaks(sample.mags, sample.freqs, null);
             
             if (sPeaks.length > 0) {
                 peakIdx = sPeaks[0].idx;
@@ -1178,114 +1079,24 @@ function displayResults() {
             }
             
             let isOutlier = false;
+            let outlierReason = '';
             // 10% Frequenztoleranz oder 2.0x STD-Abweichung (Magnitude)
-            if (sFreq > 0 && Math.abs(sFreq - avgPeak.freq) > (avgPeak.freq * 0.10)) isOutlier = true;
-            if (sMag > 0 && avgPeak.std > 0 && Math.abs(sMag - avgPeak.mag) > (2.0 * avgPeak.std)) isOutlier = true;
+            if (sFreq > 0 && Math.abs(sFreq - avgPeak.freq) > (avgPeak.freq * 0.10)) {
+                isOutlier = true;
+                outlierReason = `Frequenz weicht zu stark ab (>10% von ${avgPeak.freq.toFixed(1)}Hz)`;
+            }
+            if (sMag > 0 && avgPeak.std > 0 && Math.abs(sMag - avgPeak.mag) > (2.0 * avgPeak.std)) {
+                isOutlier = true;
+                outlierReason += (outlierReason ? ' | ' : '') + `Intensität weicht zu stark ab (>2σ von ${avgPeak.mag.toFixed(1)}g)`;
+            }
             
             let decayMs = sample.decay || 0;
             let dRatio = (sFreq > 0 && decayMs > 0) ? (47679 / (sFreq * decayMs)) : 0;
             
-            hitOutliers.push({sFreq, sMag, sMagX, sMagY, sMagZ, decayMs, dRatio, isOutlier});
+            hitOutliers.push({sFreq, sMag, sMagX, sMagY, sMagZ, decayMs, dRatio, isOutlier, outlierReason});
         }
         
-        let sectionHtml = `<div style="flex: 1; min-width: 300px; max-width: 100%; overflow-x: auto; background: #1a1a1a; padding: 10px; border-radius: 8px; border: 1px solid #333;">
-            <table class="impact-result-table" style="width: 100%; text-align:center; white-space: nowrap;">
-                <thead>
-                    <tr><th colspan="${visibleSamples.length + 2}" style="background:#222; color:${color}; font-size:1.1em; padding-top:15px; border-top:1px solid #444; border-bottom: 2px solid ${color};">${title} (Dominante Frequenz)</th></tr>
-                    <tr>
-                        <th style="background:#333; text-align:left; position: sticky; left: 0; z-index: 2;">Parameter</th>`;
-        
-        for (let i = 0; i < visibleSamples.length; i++) {
-            let bg = hitOutliers[i].isOutlier ? '#4a2a2a' : '#2a2a2a';
-            let warnIcon = hitOutliers[i].isOutlier ? ' <span title="Ausreißer-Warnung!">⚠️</span>' : '';
-            sectionHtml += `<th style="background:${bg}; padding: 8px 15px;">Hit ${i + 1}${warnIcon} <span onclick="window.removeImpactHit('${targetKey}', ${i})" style="color:#ff4a4a; cursor:pointer; font-size:1.2em; font-weight:bold; margin-left:8px;" title="Diesen Schlag löschen">✖</span></th>`;
-        }
-        
-        sectionHtml += `<th style="background:#444; border-left: 2px solid #555; color:#fff; position: sticky; right: 0; z-index: 2; padding: 0 15px;">Mittelwert</th>
-                    </tr>
-                </thead>
-                <tbody>`;
-                
-        // Zeile 1: Frequenz
-        sectionHtml += `<tr><td style="font-weight:bold; color:#ccc; text-align:left; position: sticky; left: 0; background: #1a1a1a; z-index: 1;">Resonanz (Hz) <span onclick="document.getElementById('resonanceHelpOverlay').style.display='flex'" style="cursor:pointer; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; background:#4da6ff; color:#000; font-size:11px; margin-left:6px;" title="Erklärung anzeigen">?</span></td>`;
-        for (let i = 0; i < visibleSamples.length; i++) {
-            let bg = hitOutliers[i].isOutlier ? 'background:#3a1a1a;' : '';
-            sectionHtml += `<td style="${bg}">${hitOutliers[i].sFreq.toFixed(1)}</td>`;
-        }
-        sectionHtml += `<td style="font-weight:bold; border-left: 2px solid #555; position: sticky; right: 0; background: #1a1a1a; z-index: 1;">${avgPeak.freq.toFixed(1)}</td></tr>`;
-        
-        // Zeile 2: Magnitude
-        sectionHtml += `<tr><td style="font-weight:bold; color:#ccc; text-align:left; position: sticky; left: 0; background: #1a1a1a; z-index: 1;">Magnitude (g) <span onclick="document.getElementById('magnitudeHelpOverlay').style.display='flex'" style="cursor:pointer; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; background:#ff9800; color:#000; font-size:11px; margin-left:6px;" title="Erklärung anzeigen">?</span></td>`;
-        for (let i = 0; i < visibleSamples.length; i++) {
-            let bg = hitOutliers[i].isOutlier ? 'background:#3a1a1a;' : '';
-            sectionHtml += `<td style="${bg}">${hitOutliers[i].sMag.toFixed(1)}</td>`;
-        }
-        let stdStr = (avgPeak.std !== undefined && avgPeak.std > 0) ? `<br><span style="font-size:0.8em; color:#888;">(±${avgPeak.std.toFixed(1)})</span>` : '';
-        sectionHtml += `<td style="font-weight:bold; border-left: 2px solid #555; position: sticky; right: 0; background: #1a1a1a; z-index: 1;">${avgPeak.mag.toFixed(1)}${stdStr}</td></tr>`;
-        
-        let avgBin = targetArea.freqs.length > 1 ? Math.round(avgPeak.freq / (targetArea.freqs[1] - targetArea.freqs[0])) : 0;
-        let avgMaxX = targetArea.magsX ? targetArea.magsX[avgBin] : 0;
-        let avgMaxY = targetArea.magsY ? targetArea.magsY[avgBin] : 0;
-        let avgMaxZ = targetArea.magsZ ? targetArea.magsZ[avgBin] : 0;
-        
-        let axesOpts = [
-            { id: 'sMagX', name: 'Magnitude X', color: '#ff4a4a', d: avgMaxX },
-            { id: 'sMagY', name: 'Magnitude Y', color: '#4caf50', d: avgMaxY },
-            { id: 'sMagZ', name: 'Magnitude Z', color: '#4da6ff', d: avgMaxZ }
-        ];
-        
-        for (let ax of axesOpts) {
-            sectionHtml += `<tr><td style="font-weight:normal; color:${ax.color}; font-size:0.9em; padding-left:20px; text-align:left; position: sticky; left: 0; background: #1a1a1a; z-index: 1;">↳ ${ax.name}</td>`;
-            for (let i = 0; i < visibleSamples.length; i++) {
-                let bg = hitOutliers[i].isOutlier ? 'background:#3a1a1a;' : '';
-                let val = hitOutliers[i][ax.id] || 0;
-                sectionHtml += `<td style="${bg}; color:${ax.color}; font-size:0.9em;">${val.toFixed(1)}</td>`;
-            }
-            let avgVal = ax.d || 0;
-            sectionHtml += `<td style="font-weight:bold; color:${ax.color}; font-size:0.9em; border-left: 2px solid #555; position: sticky; right: 0; background: #1a1a1a; z-index: 1;">${avgVal.toFixed(1)}</td></tr>`;
-        }
-        
-        // Zeile 3: Dämpfung (Lehr'sches Dämpfungsmaß D)
-        sectionHtml += `<tr><td style="font-weight:bold; color:#ccc; text-align:left; position: sticky; left: 0; background: #1a1a1a; z-index: 1;">Dämpfung D (%) <span onclick="document.getElementById('dampingHelpOverlay').style.display='flex'" style="cursor:pointer; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; background:#4da6ff; color:#000; font-size:11px; margin-left:6px;" title="Erklärung anzeigen">?</span></td>`;
-        for (let i = 0; i < visibleSamples.length; i++) {
-            let bg = hitOutliers[i].isOutlier ? 'background:#3a1a1a;' : '';
-            let dRatio = hitOutliers[i].dRatio;
-            sectionHtml += `<td style="${bg}">${dRatio > 0 ? dRatio.toFixed(2) : '--'}</td>`;
-        }
-        
-        let avgD = (avgPeak.freq > 0 && avgDecay > 0) ? (47679 / (avgPeak.freq * avgDecay)) : 0;
-        let decayText = "--";
-        let dColor = "#aaa";
-        if (avgD > 0) {
-            decayText = (avgD >= 4.0) ? "HERVORRAGEND" : (avgD >= 1.5) ? "GUT" : (avgD >= 0.5) ? "KRITISCH" : "GEFÄHRLICH";
-            dColor = (avgD >= 4.0) ? "#4caf50" : (avgD >= 1.5) ? "#8bc34a" : (avgD >= 0.5) ? "#ff9800" : "#ff4a4a";
-        }
-        
-        sectionHtml += `<td style="font-weight:bold; border-left: 2px solid #555; color:${dColor}; position: sticky; right: 0; background: #1a1a1a; z-index: 1;">${avgD > 0 ? avgD.toFixed(2) : '--'} <div style="font-size:0.7em;">${decayText}</div></td></tr>`;
-        
-        // Harmonics
-        for(let i=0; i<4; i++) {
-            let k = harmonische[i];
-            let labelParts = mode === 'drehen' ? `Drehzahl (U/min)` : `Spindel (U/min)`;
-            
-            sectionHtml += `<tr><td style="font-weight:normal; color:#bbb; text-align:left; position: sticky; left: 0; background: #1a1a1a; z-index: 1;">${kNames[i]} ${labelParts}</td>`;
-            for (let s = 0; s < visibleSamples.length; s++) {
-                let bg = hitOutliers[s].isOutlier ? 'background:#3a1a1a;' : '';
-                let rpm = (hitOutliers[s].sFreq * k * 60) / flutes;
-                sectionHtml += `<td style="${bg}; color:#ccc;">${hitOutliers[s].sFreq > 0 ? Math.round(rpm) : '--'}</td>`;
-            }
-            let rpmAvg = (avgPeak.freq * k * 60) / flutes;
-            sectionHtml += `<td style="font-weight:bold; border-left: 2px solid #555; position: sticky; right: 0; background: #1a1a1a; z-index: 1; color:#fff;">${Math.round(rpmAvg)}</td></tr>`;
-        }
-
-        // SSV Loader
-        let clkStr = `if(window.loadSSVParam) window.loadSSVParam('${avgPeak.freq.toFixed(1)}', '', ${avgDecay || 0})`;
-        if (title.indexOf('Werkzeug') !== -1) clkStr = `if(window.loadSSVParam) window.loadSSVParam('', '${avgPeak.freq.toFixed(1)}', ${avgDecay || 0})`;
-
-        sectionHtml += `<tr class="selectable-peak-row" onclick="${clkStr}" style="cursor:pointer; transition:background 0.2s;"><td colspan="${visibleSamples.length + 2}" style="background: rgba(255,255,255,0.05); text-align:center; padding: 10px; color:${color}; font-weight:bold; position: sticky; left: 0; z-index: 1;">➔ Werte in SSV Rechner laden</td></tr>`;
-        
-        sectionHtml += `</tbody></table></div>`;
-        return sectionHtml;
+        return buildImpactTableSection(title, targetArea, color, targetKey, mode, flutes, hitOutliers);
     }
 
     if (viewMode === 'combined' || viewMode === 'workpiece') {
@@ -1444,25 +1255,45 @@ if (document.readyState === 'loading') {
 window.toggleImpactChart = function(containerId) {
     const container = document.getElementById(containerId);
     const chevron = document.getElementById('chevron_' + containerId);
+    const chevronLeft = document.getElementById('chevronLeft_' + containerId);
+    let header = container.previousElementSibling;
+    if (containerId === 'rpmChartContainer') {
+        header = container.parentElement.querySelector('.impact-section-header');
+    }
     const btnExt = document.getElementById('btnExt_' + containerId);
     if (!container) return;
     
     let isCollapsed = container.dataset.collapsed === "true";
+    let baseHeight = parseInt(container.dataset.baseHeight || (containerId === 'impactChartContainer' ? 350 : 250));
     
     if (isCollapsed) {
-        container.style.height = "250px";
+        container.style.display = "block";
         container.dataset.collapsed = "false";
-        container.dataset.extended = "false";
         if (chevron) chevron.innerText = "▲"; // Points up to collapse
+        if (chevronLeft) chevronLeft.style.transform = "rotate(0deg)";
+        if (header) {
+            header.style.backgroundColor = "transparent";
+            header.style.border = "none";
+        }
         if (btnExt) {
             btnExt.style.display = "inline-block";
-            btnExt.innerText = "⛶ Extend";
+            btnExt.innerText = container.dataset.extended === "true" ? "− Normal" : "⛶ Extend";
         }
-        triggerResize(containerId, 250);
+        let targetHeight = container.dataset.extended === "true" ? 500 : baseHeight;
+        container.style.height = targetHeight + "px";
+        triggerResize(containerId, targetHeight);
     } else {
-        container.style.height = "0px";
+        if (!container.dataset.baseHeight && container.clientHeight > 0) {
+            container.dataset.baseHeight = container.clientHeight;
+        }
+        container.style.display = "none";
         container.dataset.collapsed = "true";
         if (chevron) chevron.innerText = "▼"; // Points down to expand
+        if (chevronLeft) chevronLeft.style.transform = "rotate(-90deg)";
+        if (header) {
+            header.style.backgroundColor = "rgba(255,214,0,0.1)";
+            header.style.border = "1px solid rgba(255,214,0,0.3)";
+        }
         if (btnExt) btnExt.style.display = "none";
     }
 };
@@ -1473,13 +1304,17 @@ window.extendImpactChart = function(containerId) {
     if (!container) return;
     
     let isExtended = container.dataset.extended === "true";
+    let baseHeight = parseInt(container.dataset.baseHeight || (containerId === 'impactChartContainer' ? 350 : 250));
     
     if (isExtended) {
-        container.style.height = "250px";
+        container.style.height = baseHeight + "px";
         container.dataset.extended = "false";
         if (btnExt) btnExt.innerText = "⛶ Extend";
-        triggerResize(containerId, 250);
+        triggerResize(containerId, baseHeight);
     } else {
+        if (!container.dataset.baseHeight && container.clientHeight > 0) {
+            container.dataset.baseHeight = container.clientHeight;
+        }
         container.style.height = "500px";
         container.dataset.extended = "true";
         if (btnExt) btnExt.innerText = "− Normal";
@@ -1506,7 +1341,7 @@ function triggerResize(containerId, height) {
 
 function rebuildTimeChart(srate = 1666) {
     const container = document.getElementById('impactTimeChartContainer');
-    if (!container || container.clientWidth === 0) return;
+    if (!container) return;
 
     if (timeChartInstance) {
         timeChartInstance.destroy();
@@ -1568,7 +1403,7 @@ function rebuildTimeChart(srate = 1666) {
     }
 
     const timeOpts = {
-        width: container.clientWidth,
+        width: container.clientWidth || container.parentElement.clientWidth || 800,
         height: container.clientHeight || 250,
         axes: [
             { label: "t (ms)", stroke: "#fff", grid: { stroke: "#333" } },
@@ -1577,7 +1412,17 @@ function rebuildTimeChart(srate = 1666) {
         series: seriesConfig,
         scales: { "x": { time: false }, "y": { auto: true } },
         cursor: { drag: { x: true, y: true, setScale: true } },
-        plugins: [createCursorTooltipPlugin("ms"), wheelZoomPlugin()]
+        plugins: [createCursorTooltipPlugin("ms"), wheelZoomPlugin()],
+        hooks: {
+            ready: [
+                (u) => {
+                    u.root.addEventListener('dblclick', () => {
+                        u.setScale('x', { min: u.data[0][0], max: u.data[0][u.data[0].length - 1] });
+                        u.setScale('y', { auto: true });
+                    });
+                }
+            ]
+        }
     };
 
     timeChartInstance = new uPlot(timeOpts, chartData, container);
