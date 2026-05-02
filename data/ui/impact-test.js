@@ -215,8 +215,8 @@ window.rebuildFftChart = function() {
     let toolSamples = (viewMode === 'combined' || viewMode === 'tool') && savedProfiles && savedProfiles.tool ? savedProfiles.tool.samples : [];
 
     if (wpSamples.length === 0 && toolSamples.length === 0) {
-        seriesConfig.push({ label: "Werkstück Total", stroke: "#ffd600", width: 2 });
-        seriesConfig.push({ label: "Werkzeug Total", stroke: "#4da6ff", width: 2 });
+        seriesConfig.push({ label: "Werkstück Total", stroke: "#ffd600", width: 2, points: { show: false } });
+        seriesConfig.push({ label: "Werkzeug Total", stroke: "#4da6ff", width: 2, points: { show: false } });
         chartData.push(new Float32Array(xFreqs.length));
         chartData.push(new Float32Array(xFreqs.length));
     } else {
@@ -225,7 +225,7 @@ window.rebuildFftChart = function() {
             let op = 1.0 - (wpSamples.length - 1 - i) * 0.15;
             if (op < 0.2) op = 0.2;
             let m = wpSamples[i].mags || new Float32Array(xFreqs.length);
-            seriesConfig.push({ label: `WP Hit #${i+1}`, stroke: `rgba(255, 214, 0, ${op * 0.4})`, width: 1 });
+            seriesConfig.push({ label: `WP Hit #${i+1}`, stroke: `rgba(255, 214, 0, ${op * 0.4})`, width: 1, points: { show: false } });
             chartData.push(m);
         }
 
@@ -233,7 +233,7 @@ window.rebuildFftChart = function() {
             let op = 1.0 - (toolSamples.length - 1 - i) * 0.15;
             if (op < 0.2) op = 0.2;
             let m = toolSamples[i].mags || new Float32Array(xFreqs.length);
-            seriesConfig.push({ label: `Tool Hit #${i+1}`, stroke: `rgba(77, 166, 255, ${op * 0.4})`, width: 1 });
+            seriesConfig.push({ label: `Tool Hit #${i+1}`, stroke: `rgba(77, 166, 255, ${op * 0.4})`, width: 1, points: { show: false } });
             chartData.push(m);
         }
 
@@ -246,20 +246,20 @@ window.rebuildFftChart = function() {
              if (!p.freqs || p.freqs.length === 0) continue;
              
              if (showX && p.magsX) {
-                 seriesConfig.push({ label: `${c.label} AVG (X)`, stroke: c.colorX, width: 2.5, dash: c.dash });
+                 seriesConfig.push({ label: `${c.label} AVG (X)`, stroke: c.colorX, width: 2.5, dash: c.dash, points: { show: false } });
                  chartData.push(p.magsX);
              }
              if (showY && p.magsY) {
-                 seriesConfig.push({ label: `${c.label} AVG (Y)`, stroke: c.colorY, width: 2.5, dash: c.dash });
+                 seriesConfig.push({ label: `${c.label} AVG (Y)`, stroke: c.colorY, width: 2.5, dash: c.dash, points: { show: false } });
                  chartData.push(p.magsY);
              }
              if (showZ && p.magsZ) {
-                 seriesConfig.push({ label: `${c.label} AVG (Z)`, stroke: c.colorZ, width: 2.5, dash: c.dash });
+                 seriesConfig.push({ label: `${c.label} AVG (Z)`, stroke: c.colorZ, width: 2.5, dash: c.dash, points: { show: false } });
                  chartData.push(p.magsZ);
              }
              // Wenn explizit nur Total gewünscht ist (alte Daten) oder wenn keine der Checkboxen aktiv ist
              if ((!p.magsX && p.mags) || (!showX && !showY && !showZ)) {
-                 seriesConfig.push({ label: `${c.label} AVG (Total)`, stroke: c.colorTotal, width: 2.5, dash: c.dash });
+                 seriesConfig.push({ label: `${c.label} AVG (Total)`, stroke: c.colorTotal, width: 2.5, dash: c.dash, points: { show: false } });
                  chartData.push(p.mags || new Float32Array(xFreqs.length));
              }
         }
@@ -324,12 +324,14 @@ function initChart() {
                     stroke: "#ff4a4a",
                     fill: "rgba(255, 74, 74, 0.4)",
                     width: 2,
+                    points: { show: false }
                 },
                 {
                     label: "Optimaler Bereich",
                     stroke: "#4caf50",
                     fill: "rgba(76, 175, 80, 0.4)",
                     width: 2,
+                    points: { show: false }
                 }
             ],
             scales: {
@@ -1369,19 +1371,19 @@ function rebuildTimeChart(srate = 1666) {
         const width = 1.0;
 
         for (let i = 0; i < samples.length; i++) {
-            seriesConfig.push({ label: `${prefix} #${i+1} (X)`, stroke: `rgba(255, 74, 74, ${op(i)})`, width: width });
+            seriesConfig.push({ label: `${prefix} #${i+1} (X)`, stroke: `rgba(255, 74, 74, ${op(i)})`, width: width, points: { show: false } });
             chartData.push(samples[i].rawX || new Float32Array(bufferSize));
         }
         for (let i = 0; i < samples.length; i++) {
-            seriesConfig.push({ label: `${prefix} #${i+1} (Y)`, stroke: `rgba(76, 175, 80, ${op(i)})`, width: width, dash: [5, 5] });
+            seriesConfig.push({ label: `${prefix} #${i+1} (Y)`, stroke: `rgba(76, 175, 80, ${op(i)})`, width: width, dash: [5, 5], points: { show: false } });
             chartData.push(samples[i].rawY || new Float32Array(bufferSize));
         }
         for (let i = 0; i < samples.length; i++) {
-            seriesConfig.push({ label: `${prefix} #${i+1} (Z)`, stroke: `rgba(77, 166, 255, ${op(i)})`, width: width, dash: [10, 5] });
+            seriesConfig.push({ label: `${prefix} #${i+1} (Z)`, stroke: `rgba(77, 166, 255, ${op(i)})`, width: width, dash: [10, 5], points: { show: false } });
             chartData.push(samples[i].rawZ || new Float32Array(bufferSize));
         }
         for (let i = 0; i < samples.length; i++) {
-            seriesConfig.push({ label: `${prefix} #${i+1} (Total)`, stroke: `rgba(${baseColorTotal}, ${op(i) * 0.3})`, width: width, dash: [2, 4] });
+            seriesConfig.push({ label: `${prefix} #${i+1} (Total)`, stroke: `rgba(${baseColorTotal}, ${op(i) * 0.3})`, width: width, dash: [2, 4], points: { show: false } });
             
             // Berechne Total-Magnitude falls nicht vorhanden
             if (!samples[i].magsTotalTime && samples[i].rawX) {
@@ -1395,7 +1397,7 @@ function rebuildTimeChart(srate = 1666) {
     }
 
     if (wpSamples.length === 0 && toolSamples.length === 0) {
-        seriesConfig.push({ label: "Impuls (g)", stroke: "#ff9800", width: 2 });
+        seriesConfig.push({ label: "Impuls (g)", stroke: "#ff9800", width: 2, points: { show: false } });
         chartData.push(new Float32Array(bufferSize));
     } else {
         addHitLines(wpSamples, "WP", "255, 214, 0");

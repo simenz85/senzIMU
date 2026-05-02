@@ -17,7 +17,7 @@ import { applyStaticReplayData as applyStaticReplayDataHelper, updateReplayDashb
 import { buildSettingsColumnForNode, setupButtons } from './ui/ui-setup.js?v=21';
 import { MotionViewport } from './ui/motion-viewport.js?v=21';
 import { initRelativeAnalysisUI, updateRelativeAnalysisNodeSelector, initRelativeDiffRmsChart, initRelativeTranslationChart, startRelativeDiffRmsRuntime, initRelativeKinematicViewport, initRelativeLissajousChart } from './ui/relative-analysis.js';
-import { createRecordingRow, downloadRecordedCsv as downloadRecordedCsvPure, formatMicrosecondsToHMS, formatRuntimeMicroseconds, toRegularArray } from './utils/format-utils.js';
+import { createRecordingRow, downloadRecordedCsv as downloadRecordedCsvPure, formatRuntimeMicroseconds, toRegularArray } from './utils/format-utils.js';
 import {
     buildCurrentAppSettingsState,
     buildCurrentCalibrationCookieState,
@@ -354,7 +354,6 @@ function setupFilterWorker() {
 
     function setChartVisibility(key, visible) {
         if (key === 'acc') {
-            accChartVisible = visible;
             const liveChartPanel = document.getElementById('livechart2');
             if (liveChartPanel) {
                 liveChartPanel.style.display = visible ? '' : 'none';
@@ -362,17 +361,18 @@ function setupFilterWorker() {
             if (chart) {
                 chart.root.style.display = visible ? '' : 'none';
             }
-            return;
+        } else {
+            const gyroChartPanel = document.getElementById('gyrochart');
+            if (gyroChartPanel) {
+                gyroChartPanel.style.display = visible ? '' : 'none';
+            }
+            if (gyroChart) {
+                gyroChart.root.style.display = visible ? '' : 'none';
+            }
         }
-
-        gyroChartVisible = visible;
-        const gyroChartPanel = document.getElementById('gyrochart');
-        if (gyroChartPanel) {
-            gyroChartPanel.style.display = visible ? '' : 'none';
-        }
-        if (gyroChart) {
-            gyroChart.root.style.display = visible ? '' : 'none';
-        }
+        
+        // Trigger the built-in layout recalculation which also handles inline styles
+        updateLiveChartPanelHeights();
     }
 
     function applyFilterPanelEnabledState(panel, enabled) {
@@ -3562,7 +3562,7 @@ window.setRmsSensorCount = function(n) {
     // Abs-Formatter: CH2+ Werte sind negiert (Spiegel), Legende zeigt trotzdem positive Werte
     const absVal = (u, v) => v != null ? Math.abs(v).toFixed(1) : '--';
 
-    let newSeries = [{ label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 2) }];
+    let newSeries = [{ label: "Zeit", value: (u, v) => formatRuntimeMicroseconds(v, 2) }];
     
     for (let i = 0; i < n; i++) {
         const c = baseColors[i % 4];
@@ -3587,7 +3587,7 @@ window.setRmsSensorCount = function(n) {
         yRange: symRange,
         series: newSeries,
         legendHostId: "rmsChartLegendHost",
-        formatMicrosecondsToHMS,
+        formatRuntimeMicroseconds,
     });
 
     // Überschreibe das Y-Achsen Label Formatting
@@ -3645,7 +3645,7 @@ window.setGyroRmsSensorCount = function(n) {
     const absVal = (u, v) => v != null ? Math.abs(v).toFixed(1) : '--';
     const absAxis = (u, vals) => vals.map(v => Math.abs(v).toFixed(0));
 
-    let newSeries = [{ label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 2) }];
+    let newSeries = [{ label: "Zeit", value: (u, v) => formatRuntimeMicroseconds(v, 2) }];
     
     for (let i = 0; i < n; i++) {
         const c = baseColors[i % 4];
@@ -3667,7 +3667,7 @@ window.setGyroRmsSensorCount = function(n) {
         yRange: symRange,
         series: newSeries,
         legendHostId: "gyroRmsChartLegendHost",
-        formatMicrosecondsToHMS,
+        formatRuntimeMicroseconds,
     });
 
     if (newOpts.axes && newOpts.axes[1]) {
@@ -3912,17 +3912,9 @@ class SensorNode {
                     window.updateTelemetryNodeWsState(this.channelIndex, type === "error" ? "fehler" : "getrennt");
                 }
                 
-                // AUTO-RECONNECT NACH NVS-WLAN-ABSTURZ
-                // Wenn der NVS geschrieben wird, friert das WLAN auf dem ESP32 temporär ein. LWIP schließt den TCP Socket.
-                // Der Browser muss sich nach dem Freiwerden des Speichers stumpf wiederverbinden, damit Channel 2 überlebt!
-                if (!this.reconnectTimeout) {
-                    console.log(`[SensorNode CH${this.channelIndex+1}] Plane automatischen Reconnect in 2000ms...`);
-                    this.reconnectTimeout = setTimeout(() => {
-                        this.reconnectTimeout = null;
-                        // Erneut verbinden
-                        this.wsWorker.postMessage({ type: "connect", wsServerUrl: url });
-                    }, 2000);
-                }
+                // AUTO-RECONNECT wird bereits stabil vom ws-worker.js selbst behandelt!
+                // Ein doppelter manueller Reconnect hier erzeugt redundante Websocket-Instanzen
+                // und blockiert den ESP32 (Teufelskreis).
             }
         };
 
@@ -4261,7 +4253,7 @@ function rebuildAccChartForSensorCount(sensorCount) {
     ];
 
     const series = [
-        { label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 5) }
+        { label: "Zeit", value: (u, v) => formatRuntimeMicroseconds(v, 5) }
     ];
 
     const scales = { x: {} };
@@ -4273,7 +4265,7 @@ function rebuildAccChartForSensorCount(sensorCount) {
             size: 44,
             label: "Zeit (s)",
             grid: { show: true },
-            values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
+            values: (u, v) => v.map(t => formatRuntimeMicroseconds(t, 0)),
             stroke: "white"
         }
     ];
@@ -4445,7 +4437,7 @@ function rebuildGyroChartForSensorCount(sensorCount) {
     ];
 
     const series = [
-        { label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 5) }
+        { label: "Zeit", value: (u, v) => formatRuntimeMicroseconds(v, 5) }
     ];
 
     const scales = { x: {} };
@@ -4457,7 +4449,7 @@ function rebuildGyroChartForSensorCount(sensorCount) {
             size: 44,
             label: "Zeit (s)",
             grid: { show: true },
-            values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
+            values: (u, v) => v.map(t => formatRuntimeMicroseconds(t, 0)),
             stroke: "white"
         }
     ];
@@ -4549,8 +4541,8 @@ window.insertIntoMultiChart = function(channelIndex, samples) {
     if (!window.multiChartData || window.multiChartData.length === 0) return;
     if (channelIndex >= window.activeSensors.length) return;
     
-    const baseIdx = channelIndex * 4 + 1;
-    if (baseIdx + 3 >= window.multiChartData.length) return;
+    const baseIdx = channelIndex * 3 + 1;
+    if (baseIdx + 2 >= window.multiChartData.length) return;
     
     const node = window.activeSensors[channelIndex];
     // --- Offset-Tracking für Sekundär-Kanäle (O(1) EMA, kein Array/Sort) ---
@@ -4608,13 +4600,17 @@ window.insertIntoMultiChart = function(channelIndex, samples) {
     const xArr = window.multiChartData[baseIdx];
     const yArr = window.multiChartData[baseIdx + 1];
     const zArr = window.multiChartData[baseIdx + 2];
-    const totalArr = window.multiChartData[baseIdx + 3];
     
     for (let i = 0; i < samples.length; i++) {
         const s = samples[i];
         const t = s.time + (Number.isFinite(node?.timeOffset) ? node.timeOffset : 0);
         
         let lastTime = timeArr.length > 0 ? timeArr[timeArr.length - 1] : -1;
+        
+        // Prevent massive O(N^2) UI freezing by discarding backlogged data
+        if (timeArr.length > 0 && t < timeArr[0]) {
+            continue;
+        }
         
         if (timeArr.length === 0 || t > lastTime) {
             timeArr.push(t);
@@ -4624,19 +4620,36 @@ window.insertIntoMultiChart = function(channelIndex, samples) {
             xArr[timeArr.length - 1] = s.x;
             yArr[timeArr.length - 1] = s.y;
             zArr[timeArr.length - 1] = s.z;
-            totalArr[timeArr.length - 1] = s.total || Math.hypot(s.x, s.y, s.z);
         } else {
-             let k = timeArr.length - 1;
-             while (k >= 0 && timeArr[k] > t + 5000) {
-                 k--;
+             let k = -1;
+             let low = 0;
+             let high = timeArr.length - 1;
+             let minDiff = Infinity;
+             let bestK = high;
+             
+             while (low <= high) {
+                 let mid = (low + high) >> 1;
+                 let diff = Math.abs(timeArr[mid] - t);
+                 if (diff < minDiff) {
+                     minDiff = diff;
+                     bestK = mid;
+                 }
+                 if (timeArr[mid] === t) {
+                     break;
+                 } else if (timeArr[mid] < t) {
+                     low = mid + 1;
+                 } else {
+                     high = mid - 1;
+                 }
              }
-             if (k >= 0 && Math.abs(timeArr[k] - t) <= 5000) {
+             k = bestK;
+             
+             if (k >= 0 && minDiff <= 5000) {
                  xArr[k] = s.x;
                  yArr[k] = s.y;
                  zArr[k] = s.z;
-                 totalArr[k] = s.total || Math.hypot(s.x, s.y, s.z);
              } else {
-                 const insertPos = k + 1;
+                 const insertPos = (k >= 0 && timeArr[k] < t) ? k + 1 : Math.max(0, k);
                  timeArr.splice(insertPos, 0, t);
                  for (let c = 1; c < window.multiChartData.length; c++) {
                      window.multiChartData[c].splice(insertPos, 0, null);
@@ -4644,7 +4657,6 @@ window.insertIntoMultiChart = function(channelIndex, samples) {
                  xArr[insertPos] = s.x;
                  yArr[insertPos] = s.y;
                  zArr[insertPos] = s.z;
-                 totalArr[insertPos] = s.total || Math.hypot(s.x, s.y, s.z);
              }
         }
     }
@@ -4666,30 +4678,51 @@ window.insertIntoMultiGyroChart = function(channelIndex, samples) {
     if (baseIdx + 2 >= window.multiGyroChartData.length) return;
     
     const node = window.activeSensors[channelIndex];
+    // --- Offset-Tracking für Sekundär-Kanäle (O(1) EMA, kein Array/Sort) ---
     if (node) {
         if (channelIndex === 0) {
+            // Master: kein Offset nötig
             node.timeOffset = 0;
         } else if (samples.length > 0) {
+            // Primär: syncedEspTime aus espStats (aktuellste Firmware-Zeit, O(1))
+            // Fallback: Ring-Buffer-Lookup falls espStats noch nicht empfangen
+            const masterNode = window.activeSensors[0];
             let masterLatestTime = 0;
-            const masterBuffer = window.activeSensors[0]?.gyroBuffer;
-
-            if (masterBuffer?.length > 0) {
-                masterLatestTime = Number(masterBuffer.getLast()?.time || 0);
-            } else if (window.multiGyroChartData?.[0]?.length > 0) {
-                const times = window.multiGyroChartData[0];
-                masterLatestTime = Number(times[times.length - 1] || 0);
-            } else if (Number.isFinite(lastTimestamp) && lastTimestamp > 0) {
-                masterLatestTime = Number(lastTimestamp);
-            }
-
-            const secondaryLatestTime = Number(samples[samples.length - 1]?.time || 0);
-            if (masterLatestTime > 0 && secondaryLatestTime > 0) {
-                const diff = masterLatestTime - secondaryLatestTime;
-                if (!Number.isFinite(node.timeOffset) || node.timeOffset === 0 || Math.abs(node.timeOffset - diff) > 1000000) {
-                    node.timeOffset = diff;
+            if (masterNode?.syncedEspTime > 0 && node.syncedEspTime > 0) {
+                // Direkte ESP-Zeitdifferenz – stabilster Weg, unabhängig von Datenpaketen
+                masterLatestTime = masterNode.syncedEspTime;
+                const secondaryEspTime = node.syncedEspTime;
+                const currentDiff = masterLatestTime - secondaryEspTime;
+                const prevOffset = node.timeOffset;
+                if (!Number.isFinite(prevOffset) || prevOffset === 0) {
+                    node.timeOffset = currentDiff;
+                } else {
+                    const delta = currentDiff - prevOffset;
+                    // Sprung > 500ms → direkt setzen, sonst EMA α=0.05
+                    node.timeOffset = Math.abs(delta) > 500000
+                        ? currentDiff
+                        : prevOffset + delta * 0.05;
                 }
-            } else if (!Number.isFinite(node.timeOffset)) {
-                node.timeOffset = 0;
+            } else {
+                // Fallback: O(1) Ring-Buffer-Lookup
+                masterLatestTime = Number(
+                    (masterNode?.gyroBuffer ?? gyroBuffer)?.getLast?.()?.time ?? 0
+                );
+                const secondaryLatestTime = samples[samples.length - 1].time;
+                if (masterLatestTime > 0 && secondaryLatestTime > 0) {
+                    const currentDiff = masterLatestTime - secondaryLatestTime;
+                    const prevOffset = node.timeOffset;
+                    if (!Number.isFinite(prevOffset) || prevOffset === 0) {
+                        node.timeOffset = currentDiff;
+                    } else {
+                        const delta = currentDiff - prevOffset;
+                        node.timeOffset = Math.abs(delta) > 500000
+                            ? currentDiff
+                            : prevOffset + delta * 0.05;
+                    }
+                } else if (!Number.isFinite(node.timeOffset)) {
+                    node.timeOffset = 0;
+                }
             }
         } else if (!Number.isFinite(node.timeOffset)) {
             node.timeOffset = 0;
@@ -4707,6 +4740,11 @@ window.insertIntoMultiGyroChart = function(channelIndex, samples) {
         
         let lastTime = timeArr.length > 0 ? timeArr[timeArr.length - 1] : -1;
         
+        // Prevent massive O(N^2) UI freezing by discarding backlogged data
+        if (timeArr.length > 0 && t < timeArr[0]) {
+            continue;
+        }
+        
         if (timeArr.length === 0 || t > lastTime) {
             timeArr.push(t);
             for (let c = 1; c < window.multiGyroChartData.length; c++) {
@@ -4716,16 +4754,35 @@ window.insertIntoMultiGyroChart = function(channelIndex, samples) {
             yArr[timeArr.length - 1] = s.y;
             zArr[timeArr.length - 1] = s.z;
         } else {
-             let k = timeArr.length - 1;
-             while (k >= 0 && timeArr[k] > t + 5000) {
-                 k--;
+             let k = -1;
+             let low = 0;
+             let high = timeArr.length - 1;
+             let minDiff = Infinity;
+             let bestK = high;
+             
+             while (low <= high) {
+                 let mid = (low + high) >> 1;
+                 let diff = Math.abs(timeArr[mid] - t);
+                 if (diff < minDiff) {
+                     minDiff = diff;
+                     bestK = mid;
+                 }
+                 if (timeArr[mid] === t) {
+                     break;
+                 } else if (timeArr[mid] < t) {
+                     low = mid + 1;
+                 } else {
+                     high = mid - 1;
+                 }
              }
-             if (k >= 0 && Math.abs(timeArr[k] - t) <= 5000) {
+             k = bestK;
+             
+             if (k >= 0 && minDiff <= 5000) {
                  xArr[k] = s.x;
                  yArr[k] = s.y;
                  zArr[k] = s.z;
              } else {
-                 const insertPos = k + 1;
+                 const insertPos = (k >= 0 && timeArr[k] < t) ? k + 1 : Math.max(0, k);
                  timeArr.splice(insertPos, 0, t);
                  for (let c = 1; c < window.multiGyroChartData.length; c++) {
                      window.multiGyroChartData[c].splice(insertPos, 0, null);
@@ -4866,8 +4923,9 @@ window.initializeDashboardNodes = function(nodes) {
     rebuildAccChartForSensorCount(nodes.length);
     rebuildGyroChartForSensorCount(nodes.length);
     
-    // Initialisiere Data Array (Zeit + 4 * N für ACC, Zeit + 3 * N für GYRO)
-    window.multiChartData = Array(nodes.length * 4 + 1).fill().map(() => []);
+    // Initialisiere Data Array (Zeit + 3 * N für ACC, Zeit + 3 * N für GYRO)
+    // ACHTUNG: Die Länge muss EXAKT der series.length von uPlot entsprechen (nodes.length * 3 + 1)
+    window.multiChartData = Array(nodes.length * 3 + 1).fill().map(() => []);
     window.multiGyroChartData = Array(nodes.length * 3 + 1).fill().map(() => []);
     
     if (window.setFftSensorCount) {
@@ -4889,7 +4947,7 @@ window.initializeDashboardNodes = function(nodes) {
     }
 };
 
-async function discoverNodes() {
+window.discoverNodes = async function discoverNodes() {
     try {
         const protocol = window.location.protocol === "https:" ? "https:" : "http:";
         let apiHost = window.location.hostname;
@@ -4909,6 +4967,22 @@ async function discoverNodes() {
                 };
             }).filter(node => node.ip)
             : [];
+        
+        // Verhindere Race-Condition: Wenn sich die IP/MAC Liste nicht geändert hat,
+        // überspringen wir das Zerstören der bestehenden Worker und Graphen-Puffer!
+        if (window.activeSensors && window.activeSensors.length === nodes.length) {
+            let topologyChanged = false;
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i].ip !== window.activeSensors[i].ip || nodes[i].mac !== window.activeSensors[i].mac) {
+                    topologyChanged = true;
+                    break;
+                }
+            }
+            if (!topologyChanged) {
+                console.log("[Topology] Node-Liste identisch. Überspringe destruktiven Reset.");
+                return; // Keine Neuzuweisung nötig!
+            }
+        }
         
         window.initializeDashboardNodes(nodes);
 
@@ -4953,12 +5027,12 @@ function connectWebSocket() {
                 }
             }
             if (changed) {
-                console.log("Topology change detected, but auto-reset is intentionally disabled to prevent WebSocket closures.");
-                // discoverNodes(); // AUSKOMMENTIERT: Dies hat alle laufenden Workers grundlos terminiert!
+                console.log("[Topology] Change detected! Auto-reloading Node logic to initialize new channels...");
+                discoverNodes(); // Reaktiviert: Wir haben das "grundlose Zerstören" in discoverNodes mittlerweile gefixt.
             }
 
         } catch(e) {}
-    }, 5000); // 5 Sekunden-Intervall ist ausreichend für den Reset des ESP-IDF 5s-Timeouts
+    }, 1000); // 1-Sekunden Intervall für extrem schnelle Erkennung neuer Kanäle
     
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams(window.location.search);
@@ -5299,7 +5373,6 @@ window.updateDashboard = function updateDashboard() {
                 if (filteredWindow.times.length > 0) {
                     preserveAllYScales(chart, () => {
                         chart.setData(alignPlotDataToSeriesCount(chart, [filteredWindow.times, filteredWindow.xs, filteredWindow.ys, filteredWindow.zs, filteredWindow.totals]));
-                        window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: accLatestTimestamp } }));
                     });
                 }
             } else {
@@ -5314,7 +5387,6 @@ window.updateDashboard = function updateDashboard() {
                 if (chartUpdateData && chartUpdateData.length > 0) {
                     preserveAllYScales(chart, () => {
                         chart.setData(alignPlotDataToSeriesCount(chart, chartUpdateData));
-                        window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: accLatestTimestamp } }));
                     });
                 }
             }
@@ -5334,9 +5406,6 @@ window.updateDashboard = function updateDashboard() {
                 if (chartUpdateData && chartUpdateData.length > 0) {
                     preserveAllYScales(gyroChart, () => {
                         gyroChart.setData(alignPlotDataToSeriesCount(gyroChart, chartUpdateData));
-                        if (!accChartVisible && chartUpdateData[0] && chartUpdateData[0].length > 0) {
-                            window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: gyroLatestTimestamp } }));
-                        }
                     });
                 }
             } else {
@@ -5351,12 +5420,20 @@ window.updateDashboard = function updateDashboard() {
                 if (chartUpdateData && chartUpdateData.length > 0) {
                     preserveAllYScales(gyroChart, () => {
                         gyroChart.setData(alignPlotDataToSeriesCount(gyroChart, chartUpdateData));
-                        if (!accChartVisible && chartUpdateData[0] && chartUpdateData[0].length > 0) {
-                            window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: gyroLatestTimestamp } }));
-                        }
                     });
                 }
             }
+        }
+        
+        let latestTimestampToDispatch = 0;
+        if (accChartVisible && Number.isFinite(accLatestTimestamp)) {
+            latestTimestampToDispatch = accLatestTimestamp;
+        } else if (gyroChartVisible && Number.isFinite(gyroLatestTimestamp)) {
+            latestTimestampToDispatch = gyroLatestTimestamp;
+        }
+        
+        if (latestTimestampToDispatch > 0) {
+            window.dispatchEvent(new CustomEvent("liveDataUpdate", { detail: { latestTimestamp: latestTimestampToDispatch } }));
         }
     }
 
@@ -5936,14 +6013,14 @@ function initRMSChart() {
             return [-absMax, absMax];
         },
         series: [
-            {label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 2) },
+            {label: "Zeit", value: (u, v) => formatRuntimeMicroseconds(v, 2) },
             { label: "Acc X (mg)", stroke: "#FFD600" },
             { label: "Acc Y (mg)", stroke: "#ec3030ff" },
             { label: "Acc Z (mg)", stroke: "#7a96e2ff" },
             { label: "Acc Total (mg)", stroke: "#14c53bff", fill: "rgba(20,197,59,0.2)" },
         ],
         legendHostId: "rmsChartLegendHost",
-        formatMicrosecondsToHMS,
+        formatRuntimeMicroseconds,
     });
 
     rmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById("rmsChart"));
@@ -6129,14 +6206,14 @@ function initGyroRMSChart() {
         title: 'Gyro RMS',
         yRange: (s, min, max) => [0, Math.max(1.0, (max == null ? 1 : max * 1.1))],
         series: [
-            { label: 'Zeit', value: (u, v) => formatMicrosecondsToHMS(v, 2) },
+            { label: 'Zeit', value: (u, v) => formatRuntimeMicroseconds(v, 2) },
             { label: 'Gyro X (m°/s)', stroke: '#4dd0e1' },
             { label: 'Gyro Y (m°/s)', stroke: '#ffb74d' },
             { label: 'Gyro Z (m°/s)', stroke: '#81c784' },
             { label: 'Gyro Total (m°/s)', stroke: '#ce93d8', fill: 'rgba(206,147,216,0.18)' },
         ],
         legendHostId: 'gyroRmsChartLegendHost',
-        formatMicrosecondsToHMS,
+        formatRuntimeMicroseconds,
     });
 
     gyroRmsPlot = new uPlot(rmsopts, [[], [], [], [], []], document.getElementById('gyroRmsChart'));
@@ -7247,7 +7324,7 @@ const options = createLiveChartOptions({
     yRange: [-1100, 1100],
     yTickSuffix: 'mg',
     series: [
-        {label: "Zeit",value: (u, v) => formatMicrosecondsToHMS(v, 5) },
+        {label: "Zeit",value: (u, v) => formatRuntimeMicroseconds(v, 5) },
         { label: "Acc X (mg)", stroke: "#FFD600" },
         { label: "Acc Y (mg)", stroke: "#ec3030ff" },
         { label: "Acc Z (mg)", stroke: "#7a96e2ff" },
@@ -7255,7 +7332,7 @@ const options = createLiveChartOptions({
     ],
     legendHostId: "accChartLegendHost",
     cursorUnit: 'mg',
-    formatMicrosecondsToHMS,
+    formatRuntimeMicroseconds,
     createCursorPlugin: createCursorYPlugin,
 });
 
@@ -7270,14 +7347,14 @@ const gyroOptions = createLiveChartOptions({
     yRange: [-25000, 25000],
     yTickSuffix: 'm°/s',
     series: [
-        { label: "Zeit", value: (u, v) => formatMicrosecondsToHMS(v, 5) },
+        { label: "Zeit", value: (u, v) => formatRuntimeMicroseconds(v, 5) },
         { label: "Gyro X (m°/s)", stroke: "#4dd0e1" },
         { label: "Gyro Y (m°/s)", stroke: "#ffb74d" },
         { label: "Gyro Z (m°/s)", stroke: "#81c784" },
     ],
     legendHostId: "gyroChartLegendHost",
     cursorUnit: 'm°/s',
-    formatMicrosecondsToHMS,
+    formatRuntimeMicroseconds,
     createCursorPlugin: createCursorYPlugin,
 });
 

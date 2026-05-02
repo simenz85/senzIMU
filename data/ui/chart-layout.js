@@ -8,11 +8,11 @@ function getElementSizeById(id) {
 }
 
 export function getSize() {
-    return getElementSizeById('livechart2');
+    return getElementSizeById('accChartHost');
 }
 
 export function getGyroChartSize() {
-    return getElementSizeById('gyrochart');
+    return getElementSizeById('gyroChartHost');
 }
 
 export function getFftChartSize() {
@@ -71,14 +71,12 @@ function updateTwoPanelGridHeights({ gridId, panelIds, controlsSelector }) {
 
     let panelHeight;
     if (hasSideBySideLayout && isSingleVisible) {
-        const desiredSingleSideBySideHeight = Math.floor(viewportHeight * 0.70);
-        panelHeight = Math.max(420, Math.min(availableHeight, desiredSingleSideBySideHeight));
+        panelHeight = Math.max(420, availableHeight);
     } else if (hasSideBySideLayout) {
         const desiredSideBySideHeight = Math.floor(viewportHeight * 0.70);
         panelHeight = Math.max(380, Math.min(availableHeight, desiredSideBySideHeight));
     } else if (isSingleVisible) {
-        const desiredSingleStackedHeight = Math.floor(viewportHeight * 0.62);
-        panelHeight = Math.max(360, Math.min(availableHeight, desiredSingleStackedHeight));
+        panelHeight = Math.max(360, availableHeight);
     } else {
         const availablePerPanel = Math.floor((availableHeight - gap * (visiblePanels.length - 1)) / visiblePanels.length);
         panelHeight = Math.max(220, availablePerPanel);

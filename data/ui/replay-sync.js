@@ -188,7 +188,7 @@ function syncReplayFftPlot({ renderer, plot, absTimeUs, sampleRate, averageWindo
 
         if (updateTimestamp) {
             const timestampElement = document.getElementById('timestamp');
-            const clockText = renderer.clockStrings?.[bestIndex];
+            const clockText = renderer.timeStrings?.[bestIndex];
             if (timestampElement && clockText) {
                 timestampElement.textContent = clockText;
             }

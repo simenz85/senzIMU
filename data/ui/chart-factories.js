@@ -4,7 +4,7 @@ export function createLegendMount(legendHostId) {
     };
 }
 
-function createTimeAxis({ formatMicrosecondsToHMS, label = "Zeit", space = 100, size = 44, valuePrecision = 0 } = {}) {
+function createTimeAxis({ formatRuntimeMicroseconds, label = "Zeit", space = 100, size = 44, valuePrecision = 0 } = {}) {
     return {
         time: false,
         scale: "x",
@@ -12,7 +12,7 @@ function createTimeAxis({ formatMicrosecondsToHMS, label = "Zeit", space = 100, 
         size,
         label,
         grid: { show: true },
-        values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, valuePrecision)),
+        values: (u, v) => v.map(t => formatRuntimeMicroseconds(t, valuePrecision)),
         stroke: "white"
     };
 }
@@ -38,7 +38,7 @@ export function createLiveChartOptions({
     series,
     legendHostId,
     cursorUnit,
-    formatMicrosecondsToHMS,
+    formatRuntimeMicroseconds,
     createCursorPlugin,
 }) {
     return {
@@ -48,14 +48,23 @@ export function createLiveChartOptions({
         height,
         padding: [6, 8, 2, 2],
         axes: [
-            createTimeAxis({ formatMicrosecondsToHMS, label: "Zeit (s)", space: 64, size: 44, valuePrecision: 0 }),
-            createValueAxis({ label: "Wert", size: 56, tickFormatter: (u, v) => `${v.toFixed(2)} ${yTickSuffix}` })
+            createTimeAxis({ formatRuntimeMicroseconds, label: "Zeit (s)", space: 64, size: 44, valuePrecision: 0 }),
+            createValueAxis({ label: "CH1", size: 56, tickFormatter: (u, v) => `${v.toFixed(2)} ${yTickSuffix}` }),
+            {
+                scale: "y",
+                side: 1, // Right side
+                size: 56,
+                label: "CH2",
+                grid: { show: false },
+                ticks: { format: (u, v) => `${v.toFixed(2)} ${yTickSuffix}` },
+                stroke: "white"
+            }
         ],
         scales: {
             x: {},
             y: { range: yRange }
         },
-        series,
+        series: series?.map(s => ({ ...s, points: { show: false } })),
         cursor: {
             points: {},
             drag: { x: true, y: true, setScale: true }
@@ -67,7 +76,7 @@ export function createLiveChartOptions({
     };
 }
 
-export function createRmsChartOptions({ size, title, yRange, series, legendHostId, formatMicrosecondsToHMS }) {
+export function createRmsChartOptions({ size, title, yRange, series, legendHostId, formatRuntimeMicroseconds }) {
     return {
         ...size,
         title,
@@ -77,15 +86,15 @@ export function createRmsChartOptions({ size, title, yRange, series, legendHostI
             x: {
                 time: false,
                 auto: false,
-                values: (u, v) => v.map(t => formatMicrosecondsToHMS(t, 0)),
+                values: (u, v) => v.map(t => formatRuntimeMicroseconds(t, 0)),
             },
             y: { auto: true, range: yRange }
         },
         axes: [
-            createTimeAxis({ formatMicrosecondsToHMS, label: "Zeit", space: 100, size: 44, valuePrecision: 0 }),
+            createTimeAxis({ formatRuntimeMicroseconds, label: "Zeit", space: 100, size: 44, valuePrecision: 0 }),
             createValueAxis({ label: "Wert", size: 56, tickFormatter: (u, v) => v.toFixed(2) })
         ],
-        series,
+        series: series?.map(s => ({ ...s, points: { show: false } })),
         cursor: {
             drag: { x: true, y: true, setScale: true }
         },
@@ -142,6 +151,7 @@ export function createFftChartOptions({
                 stroke: null,
                 width: 0,
                 fill: "rgba(200,210,223,0.08)",
+                points: { show: false },
                 value: (u, v) => (v != null ? Math.abs(v).toFixed(2) : '--')
             },
             {
@@ -149,12 +159,14 @@ export function createFftChartOptions({
                 stroke: averageStroke,
                 width: 2,
                 fill: averageFill,
+                points: { show: false },
                 value: (u, v) => (v != null ? Math.abs(v).toFixed(2) : '--')
             },
             {
                 label: "Current Magnitude",
                 stroke: currentStroke,
                 width: 1,
+                points: { show: false },
                 value: (u, v) => (v != null ? Math.abs(v).toFixed(2) : '--')
             },
         ],

@@ -367,9 +367,9 @@ class WaterfallRenderer {
         ctx.textBaseline = 'middle';
         ctx.shadowBlur = 0; // Better readability for the bottom bar
         const midIdx = Math.floor((startIdx + endIdx) / 2);
-        const tLeft = this.clockStrings[startIdx] || "";
-        const tMid = this.clockStrings[midIdx] || "";
-        const tRight = this.clockStrings[endIdx] || "";
+        const tLeft = this.timeStrings[startIdx] || "";
+        const tMid = this.timeStrings[midIdx] || "";
+        const tRight = this.timeStrings[endIdx] || "";
         ctx.fillText(tLeft, 40, graphH + barH / 2);
         ctx.fillText(tMid, tempCanvas.width / 2, graphH + barH / 2);
         ctx.textAlign = 'right';
@@ -462,7 +462,7 @@ class WaterfallRenderer {
         const latestIdx = this.history.length - 1 - this.scrollOffset;
         const colDelta = Math.floor((this.canvas.width - this.mouseX) / this.scrollSpeed);
         const histIdx = Math.max(0, latestIdx - colDelta);
-        const cursorStrTime = this.clockStrings[histIdx] || "";
+        const cursorStrTime = this.timeStrings[histIdx] || "";
         
         const chPrefix = stripCount > 1 ? `CH${stripIdx + 1} | ` : "";
         this.mouseHoverText = `${chPrefix}${hz} Hz  |  ${cursorStrTime}`;
@@ -661,9 +661,9 @@ class WaterfallRenderer {
         const lblMid = document.getElementById(`${this.prefix}LblTimeMid`);
         const lblRight = document.getElementById(`${this.prefix}LblTimeRight`);
         
-        if (lblLeft) lblLeft.textContent = this.clockStrings[leftIdx] || '';
-        if (lblMid) lblMid.textContent = this.clockStrings[midIdx] || '';
-        if (lblRight) lblRight.textContent = this.clockStrings[rightIdx] || '';
+        if (lblLeft) lblLeft.textContent = this.timeStrings[leftIdx] || '';
+        if (lblMid) lblMid.textContent = this.timeStrings[midIdx] || '';
+        if (lblRight) lblRight.textContent = this.timeStrings[rightIdx] || '';
         
         // Dynamically rebuild Y-Axis for multiple strips
         const yAxisId = this.prefix === 'wf' ? 'waterfallYAxis' : 'gyroWaterfallYAxis';

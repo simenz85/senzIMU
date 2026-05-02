@@ -1,7 +1,7 @@
 import { applyCalibrationToAccel } from '../imuCalibration.js';
 import { updateSharedMultiFftData, syncWaterfallRenderer } from '../ui/fft-runtime.js';
 import { buildSettingsColumnForNode } from '../ui/ui-setup.js';
-import { formatMicrosecondsToHMS } from '../utils/format-utils.js';
+import { formatRuntimeMicroseconds } from '../utils/format-utils.js';
 
 function ensureRuntimeGlobals() {
     if (!Array.isArray(window.activeSensors)) {
@@ -503,13 +503,13 @@ export function createLiveMultichannelRuntime(config) {
             { x: '#e040fb', y: '#ea80fc',   z: '#aa00ff',   max: '#d500f9',   maxFill: 'rgba(213,0,249,0.2)' },   // CH4
         ];
 
-        const newSeries = [{ label: 'Zeit', value: (u, value) => formatMicrosecondsToHMS(value, 2) }];
+        const newSeries = [{ label: 'Zeit', value: (u, value) => formatRuntimeMicroseconds(value, 2) }];
         for (let index = 0; index < n; index++) {
             const colorSet = baseColors[index % 4];
-            newSeries.push({ label: `CH${index + 1} X (mg)`, stroke: colorSet.x });
-            newSeries.push({ label: `CH${index + 1} Y (mg)`, stroke: colorSet.y });
-            newSeries.push({ label: `CH${index + 1} Z (mg)`, stroke: colorSet.z });
-            newSeries.push({ label: `CH${index + 1} Total`, stroke: colorSet.max, fill: colorSet.maxFill });
+            newSeries.push({ label: `CH${index + 1} X (mg)`, stroke: colorSet.x, points: { show: false } });
+            newSeries.push({ label: `CH${index + 1} Y (mg)`, stroke: colorSet.y, points: { show: false } });
+            newSeries.push({ label: `CH${index + 1} Z (mg)`, stroke: colorSet.z, points: { show: false } });
+            newSeries.push({ label: `CH${index + 1} Total`, stroke: colorSet.max, fill: colorSet.maxFill, points: { show: false } });
         }
 
         const nextOptions = {

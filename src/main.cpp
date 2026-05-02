@@ -177,8 +177,8 @@ static void led_boot_sequence_task(void *arg) {
     led_blinking_active = true;
     for(int i = 0; i < 3; i++) {
         set_rgb_pins_raw(255, 0, 0); vTaskDelay(pdMS_TO_TICKS(150)); // Rot
-        set_rgb_pins_raw(0, 255, 0); vTaskDelay(pdMS_TO_TICKS(150)); // Grün
         set_rgb_pins_raw(0, 0, 255); vTaskDelay(pdMS_TO_TICKS(150)); // Blau
+        set_rgb_pins_raw(0, 255, 0); vTaskDelay(pdMS_TO_TICKS(150)); // Grün
         if(i < 2) {
             set_rgb_pins_raw(0, 0, 0); vTaskDelay(pdMS_TO_TICKS(150)); // Pause
         }
@@ -277,6 +277,41 @@ void init_esp_now() {
     }
 }
 
+static void format_device_mac(char *out, size_t out_size);
+
+static void register_node_at_master() {
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(g_sta_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+        char my_ip_str[16];
+        char my_mac_str[18];
+        char register_payload[96];
+        sprintf(my_ip_str, IPSTR, IP2STR(&ip_info.ip));
+        format_device_mac(my_mac_str, sizeof(my_mac_str));
+        snprintf(register_payload, sizeof(register_payload), "{\"ip\":\"%s\",\"mac\":\"%s\"}", my_ip_str, my_mac_str);
+        
+        esp_http_client_config_t http_cfg = {};
+        http_cfg.url = "http://192.168.4.1/api/register_node";
+        http_cfg.method = HTTP_METHOD_POST;
+        http_cfg.timeout_ms = 3000;
+        
+        esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+        esp_http_client_set_post_field(client, register_payload, strlen(register_payload));
+        esp_http_client_set_header(client, "Content-Type", "application/json");
+        
+        for (int attempt = 0; attempt < 5; attempt++) {
+            esp_err_t err = esp_http_client_perform(client);
+            if (err == ESP_OK) {
+                ESP_LOGI("HTTP_CLIENT", "Erfolgreich als Node registriert! ip=%s mac=%s", my_ip_str, my_mac_str);
+                break;
+            } else {
+                ESP_LOGW("HTTP_CLIENT", "Registrierung fehlgeschlagen: %s, neuer Versuch...", esp_err_to_name(err));
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+        }
+        esp_http_client_cleanup(client);
+    }
+}
+
 static void wifi_watchdog_task(void *arg) {
     TickType_t master_lost_since = 0;
     TickType_t last_reconnect_attempt = 0;
@@ -310,7 +345,26 @@ static void wifi_watchdog_task(void *arg) {
                                     (ip_info.ip.addr != 0);
 
             if (sta_has_link && sta_has_ip) {
+                if (master_lost_since != 0) {
+                    ESP_LOGI(TAG, "Master-Verbindung wiederhergestellt. Registriere neu...");
+                    register_node_at_master();
+                }
                 master_lost_since = 0;
+                
+                // WICHTIGER FIX: Wenn der Node zwar verbunden ist, aber keine UI verbunden ist,
+                // registrieren wir uns zyklisch beim Master neu. Dies behebt das Problem, 
+                // dass der Node nach einem fehlgeschlagenen initialen Registrierungsversuch "aufgibt".
+                static TickType_t last_registration_retry = 0;
+                if (count_active_ws_clients() == 0) {
+                    TickType_t now = xTaskGetTickCount();
+                    if (last_registration_retry == 0 || (now - last_registration_retry) > pdMS_TO_TICKS(10000)) {
+                        last_registration_retry = now;
+                        ESP_LOGI(TAG, "Node hat keine Clients. Versuche Re-Registrierung beim Master...");
+                        register_node_at_master();
+                    }
+                } else {
+                    last_registration_retry = xTaskGetTickCount(); // Reset, wenn verbunden
+                }
             } else {
                 TickType_t now = xTaskGetTickCount();
                 if (master_lost_since == 0) {
@@ -978,9 +1032,9 @@ static void ws_send_work(void *arg) {
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (ws_clients[i] == item->fd) {
                 ws_clients_errors[i]++;
-                // Drop erst nach 15 kumulativen, aufeinanderfolgenden Fehlern
-                if (ws_clients_errors[i] > 15) {
-                    ESP_LOGW("WS", "Zu viele Fehler (FD %d), entferne Client endgültig.", item->fd);
+                // Drop sofort bei ungültigem Socket oder nach 3 Fehlern (z.B. Timeout)
+                if (result == ESP_ERR_INVALID_ARG || result == ESP_ERR_NOT_FOUND || ws_clients_errors[i] >= 3) {
+                    ESP_LOGW("WS", "Zu viele Fehler oder toter Socket (FD %d), entferne Client endgültig.", item->fd);
                     ws_clients[i] = -1;
                     ws_clients_errors[i] = 0;
                     if (count_active_ws_clients() == 0) {
@@ -1231,6 +1285,7 @@ static void sort_active_nodes(void) {
 static void add_active_node(const char* ip, const char* mac) {
     if (!ip || ip[0] == '\0') return;
 
+    bool is_new = true;
     for (int i = 0; i < num_active_nodes; i++) {
         const bool same_mac = mac && mac[0] != '\0' && strcmp(active_nodes[i].mac, mac) == 0;
         const bool same_ip = strcmp(active_nodes[i].ip, ip) == 0;
@@ -1244,31 +1299,36 @@ static void add_active_node(const char* ip, const char* mac) {
             active_nodes[i].last_seen_ms = (uint32_t)(esp_timer_get_time() / 1000);
             sort_active_nodes();
             ESP_LOGI("HTTP", "Node aktualisiert: ip=%s mac=%s", active_nodes[i].ip, active_nodes[i].mac);
-            return;
+            is_new = false;
+            break;
         }
     }
 
-    if (num_active_nodes < MAX_NODES) {
-        strncpy(active_nodes[num_active_nodes].ip, ip, sizeof(active_nodes[num_active_nodes].ip) - 1);
-        active_nodes[num_active_nodes].ip[sizeof(active_nodes[num_active_nodes].ip) - 1] = '\0';
-        if (mac && mac[0] != '\0') {
-            strncpy(active_nodes[num_active_nodes].mac, mac, sizeof(active_nodes[num_active_nodes].mac) - 1);
-            active_nodes[num_active_nodes].mac[sizeof(active_nodes[num_active_nodes].mac) - 1] = '\0';
-        } else {
-            active_nodes[num_active_nodes].mac[0] = '\0';
-        }
-        active_nodes[num_active_nodes].last_seen_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        num_active_nodes++;
-        sort_active_nodes();
-        ESP_LOGI("HTTP", "Neuer Node aktiv registriert: ip=%s mac=%s (Total: %d)", ip, active_nodes[num_active_nodes - 1].mac, num_active_nodes);
-        
-        // Notify WebSocket clients
-        char notify_buf[128];
-        int len = snprintf(notify_buf, sizeof(notify_buf), "{\"type\":\"node_registered\",\"ip\":\"%s\",\"mac\":\"%s\"}", ip, mac ? mac : "");
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (ws_clients[i] >= 0) {
-                queue_ws_frame_copy(ws_server, ws_clients[i], HTTPD_WS_TYPE_TEXT, (const uint8_t *)notify_buf, len);
+    if (is_new) {
+        if (num_active_nodes < MAX_NODES) {
+            strncpy(active_nodes[num_active_nodes].ip, ip, sizeof(active_nodes[num_active_nodes].ip) - 1);
+            active_nodes[num_active_nodes].ip[sizeof(active_nodes[num_active_nodes].ip) - 1] = '\0';
+            if (mac && mac[0] != '\0') {
+                strncpy(active_nodes[num_active_nodes].mac, mac, sizeof(active_nodes[num_active_nodes].mac) - 1);
+                active_nodes[num_active_nodes].mac[sizeof(active_nodes[num_active_nodes].mac) - 1] = '\0';
+            } else {
+                active_nodes[num_active_nodes].mac[0] = '\0';
             }
+            active_nodes[num_active_nodes].last_seen_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            num_active_nodes++;
+            sort_active_nodes();
+            ESP_LOGI("HTTP", "Neuer Node aktiv registriert: ip=%s mac=%s (Total: %d)", ip, active_nodes[num_active_nodes - 1].mac, num_active_nodes);
+        } else {
+            return; // Kein Platz mehr
+        }
+    }
+
+    // ALWAYS Notify WebSocket clients so UI can trigger discoverNodes()
+    char notify_buf[128];
+    int len = snprintf(notify_buf, sizeof(notify_buf), "{\"type\":\"node_registered\",\"ip\":\"%s\",\"mac\":\"%s\"}", ip, mac ? mac : "");
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (ws_clients[i] >= 0) {
+            queue_ws_frame_copy(ws_server, ws_clients[i], HTTPD_WS_TYPE_TEXT, (const uint8_t *)notify_buf, len);
         }
     }
 }
@@ -1420,6 +1480,8 @@ static void start_master_ap_mode(void) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
     esp_wifi_set_max_tx_power(84);
+    // Energiesparmodus deaktivieren für maximale Performance
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     g_role_transition_in_progress = false;
 }
@@ -1434,12 +1496,16 @@ static void wifi_init_auto_role(const my_wifi_config_t *config) {
 
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
-    int boot_delay = (mac[5] % 50) + (mac[4] % 10) * 100; // Bis zu 1000ms delay
-    ESP_LOGI(TAG, "Multi-Sensor: Verzögere Start um %d ms...", boot_delay);
+    // Deutlich längerer, deterministischer Delay basierend auf der MAC (bis zu 5.1 Sekunden)
+    // Verhindert Split-Brain, bei dem beide Sensoren gleichzeitig Master werden.
+    int boot_delay = (mac[5] * 20); 
+    ESP_LOGI(TAG, "Multi-Sensor: Verzögere Start um %d ms zur Master-Findung...", boot_delay);
     vTaskDelay(pdMS_TO_TICKS(boot_delay));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
+    // Energiesparmodus für minimalen Ping deaktivieren
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     const char *target_ssid = config->ssid[0] != '\0' ? config->ssid : "senzIMU";
     strncpy(g_target_wifi_ssid, target_ssid, sizeof(g_target_wifi_ssid) - 1);
@@ -1463,36 +1529,7 @@ static void wifi_init_auto_role(const my_wifi_config_t *config) {
             vTaskDelay(pdMS_TO_TICKS(500));
             esp_netif_get_ip_info(g_sta_netif, &ip_info);
             if (ip_info.ip.addr != 0) {
-                char my_ip_str[16];
-                char my_mac_str[18];
-                char register_payload[96];
-                sprintf(my_ip_str, IPSTR, IP2STR(&ip_info.ip));
-                format_device_mac(my_mac_str, sizeof(my_mac_str));
-                snprintf(register_payload, sizeof(register_payload), "{\"ip\":\"%s\",\"mac\":\"%s\"}", my_ip_str, my_mac_str);
-                ESP_LOGI(TAG, "Verbunden! Meine IP: %s", my_ip_str);
-                
-                esp_http_client_config_t http_cfg = {};
-                http_cfg.url = "http://192.168.4.1/api/register_node";
-                http_cfg.method = HTTP_METHOD_POST;
-                http_cfg.timeout_ms = 3000;
-                
-                esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
-                esp_http_client_set_post_field(client, register_payload, strlen(register_payload));
-                esp_http_client_set_header(client, "Content-Type", "application/json");
-                
-                for (int attempt = 0; attempt < 5; attempt++) {
-                    esp_err_t err = esp_http_client_perform(client);
-                    if (err == ESP_OK) {
-                        ESP_LOGI("HTTP_CLIENT", "Erfolgreich als Node registriert! ip=%s mac=%s", my_ip_str, my_mac_str);
-                        break;
-                    } else {
-                        ESP_LOGW("HTTP_CLIENT", "Registrierung fehlgeschlagen: %s, neuer Versuch...", esp_err_to_name(err));
-                        vTaskDelay(pdMS_TO_TICKS(1000));
-                    }
-                }
-                
-                esp_http_client_cleanup(client);
-                
+                register_node_at_master();
                 return;
             }
             retries++;
@@ -1574,8 +1611,8 @@ esp_err_t http_serve_static_file(httpd_req_t *req) {
     if (is_html) {
         httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
     } else if (is_static_asset) {
-        // Cache-Control vorerst komplett auf no-cache für die Entwicklung!
-        httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate"); 
+        // Cache aktivieren, damit der ESP nicht bei jedem Refresh alles neu senden muss
+        httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=604800, immutable"); 
     }
 
     // ACHTUNG: 'Connection: close' absichtlich entfernt,
@@ -1836,7 +1873,7 @@ esp_err_t http_post_led_config_handler(httpd_req_t *req) {
 ////////////////////////////////////////////////////////////////////////////////
 // HTTP(S) SERVER START
 
-#define FIRMWARE_VERSION "SenzIMU v1.0.3"
+#define FIRMWARE_VERSION "SenzIMU v1.0.4"
 
 void start_http_server() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -2782,6 +2819,14 @@ void init_psram() {
 // APP MAIN
 
 extern "C" void app_main() {
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    if (wakeup_reason == ESP_SLEEP_WAKEUP_TOUCHPAD || 
+        wakeup_reason == ESP_SLEEP_WAKEUP_TIMER || 
+        wakeup_reason == ESP_SLEEP_WAKEUP_EXT0 || 
+        wakeup_reason == ESP_SLEEP_WAKEUP_EXT1) {
+        // Deep Sleep Wakeup erkannt! Reboot auslösen, damit esp_timer_get_time() auf 0 resettet wird.
+        esp_restart();
+    }
    
     ESP_LOGI(TAG, "Starting IMU Application...");
     init_rgb_led(); // LED Init

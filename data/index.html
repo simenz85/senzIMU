@@ -193,26 +193,25 @@
       display: none;
     }
 
-    #shutdownConfirmOverlay {
+    #shutdownConfirmOverlay, #otaConfirmOverlay {
       position: fixed;
       inset: 0;
       z-index: 4000;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px;
       background: rgba(0, 0, 0, 0.7);
       backdrop-filter: blur(10px);
-      color: #f1f4f8;
-      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
       opacity: 0;
-      visibility: hidden;
-      transition: opacity 200ms ease, visibility 200ms ease;
+      pointer-events: none;
+      transition: opacity 200ms ease;
     }
-    #shutdownConfirmOverlay.is-visible {
+
+    #shutdownConfirmOverlay.is-visible, #otaConfirmOverlay.is-visible {
       opacity: 1;
-      visibility: visible;
+      pointer-events: auto;
     }
+
     .shutdown-card {
       max-width: 400px;
       padding: 24px;
@@ -470,6 +469,17 @@
       <div class="shutdown-buttons">
         <button id="shutdownConfirmNo" class="sz-btn sz-btn-secondary">Abbrechen</button>
         <button id="shutdownConfirmYes" class="sz-btn sz-btn-danger">Herunterfahren</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="otaConfirmOverlay">
+    <div class="shutdown-card" style="border-color: rgba(255, 214, 0, 0.3);">
+      <div class="shutdown-title" style="color: #ffd600;">Firmware Update</div>
+      <p id="otaConfirmText">WARNUNG: Ein inkorrektes System-Update kann das Gerät unbrauchbar machen.<br><br>Bist du dir sicher, dass du flashen möchtest?</p>
+      <div class="shutdown-buttons">
+        <button id="otaConfirmNo" class="sz-btn sz-btn-secondary">Abbrechen</button>
+        <button id="otaConfirmYes" class="sz-btn sz-btn-danger" style="background: rgba(255, 214, 0, 0.2); border-color: rgba(255, 214, 0, 0.5); color: #ffd600;">Flashen</button>
       </div>
     </div>
   </div>
@@ -2432,7 +2442,7 @@
 
   
 
-  <script type="module" src="script2.js?v=57"></script>
+  <script type="module" src="script2.js?v=58"></script>
   <script src="lib/jszip.min.js"></script>
   <script type="module" src="ui/replay-manager.js?v=2"></script>
   <script type="module" src="ui/impact-test.js?v=5"></script>
@@ -2646,10 +2656,41 @@
       window.currentOtaTargetIp = null;
 
       window.triggerGlobalOtaUpload = function(targetIp, channelName) {
-         if(confirm(`WARNUNG: Ein inkorrektes System-Update für ${channelName || targetIp} kann das Gerät unbrauchbar machen.\n\nBist du dir sicher, dass du flashen möchtest?`)) {
-            window.currentOtaTargetIp = targetIp;
-            fileInput.value = '';
-            fileInput.click();
+         const overlay = document.getElementById("otaConfirmOverlay");
+         const yesBtn = document.getElementById("otaConfirmYes");
+         const noBtn = document.getElementById("otaConfirmNo");
+         const text = document.getElementById("otaConfirmText");
+
+         if(overlay && yesBtn && noBtn && text) {
+             text.innerHTML = `WARNUNG: Ein inkorrektes System-Update für <strong>${channelName || targetIp}</strong> kann das Gerät unbrauchbar machen.<br><br>Bist du dir sicher, dass du flashen möchtest?`;
+             overlay.classList.add("is-visible");
+
+             const handleYes = () => {
+                 cleanup();
+                 window.currentOtaTargetIp = targetIp;
+                 fileInput.value = '';
+                 fileInput.click();
+             };
+
+             const handleNo = () => {
+                 cleanup();
+             };
+
+             const cleanup = () => {
+                 overlay.classList.remove("is-visible");
+                 yesBtn.removeEventListener("click", handleYes);
+                 noBtn.removeEventListener("click", handleNo);
+             };
+
+             yesBtn.addEventListener("click", handleYes);
+             noBtn.addEventListener("click", handleNo);
+         } else {
+             // Fallback
+             if(confirm(`WARNUNG: Ein inkorrektes System-Update für ${channelName || targetIp} kann das Gerät unbrauchbar machen.\n\nBist du dir sicher, dass du flashen möchtest?`)) {
+                window.currentOtaTargetIp = targetIp;
+                fileInput.value = '';
+                fileInput.click();
+             }
          }
       };
 
@@ -3008,6 +3049,6 @@
     };
   </script>
   <link rel="stylesheet" href="uPlot.min.css">
-  <link rel="stylesheet" href="stylesheet.css">
+  <link rel="stylesheet" href="stylesheet.css?v=2">
 </body>
 </html>

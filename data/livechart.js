@@ -64,9 +64,9 @@ class LiveChart {
 
         for (let i = 0; i < n; i++) {
             const colors = baseColors[i % baseColors.length];
-            newSeries.push({ label: `CH${i+1} X`, stroke: colors[0], width: 2 });
-            newSeries.push({ label: `CH${i+1} Y`, stroke: colors[1], width: 2 });
-            newSeries.push({ label: `CH${i+1} Z`, stroke: colors[2], width: 2 });
+            newSeries.push({ label: `CH${i+1} X`, stroke: colors[0], width: 2, points: { show: false } });
+            newSeries.push({ label: `CH${i+1} Y`, stroke: colors[1], width: 2, points: { show: false } });
+            newSeries.push({ label: `CH${i+1} Z`, stroke: colors[2], width: 2, points: { show: false } });
         }
 
         // Neues Chart mit geänderten Optionen aufbauen (uPlot erlaubt dynamische Series nur via Re-Init oder .addSeries API in v1.6+)

@@ -29,28 +29,39 @@ export function createChartInteractionRuntime(config) {
         const wrapLeft = wrapRect.left - panelRect.left;
         const wrapTop = wrapRect.top - panelRect.top;
 
-        yOverlay.style.left = `${Math.max(0, wrapLeft)}px`;
-        yOverlay.style.top = `${Math.max(0, wrapTop + bbox.top)}px`;
-        yOverlay.style.width = `${Math.max(0, bbox.left)}px`;
-        yOverlay.style.height = `${Math.max(0, bbox.height)}px`;
+        // uPlot bbox is in physical pixels, but we need CSS pixels for the DOM
+        const dpr = window.devicePixelRatio || 1;
+        const cssBboxTop = bbox.top / dpr;
+        const cssBboxLeft = bbox.left / dpr;
+        const cssBboxWidth = bbox.width / dpr;
+        const cssBboxHeight = bbox.height / dpr;
 
-        const xTop = wrapTop + bbox.top + bbox.height;
-        const xHeight = Math.max(0, (wrapRect.bottom - panelRect.top) - xTop);
-        const xOverlayHeight = Math.max(20, xHeight); // Allow enough height to comfortably cover labels
-        xOverlay.style.left = `${Math.max(0, wrapLeft + bbox.left)}px`;
+        // Make Y-axis overlay go all the way to the bottom of the wrap
+        yOverlay.style.left = `${Math.max(0, wrapLeft)}px`;
+        yOverlay.style.top = `${Math.max(0, wrapTop + cssBboxTop)}px`;
+        yOverlay.style.width = `${Math.max(0, cssBboxLeft)}px`;
+        yOverlay.style.height = `${Math.max(0, wrapRect.bottom - panelRect.top - (wrapTop + cssBboxTop))}px`;
+
+        // X-axis overlay: anchor to the bottom of the plotting area, shifted slightly higher (-2px) to be easier to grab
+        const xTop = wrapTop + cssBboxTop + cssBboxHeight - 2;
+        const xOverlayHeight = 40;
+        
+        // Make X-axis overlay extend from the start of the plot all the way to the right edge
+        xOverlay.style.left = `${Math.max(0, wrapLeft + cssBboxLeft)}px`;
         xOverlay.style.top = `${Math.max(0, xTop)}px`;
-        xOverlay.style.width = `${Math.max(0, bbox.width)}px`;
+        xOverlay.style.width = `${Math.max(0, wrapRect.width - cssBboxLeft)}px`;
         xOverlay.style.height = `${xOverlayHeight}px`;
         xOverlay.style.bottom = 'auto';
 
         const y2Overlay = y2OverlayId ? document.getElementById(y2OverlayId) : null;
         if (y2Overlay) {
-            const y2Left = wrapLeft + bbox.left + bbox.width;
-            const y2Width = Math.max(0, wrapRect.width - (bbox.left + bbox.width));
+            // Anchor strictly to the right side of the plotting area
+            const y2Left = wrapLeft + cssBboxLeft + cssBboxWidth;
+            const y2Width = Math.max(0, wrapRect.width - (cssBboxLeft + cssBboxWidth));
             y2Overlay.style.left = `${Math.max(0, y2Left)}px`;
-            y2Overlay.style.top = `${Math.max(0, wrapTop + bbox.top)}px`;
-            y2Overlay.style.width = `${y2Width}px`;
-            y2Overlay.style.height = `${Math.max(0, bbox.height)}px`;
+            y2Overlay.style.top = `${Math.max(0, wrapTop + cssBboxTop)}px`;
+            y2Overlay.style.width = `${y2Width}px`; // Dynamically fill the right edge symmetrically
+            y2Overlay.style.height = `${Math.max(0, wrapRect.bottom - panelRect.top - (wrapTop + cssBboxTop))}px`;
         }
     }
 
@@ -578,6 +589,13 @@ export function createChartInteractionRuntime(config) {
                 resizeChartIfMeasured(config.getChart(), config.getLiveChartSize);
                 resizeChartIfMeasured(config.getGyroChart(), config.getGyroChartSize);
                 syncKnownAxisOverlays();
+                
+                // Double check after layout fully settles
+                setTimeout(() => {
+                    resizeChartIfMeasured(config.getChart(), config.getLiveChartSize);
+                    resizeChartIfMeasured(config.getGyroChart(), config.getGyroChartSize);
+                    syncKnownAxisOverlays();
+                }, 50);
             });
         });
     }

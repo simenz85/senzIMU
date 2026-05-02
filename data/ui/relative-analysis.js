@@ -179,10 +179,10 @@ export function initRelativeDiffRmsChart() {
         ],
         series: [
             {},
-            { label: "Diff X", stroke: "rgba(255, 99, 132, 1)", width: 2 },
-            { label: "Diff Y", stroke: "rgba(54, 162, 235, 1)", width: 2 },
-            { label: "Diff Z", stroke: "rgba(255, 206, 86, 1)", width: 2 },
-            { label: "Diff Total", stroke: "rgba(75, 192, 192, 1)", width: 2 }
+            { label: "Diff X", stroke: "rgba(255, 99, 132, 1)", width: 2, points: { show: false } },
+            { label: "Diff Y", stroke: "rgba(54, 162, 235, 1)", width: 2, points: { show: false } },
+            { label: "Diff Z", stroke: "rgba(255, 206, 86, 1)", width: 2, points: { show: false } },
+            { label: "Diff Total", stroke: "rgba(75, 192, 192, 1)", width: 2, points: { show: false } }
         ]
     };
 

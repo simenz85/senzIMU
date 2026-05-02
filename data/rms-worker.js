@@ -30,12 +30,33 @@ self.onmessage = (event) => {
   }
 
   // 3. Einzelne RMS-Werte pro Achse (√ von Varianz = Standardabweichung)
-  const rmsX = Math.sqrt(sumSqX / len);
-  const rmsY = Math.sqrt(sumSqY / len);
-  const rmsZ = Math.sqrt(sumSqZ / len);
+  let rmsX = Math.sqrt(sumSqX / len);
+  let rmsY = Math.sqrt(sumSqY / len);
+  let rmsZ = Math.sqrt(sumSqZ / len);
 
   // 4. Gesamter RMS-Wert der Vibration (3D-Vektorbetrag der RMS-Werte)
-  const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY + rmsZ * rmsZ);
+  let rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY + rmsZ * rmsZ);
+
+  // EMA (Exponential Moving Average) anwenden für weichere Kurven (weniger "eckig")
+  // Reset EMA wenn wir einen Zeitsprung rückwärts haben (z.B. Puffer-Reset)
+  if (self.prevRmsTotal === undefined || self.lastTime === undefined || self.lastTime > time) {
+      self.prevRmsTotal = rmsTotal;
+      self.prevRmsX = rmsX;
+      self.prevRmsY = rmsY;
+      self.prevRmsZ = rmsZ;
+  } else {
+      const alpha = 0.35; // Glättungsfaktor (Envelope Follower)
+      rmsX = self.prevRmsX * (1 - alpha) + rmsX * alpha;
+      rmsY = self.prevRmsY * (1 - alpha) + rmsY * alpha;
+      rmsZ = self.prevRmsZ * (1 - alpha) + rmsZ * alpha;
+      rmsTotal = self.prevRmsTotal * (1 - alpha) + rmsTotal * alpha;
+
+      self.prevRmsX = rmsX;
+      self.prevRmsY = rmsY;
+      self.prevRmsZ = rmsZ;
+      self.prevRmsTotal = rmsTotal;
+  }
+  self.lastTime = time;
 
   // 5. Ergebnis zurückgeben
   self.postMessage({
