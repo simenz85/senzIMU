@@ -79,4 +79,4 @@ The web frontend, served entirely locally from the ESP32 (via LittleFS), provide
 ## 🤝 Contributing & License
 We welcome bug reports and feedback. Please note that computationally heavy UI logic must always be offloaded to WebWorkers.
 
-This project is provided as **Freeware for Non-Commercial Use**. Anyone is welcome to publicly download, install, and use the software for personal, academic, or hobbyist purposes. However, **copying, modification (forking), redistribution, and commercial use are strictly prohibited**. Further details can be found in the `LICENSE` file.
+This project is licensed under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)** license. Anyone is welcome to publicly download, install, modify, fork, and redistribute the software for personal, academic, or hobbyist purposes. However, **any commercial use is strictly prohibited**. If you remix, transform, or build upon the material, you must distribute your contributions under the same license. Further details can be found in the `LICENSE` file.
