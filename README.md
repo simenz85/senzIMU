@@ -1,80 +1,82 @@
+*Languages: [English](README.md) | [Deutsch](README_DE.md)*
+
 # SenzIMU Multichannel – ESP32-S3 Multi-Node IMU Dashboard
 
 ![SenzIMU](https://img.shields.io/badge/Platform-ESP32--S3-blue) ![Framework](https://img.shields.io/badge/Framework-ESP--IDF%20(C++)-orange) ![UI](https://img.shields.io/badge/Frontend-Web%2FThree.js-yellow) ![Topology](https://img.shields.io/badge/Network-ESP--NOW%20%2B%20WiFi-success)
 
-## Was ist SenzIMU und was kann es?
+## What is SenzIMU and what can it do?
 
-SenzIMU Multichannel ist ein kabelloses, autarkes **Sensor-Netzwerk zur Echtzeit-Bewegungs- und Vibrationsanalyse**. 
+SenzIMU Multichannel is a wireless, standalone **sensor network for real-time motion and vibration analysis**. 
 
-Man befestigt mehrere winzige Sensorknoten (Nodes) an beliebigen Objekten, Maschinen oder Körperteilen. Einer der Knoten spannt automatisch ein eigenes WLAN-Netzwerk auf und liefert ein komplettes Web-Dashboard aus. Öffnet man dieses Dashboard auf einem Laptop, Tablet oder Smartphone, sieht man **in Echtzeit und zeitsynchron**, was alle Sensoren gerade tun. **Ganz ohne Cloud, Server oder App-Installation.**
+You attach multiple tiny sensor nodes to any objects, machines, or body parts. One of the nodes automatically creates its own WiFi network and serves a complete web dashboard. Opening this dashboard on a laptop, tablet, or smartphone allows you to see exactly what all sensors are doing **in real-time and perfectly synchronized**. **Entirely without clouds, servers, or app installations.**
 
-### Was das System konkret leistet:
+### What the system actually does:
 
-1. **Live 3D-Tracking (Kinematik & Orientierung)**
-   Das System berechnet aus den Rohdaten die exakte räumliche Ausrichtung (Quaternions) und kinematische Translation (Bewegung im Raum) aller verbundenen Sensoren. Diese werden im Browser live als 3D-Modelle animiert. Bewegt man einen Sensor in der echten Welt, bewegt sich das Modell auf dem Bildschirm latenzfrei mit.
+1. **Live 3D Tracking (Kinematics & Orientation)**
+   The system calculates the exact spatial orientation (quaternions) and kinematic translation (movement in space) of all connected sensors from the raw data. These are animated live in the browser as 3D models. If you move a sensor in the real world, the model on the screen moves instantly with zero latency.
 
-2. **Vibrations-, Frequenz- & Modalanalyse**
-   Die Sensoren unterstützen eine **variable Abtastrate von 26 bis 6660 Hz** (z. B. mit dem [LSM6DSO](https://www.st.com/en/mems-and-sensors/lsm6dso.html)). Das Web-Dashboard berechnet daraus in Echtzeit eine Fast-Fourier-Transformation (FFT) und zeigt hochauflösende Frequenzspektren sowie **Wasserfall-Spektrogramme** an. Durch die synchronisierte Aufzeichnung an mehreren Punkten gleichzeitig ermöglicht das System eine umfassende **Modalanalyse** zur Bestimmung von Eigenfrequenzen und Schwingungsformen von Maschinen und Strukturen.
+2. **Vibration, Frequency & Modal Analysis**
+   The sensors support a **variable sampling rate from 26 to 6660 Hz** (e.g., using the [LSM6DSO](https://www.st.com/en/mems-and-sensors/lsm6dso.html)). The web dashboard uses this to calculate a Fast Fourier Transform (FFT) in real-time, displaying high-resolution frequency spectra and **waterfall spectrograms**. By capturing synchronized data across multiple points simultaneously, the system enables comprehensive **modal analysis** to determine natural frequencies and mode shapes of machines and structures.
 
-3. **Vergleichende Sensordiagnostik**
-   Alle Sensoren im Netzwerk sind auf die Mikrosekunde genau synchronisiert. Die hochperformanten Live-Diagramme erlauben es, die Beschleunigungs- und Gyroskop-Werte mehrerer Sensoren übereinanderzulegen und exakt zu vergleichen. Du erkennst sofort kleinste Verzögerungen oder Abweichungen zwischen unterschiedlichen Objekten.
+3. **Comparative Sensor Diagnostics**
+   All sensors in the network are synchronized down to the microsecond. The high-performance live charts allow you to overlay and exactly compare the acceleration and gyroscope values of multiple sensors. You immediately spot the slightest delays or deviations between different objects.
 
-4. **Live-Kalibrierung (Over-the-Air)**
-   Jeder Sensor lässt sich direkt aus dem Dashboard heraus kalibrieren. Parameter wie Gyroskop-Offsets, Skalierung oder Gravity-Cutoffs können per Knopfdruck gemessen und dauerhaft auf den jeweiligen Sensorknoten gespeichert werden.
+4. **Live Calibration (Over-the-Air)**
+   Each sensor can be calibrated directly from the dashboard. Parameters like gyroscope offsets, scaling, or gravity cutoffs can be measured at the push of a button and permanently saved on the respective sensor node.
 
-5. **Sleep-Wake-Mechanik für autarken Betrieb**
-   Die Knoten können extrem stromsparend arbeiten und sich durch bloßes Berühren (Touch-Sensoren des ESP32-S3) wieder aufwecken. Dadurch können sie in Geräten fest verbaut bleiben, ohne den Akku sofort zu leeren, und wachen nur auf, wenn das Web-Dashboard oder eine Bewegung dies anfordert.
-
----
-
-## 🎯 Praktische Anwendungsfälle (Use Cases)
-
-- **Maschinenüberwachung (Predictive Maintenance):** Befestigung von Sensoren an verschiedenen Bauteilen einer Maschine. Das Live-Spektrogramm offenbart sofort unerwartete Vibrationen oder abweichende Frequenzen, bevor ein Defekt auftritt.
-- **Biomechanik & Motion Capture:** Synchronisiertes Tracking mehrerer Gliedmaßen. Durch die hochpräzise Zeitsynchronisation lässt sich der exakte Bewegungsablauf diagnostizieren (z. B. im Sport).
-- **Robotik-Prototyping:** Schnelles Analysieren des Schwingungs- und Bewegungsverhaltens von Roboterarmen oder Fahrwerken ohne komplexe Kabelbäume.
+5. **Sleep-Wake Mechanics for Standalone Operation**
+   The nodes can operate in an extremely power-efficient manner and wake up just by being touched (utilizing the touch sensors of the ESP32-S3). This means they can remain permanently installed in devices without instantly draining the battery, waking up only when requested by the web dashboard or physical movement.
 
 ---
 
-## 🛠️ Technische Kernfeatures & Architektur
+## 🎯 Practical Use Cases
 
-Um diese Leistung direkt im Browser zu ermöglichen, nutzt das System modernste Embedded- und Web-Technologien:
+- **Machine Monitoring (Predictive Maintenance):** Attach sensors to various components of a machine. The live spectrogram immediately reveals unexpected vibrations or deviating frequencies before a failure occurs.
+- **Biomechanics & Motion Capture:** Synchronized tracking of multiple limbs. Thanks to the highly precise time synchronization, exact movement sequences can be diagnosed (e.g., in sports).
+- **Robotics Prototyping:** Quickly analyze the vibration and motion behavior of robotic arms or chassis without complex wiring harnesses.
 
-### 📡 Multi-Node Sensor-Netzwerk
-- **WiFi & ESP-NOW Hybrid**: Automatische Rollenverteilung in Master und Slave-Knoten. Der Master fungiert als WiFi Access Point und liefert das Web-Dashboard aus. **Jeder Knoten** (sowohl Master als auch Slaves) betreibt jedoch einen eigenen, dedizierten WebSocket-Server. Der Browser baut zu jedem Sensor eine direkte Punkt-zu-Punkt-Verbindung auf, um Daten ohne Flaschenhals parallel zu streamen. ESP-NOW wird **ausschließlich** für die Zeitsynchronisation genutzt.
-- **Microsecond Time-Sync**: Präzise, netzwerkweite Zeitsynchronisation über ESP-NOW Beacons zur Vermeidung von Drift zwischen den Knoten.
+---
 
-### 🚀 Hochleistungs-Firmware (C++ / ESP-IDF)
-- **Zero-Copy & StreamBuffers**: Effiziente Datenverarbeitung im ESP32-S3 mittels FreeRTOS `StreamBuffer`, minimierte Heap-Allokationen und binäres WebSocket-Streaming.
-- **Hardware-Touch-Wakeup**: Fortschrittliches Sleep-Management inklusive ESP32-S3 Touch FSM für extrem stromsparenden Batteriebetrieb.
+## 🛠️ Technical Features & Architecture
 
-### 💻 Erweitertes Web-Dashboard (Frontend)
-Das vollständig lokal vom ESP32 (via LittleFS) ausgelieferte Web-Frontend bietet eine Desktop-Klasse Analyse-Umgebung:
-- **Echtzeit-Diagramme**: Latenzfreies Plotting großer Datenmengen mithilfe von **uPlot**.
-- **WebWorker Architektur**: Massive Auslagerung rechenintensiver Aufgaben (Decodierung, Sensor-Fusion, RMS-Kalkulation, Filter-Algorithmen) in dedizierte Background-Worker (`fusion-worker.js`, `decode-worker.js`), um ein butterweiches 60fps UI zu garantieren.
-- **Three.js**: Für die 3D Kinematik-Visualisierung inkl. GLTF-Modellunterstützung.
+To enable this performance directly in the browser, the system utilizes state-of-the-art embedded and web technologies:
+
+### 📡 Multi-Node Sensor Network
+- **WiFi & ESP-NOW Hybrid**: Automatic role distribution into master and slave nodes. The master acts as a WiFi Access Point and serves the web dashboard. However, **every single node** (master and slaves alike) runs its own dedicated WebSocket server. The browser establishes a direct point-to-point connection to each sensor to stream data in parallel without bottlenecks. ESP-NOW is used **exclusively** for time synchronization.
+- **Microsecond Time-Sync**: Precise, network-wide time synchronization via ESP-NOW beacons to prevent drift between the nodes.
+
+### 🚀 High-Performance Firmware (C++ / ESP-IDF)
+- **Zero-Copy & StreamBuffers**: Efficient data processing in the ESP32-S3 using FreeRTOS `StreamBuffer`, minimized heap allocations, and binary WebSocket streaming.
+- **Hardware Touch-Wakeup**: Advanced sleep management including ESP32-S3 Touch FSM for extremely power-efficient battery operation.
+
+### 💻 Advanced Web Dashboard (Frontend)
+The web frontend, served entirely locally from the ESP32 (via LittleFS), provides a desktop-class analysis environment:
+- **Real-Time Charts**: Latency-free plotting of massive datasets using **uPlot**.
+- **WebWorker Architecture**: Massive offloading of computationally intensive tasks (decoding, sensor fusion, RMS calculation, filter algorithms) to dedicated background workers (`fusion-worker.js`, `decode-worker.js`) to guarantee a buttery-smooth 60fps UI.
+- **Three.js**: For 3D kinematics visualization including GLTF model support.
 
 ---
 
 ## 🚀 Getting Started
 
-### Installation & Flashen
-1. **Repository klonen**
+### Installation & Flashing
+1. **Clone the repository**
    ```bash
    git clone https://github.com/simenz85/senzIMU_multichannel.git
    cd senzIMU_multichannel
    ```
-2. **Projekt öffnen**
-   Öffne den Ordner in VS Code mit aktiver **PlatformIO** Extension.
-3. **Dateisystem flashen (Das Web-UI)**
-   Führe in PlatformIO `Upload File System image` aus (`pio run -t uploadfs`), um den Inhalt des `data/` Ordners (das Dashboard) auf den ESP32 zu flashen.
-4. **Firmware flashen**
-   Führe den `Upload` Task aus (`pio run -t upload`).
-5. **Verbinden & Testen**
-   Nach dem Neustart spannt der Master-ESP ein WLAN-Netzwerk auf (`senzIMU`). Verbinde dich damit und öffne `http://192.168.4.1` im Browser.
+2. **Open the project**
+   Open the folder in VS Code with the **PlatformIO** extension active.
+3. **Flash the filesystem (The Web UI)**
+   Run `Upload File System image` in PlatformIO (`pio run -t uploadfs`) to flash the contents of the `data/` folder (the dashboard) to the ESP32.
+4. **Flash the firmware**
+   Run the `Upload` task (`pio run -t upload`).
+5. **Connect & Test**
+   After rebooting, the master ESP will host a WiFi network (`senzIMU`). Connect to it and open `http://192.168.4.1` in your browser.
 
 ---
 
-## 🤝 Mitwirken & Lizenz
-Wir freuen uns über Bugreports und Feedback. Bitte beachte, dass rechenintensive UI-Logik immer in WebWorker ausgelagert werden muss.
+## 🤝 Contributing & License
+We welcome bug reports and feedback. Please note that computationally heavy UI logic must always be offloaded to WebWorkers.
 
-Dieses Projekt wird als **Freeware für nicht-kommerzielle Zwecke** bereitgestellt. Jeder ist eingeladen, die Software öffentlich herunterzuladen, auf eigener Hardware zu installieren und für private, akademische oder hobbymäßige Zwecke zu nutzen. Jedoch sind **Kopieren, Modifikationen (Forks), Weiterverbreitung und kommerzielle Nutzung strengstens untersagt**. Weitere Details findest du in der `LICENSE` Datei.
+This project is provided as **Freeware for Non-Commercial Use**. Anyone is welcome to publicly download, install, and use the software for personal, academic, or hobbyist purposes. However, **copying, modification (forking), redistribution, and commercial use are strictly prohibited**. Further details can be found in the `LICENSE` file.

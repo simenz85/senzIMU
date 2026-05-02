@@ -1,87 +1,89 @@
-# SenzIMU Multichannel – Wiki & Funktionsreferenz
+*Languages: [English](WIKI.md) | [Deutsch](WIKI_DE.md)*
 
-Willkommen im offiziellen Wiki für **SenzIMU Multichannel**. Dieses Dokument beschreibt alle wesentlichen Funktionen und Module des Systems im Detail.
+# SenzIMU Multichannel – Wiki & Feature Reference
 
----
-
-## Inhaltsverzeichnis
-1. [Sensoren & Abtastung](#1-sensoren--abtastung)
-2. [Multi-Node Topologie (WiFi & ESP-NOW)](#2-multi-node-topologie-wifi--esp-now)
-3. [Das Web-Dashboard](#3-das-web-dashboard)
-4. [Live 3D-Tracking & Kinematik](#4-live-3d-tracking--kinematik)
-5. [Vibrations-, Frequenz- & Modalanalyse](#5-vibrations--frequenz---modalanalyse)
-6. [Live-Kalibrierung & Sensor-Fusion](#6-live-kalibrierung--sensor-fusion)
-7. [Energiemanagement & Deep Sleep](#7-energiemanagement--deep-sleep)
+Welcome to the official wiki for **SenzIMU Multichannel**. This document details all essential functions and modules of the system.
 
 ---
 
-## 1. Sensoren & Abtastung
-
-SenzIMU unterstützt 6-DoF Inertialsensoren (IMU), typischerweise den [LSM6DSO](https://www.st.com/en/mems-and-sensors/lsm6dso.html) oder ähnliche ICs (ICM-42688).
-
-- **Variable Abtastraten:** Die Firmware ermöglicht die kabellose Live-Einstellung der Sampling-Rate (ODR – Output Data Rate) von **26 Hz bis zu 6660 Hz**.
-- **High-Speed SPI:** Die Kommunikation zwischen dem ESP32-S3 und der IMU erfolgt über einen dedizierten SPI-Bus (bis zu 5 MHz), was eine latenzfreie Erfassung selbst bei höchsten Frequenzen erlaubt.
-- **Hardware-Filterung:** Die Sensoren nutzen integrierte Anti-Aliasing-Filter (Low-Pass), deren Cutoff-Frequenzen sich direkt über das Web-Dashboard steuern lassen.
-
----
-
-## 2. Multi-Node Topologie (WiFi & ESP-NOW)
-
-Das System ist darauf ausgelegt, Daten von *mehreren* Messpunkten gleichzeitig und absolut synchron zu erfassen.
-
-- **Rollenverteilung:** Das System besteht aus **einem Master** und **mehreren Slaves (Nodes)**. 
-- **Der Master:** Der Master fungiert als WiFi Access Point (Router) und spannt das WLAN `senzIMU` auf. Er betreibt den HTTP-Server, welcher das Dashboard (HTML/JS) an den Client (Browser) liefert.
-- **Dezentrales WiFi Streaming:** Jeder einzelne Knoten (sowohl Master als auch Slaves) betreibt einen **eigenen, dedizierten WebSocket-Server**. Der Browser baut zu *jedem* Knoten eine direkte Punkt-zu-Punkt WebSocket-Verbindung auf, um die hochfrequenten Sensordaten parallel und ohne Flaschenhals zu empfangen. Der Master fungiert *nicht* als Relay für die Sensordaten der Slaves!
-- **Microsecond Time-Sync:** Der Master sendet periodisch Beacon-Frames über ESP-NOW. Die Slaves berechnen den Offset ihrer internen Timer zu dem des Masters. Alle Zeitstempel der Sensordaten werden vor der Übertragung korrigiert. Das Resultat ist eine garantierte Synchronität der Datenpakete auf die Mikrosekunde genau.
+## Table of Contents
+1. [Sensors & Sampling](#1-sensors--sampling)
+2. [Multi-Node Topology (WiFi & ESP-NOW)](#2-multi-node-topology-wifi--esp-now)
+3. [The Web Dashboard](#3-the-web-dashboard)
+4. [Live 3D Tracking & Kinematics](#4-live-3d-tracking--kinematics)
+5. [Vibration, Frequency & Modal Analysis](#5-vibration-frequency--modal-analysis)
+6. [Live Calibration & Sensor Fusion](#6-live-calibration--sensor-fusion)
+7. [Power Management & Deep Sleep](#7-power-management--deep-sleep)
 
 ---
 
-## 3. Das Web-Dashboard
+## 1. Sensors & Sampling
 
-Das Dashboard ist eine Single-Page-Application (SPA), geschrieben in Vanilla HTML/JS/CSS, die komplett im LittleFS Speicher des ESP32-S3 liegt.
+SenzIMU supports 6-DoF inertial sensors (IMUs), typically the [LSM6DSO](https://www.st.com/en/mems-and-sensors/lsm6dso.html) or similar ICs (ICM-42688).
 
-- **Lokales Hosting:** Es ist keine Internetverbindung oder App-Installation erforderlich.
-- **WebWorker Architektur:** Um bei bis zu 6660 Hz auf mehreren Kanälen nicht den Browser-Thread zu blockieren, lagert SenzIMU rechenintensive Prozesse in WebWorker aus:
-  - `decode-worker.js`: Dekodiert die binären WebSocket-Streams in Float-Arrays.
-  - `fusion-worker.js`: Berechnet die Quaternions (Orientierung) via Mahony/Madgwick Filter.
-  - `fft-worker.js`: Führt die Fast-Fourier-Transformationen im Hintergrund aus.
-- **Performance-Charting:** Zum Zeichnen der Echtzeit-Graphen kommt **uPlot** zum Einsatz, was das latenzfreie Rendering von Millionen von Datenpunkten im Browser erlaubt.
+- **Variable Sampling Rates:** The firmware allows for wireless, live adjustments of the sampling rate (ODR – Output Data Rate) from **26 Hz up to 6660 Hz**.
+- **High-Speed SPI:** Communication between the ESP32-S3 and the IMU utilizes a dedicated SPI bus (up to 5 MHz), enabling latency-free acquisition even at the highest frequencies.
+- **Hardware Filtering:** The sensors utilize integrated anti-aliasing filters (low-pass), the cutoff frequencies of which can be controlled directly via the web dashboard.
 
 ---
 
-## 4. Live 3D-Tracking & Kinematik
+## 2. Multi-Node Topology (WiFi & ESP-NOW)
 
-Eines der zentralen Features ist das Verfolgen der Bewegung der Sensoren im Raum.
+The system is designed to acquire data from *multiple* measuring points simultaneously and perfectly synchronized.
 
-- **Sensor Fusion:** Die Rohdaten (Beschleunigung und Gyroskop) werden durch einen AHRS-Algorithmus (Attitude and Heading Reference System) fusioniert. Dies verhindert den "Gyro-Drift" und liefert absolute Quaternions.
-- **Three.js Rendering:** Im Dashboard wird eine virtuelle 3D-Szene aufgebaut. Die berechneten Quaternions werden auf 3D-Modelle (z. B. `Duck.glb` oder eigene Modelle) angewendet.
-- **Kinematische Translation:** Neben der Drehung wird durch doppelte Integration der beschleunigungsbereinigten Daten (nach Abzug der Gravitation) die Positionsänderung (Translation) im Raum ermittelt.
-
----
-
-## 5. Vibrations-, Frequenz- & Modalanalyse
-
-Bei hochfrequenter Abtastung dient SenzIMU als fortgeschrittenes Diagnosetool für mechanische Schwingungen.
-
-- **Live-FFT:** Die Zeitreihendaten der Sensoren werden kontinuierlich in den Frequenzbereich transformiert. Damit lassen sich dominierende Schwingungen und Resonanzen ermitteln (z. B. Rotordrehzahl eines Motors).
-- **Wasserfall-Spektrogramm:** Das Dashboard visualisiert die FFT-Daten über die Zeit als 2.5D Spektrogramm. Farbverläufe repräsentieren die Intensität (Amplitude) bestimmter Frequenzen im Zeitverlauf.
-- **Modalanalyse:** Da alle Sensorknoten im Netzwerk hochpräzise zeitsynchronisiert sind, können sie gleichzeitig an verschiedenen Punkten einer Struktur (z. B. einem Maschinengehäuse oder einem Träger) angebracht werden. Durch den Vergleich der Phasen und Amplituden zwischen den Sensoren bei spezifischen Resonanzfrequenzen lassen sich **Schwingungsformen (Mode Shapes)** und das dynamische Verhalten der gesamten Struktur live ableiten.
+- **Role Distribution:** The system consists of **one Master** and **multiple Slaves (Nodes)**. 
+- **The Master:** The master acts as a WiFi Access Point (router) and hosts the `senzIMU` WiFi network. It runs the HTTP server that delivers the dashboard (HTML/JS) to the client (browser).
+- **Decentralized WiFi Streaming:** Every single node (master and slaves alike) runs its **own dedicated WebSocket server**. The browser establishes a direct point-to-point WebSocket connection to *each* node to receive the high-frequency sensor data in parallel without any bottlenecks. The master does *not* act as a relay for the slaves' sensor data!
+- **Microsecond Time-Sync:** The master periodically sends beacon frames via ESP-NOW. The slaves calculate the offset of their internal timers relative to the master's. All timestamps of the sensor data are corrected prior to transmission. The result is guaranteed synchronicity of data packets down to the microsecond.
 
 ---
 
-## 6. Live-Kalibrierung & Sensor-Fusion
+## 3. The Web Dashboard
 
-Jeder Sensor unterliegt minimalen fertigungsbedingten Abweichungen (Offsets). SenzIMU bietet integrierte Tools zur Kalibrierung:
+The dashboard is a Single Page Application (SPA) written in Vanilla HTML/JS/CSS, hosted entirely within the LittleFS memory of the ESP32-S3.
 
-- **Gyroskop-Kalibrierung (Zero-Rate Offset):** Der Sensor wird in Ruhelage gemessen. Der gemessene Durchschnittswert wird als Offset dauerhaft auf dem NVS (Non-Volatile Storage) des ESP32-S3 hinterlegt und künftig automatisch von den Rohdaten abgezogen.
-- **Beschleunigungs-Kalibrierung (Gravity-Cut):** Ermittlung des exakten 1G-Vektors am Einsatzort.
-- **Remote-Konfiguration:** Sämtliche Kalibrierungswerte sowie Einstellungen (Filter, Range, Samplerate) können im Live-Betrieb vom Browser aus via WebSocket an die Knoten gesendet werden.
+- **Local Hosting:** No internet connection or app installation is required.
+- **WebWorker Architecture:** To prevent blocking the browser thread at up to 6660 Hz across multiple channels, SenzIMU offloads computationally intensive processes to WebWorkers:
+  - `decode-worker.js`: Decodes the binary WebSocket streams into Float arrays.
+  - `fusion-worker.js`: Calculates quaternions (orientation) via Mahony/Madgwick filters.
+  - `fft-worker.js`: Executes Fast Fourier Transforms in the background.
+- **Performance Charting:** **uPlot** is used to draw the real-time graphs, allowing for the latency-free rendering of millions of data points directly in the browser.
 
 ---
 
-## 7. Energiemanagement & Deep Sleep
+## 4. Live 3D Tracking & Kinematics
 
-Für den Batteriebetrieb (z. B. bei autarken Sensorknoten an schwer zugänglichen Stellen) ist das Energiemanagement entscheidend.
+One of the central features is tracking the movement of the sensors in space.
 
-- **Deep Sleep:** Wenn keine Verbindung zum Web-Dashboard aktiv ist (Timeout), legen sich die ESP32-S3 Knoten automatisch in den stromsparenden Deep Sleep Modus (wenige µA Verbrauch).
-- **Touch-Wakeup (FSM):** SenzIMU nutzt den Hardware-Touch-Controller des ESP32-S3. Die RTC-Peripherie (Real-Time Clock) scannt im Schlafzustand periodisch einen kapazitiven Touch-Pin (z. B. am Gehäuse). Wird der Sensor berührt oder aufgenommen, wacht der Chip innerhalb von Millisekunden auf, verbindet sich mit dem Netzwerk und beginnt mit dem Streaming.
+- **Sensor Fusion:** The raw data (acceleration and gyroscope) is fused using an AHRS (Attitude and Heading Reference System) algorithm. This prevents "gyro drift" and provides absolute quaternions.
+- **Three.js Rendering:** A virtual 3D scene is built within the dashboard. The calculated quaternions are applied to 3D models (e.g., `Duck.glb` or custom models).
+- **Kinematic Translation:** In addition to rotation, double integration of the acceleration-adjusted data (after subtracting gravity) determines the change in position (translation) in space.
+
+---
+
+## 5. Vibration, Frequency & Modal Analysis
+
+At high-frequency sampling rates, SenzIMU serves as an advanced diagnostic tool for mechanical vibrations.
+
+- **Live FFT:** The sensor's time-series data is continuously transformed into the frequency domain. This reveals dominant vibrations and resonances (e.g., the rotor speed of a motor).
+- **Waterfall Spectrogram:** The dashboard visualizes the FFT data over time as a 2.5D spectrogram. Color gradients represent the intensity (amplitude) of specific frequencies over time.
+- **Modal Analysis:** Because all sensor nodes in the network are highly precisely time-synchronized, they can be mounted simultaneously at different points on a structure (e.g., a machine housing or a beam). By comparing the phases and amplitudes between the sensors at specific resonant frequencies, **mode shapes** and the dynamic behavior of the entire structure can be derived live.
+
+---
+
+## 6. Live Calibration & Sensor Fusion
+
+Every sensor has minimal manufacturing variances (offsets). SenzIMU provides integrated tools for calibration:
+
+- **Gyroscope Calibration (Zero-Rate Offset):** The sensor is measured while at rest. The measured average value is permanently stored as an offset on the NVS (Non-Volatile Storage) of the ESP32-S3 and is automatically subtracted from the raw data going forward.
+- **Acceleration Calibration (Gravity-Cut):** Determines the exact 1G vector at the operating location.
+- **Remote Configuration:** All calibration values and settings (filters, range, sample rate) can be sent live from the browser to the nodes via WebSocket.
+
+---
+
+## 7. Power Management & Deep Sleep
+
+Power management is crucial for battery operation (e.g., standalone sensor nodes in hard-to-reach areas).
+
+- **Deep Sleep:** If no connection to the web dashboard is active (timeout), the ESP32-S3 nodes automatically enter a power-saving deep sleep mode (consuming only a few µA).
+- **Touch-Wakeup (FSM):** SenzIMU utilizes the hardware touch controller of the ESP32-S3. While in the sleep state, the RTC (Real-Time Clock) peripheral periodically scans a capacitive touch pin (e.g., on the housing). If the sensor is touched or picked up, the chip wakes up within milliseconds, connects to the network, and begins streaming.
