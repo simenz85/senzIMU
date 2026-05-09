@@ -4,6 +4,13 @@
 
 ![SenzIMU](https://img.shields.io/badge/Platform-ESP32--S3-blue) ![Framework](https://img.shields.io/badge/Framework-ESP--IDF%20(C++)-orange) ![UI](https://img.shields.io/badge/Frontend-Web%2FThree.js-yellow) ![Topology](https://img.shields.io/badge/Network-ESP--NOW%20%2B%20WiFi-success)
 
+> **Zero-Latency 3D Tracking & Vibration Analysis right in your browser. Fully synchronized.**
+> 
+> <div align="center">
+>   <!-- PLATZHALTER: Füge hier ein kurzes GIF (3D Tracking) oder ein Hero-Bild ein -->
+>   <img src="docs/assets/hero_demo.gif" alt="SenzIMU 3D Tracking Demo" width="80%">
+> </div>
+
 ## Was ist SenzIMU und was kann es?
 
 SenzIMU Multichannel ist ein kabelloses, autarkes **Sensor-Netzwerk zur Echtzeit-Bewegungs- und Vibrationsanalyse**. 
@@ -14,12 +21,15 @@ Man befestigt mehrere winzige Sensorknoten (Nodes) an beliebigen Objekten, Masch
 
 1. **Live 3D-Tracking (Kinematik & Orientierung)**
    Das System berechnet aus den Rohdaten die exakte räumliche Ausrichtung (Quaternions) und kinematische Translation (Bewegung im Raum) aller verbundenen Sensoren. Diese werden im Browser live als 3D-Modelle animiert. Bewegt man einen Sensor in der echten Welt, bewegt sich das Modell auf dem Bildschirm latenzfrei mit.
+   <br>![3D Tracking](docs/assets/3d_tracking.png)
 
 2. **Vibrations-, Frequenz- & Modalanalyse**
    Die Sensoren unterstützen eine **variable Abtastrate von 26 bis 6660 Hz** (z. B. mit dem [LSM6DSO](https://www.st.com/en/mems-and-sensors/lsm6dso.html)). Das Web-Dashboard berechnet daraus in Echtzeit eine Fast-Fourier-Transformation (FFT) und zeigt hochauflösende Frequenzspektren sowie **Wasserfall-Spektrogramme** an. Durch die synchronisierte Aufzeichnung an mehreren Punkten gleichzeitig ermöglicht das System eine umfassende **Modalanalyse** zur Bestimmung von Eigenfrequenzen und Schwingungsformen von Maschinen und Strukturen.
+   <br>![FFT Spectrogram](docs/assets/fft_spectrogram.png)
 
 3. **Vergleichende Sensordiagnostik**
    Alle Sensoren im Netzwerk sind auf die Mikrosekunde genau synchronisiert. Die hochperformanten Live-Diagramme erlauben es, die Beschleunigungs- und Gyroskop-Werte mehrerer Sensoren übereinanderzulegen und exakt zu vergleichen. Du erkennst sofort kleinste Verzögerungen oder Abweichungen zwischen unterschiedlichen Objekten.
+   <br>![Livechart Multichannel](docs/assets/livechart_multichannel.png)
 
 4. **Live-Kalibrierung (Over-the-Air)**
    Jeder Sensor lässt sich direkt aus dem Dashboard heraus kalibrieren. Parameter wie Gyroskop-Offsets, Skalierung oder Gravity-Cutoffs können per Knopfdruck gemessen und dauerhaft auf den jeweiligen Sensorknoten gespeichert werden.
@@ -42,6 +52,32 @@ Man befestigt mehrere winzige Sensorknoten (Nodes) an beliebigen Objekten, Masch
 Um diese Leistung direkt im Browser zu ermöglichen, nutzt das System modernste Embedded- und Web-Technologien:
 
 ### 📡 Multi-Node Sensor-Netzwerk
+
+```mermaid
+graph TD
+    Browser[Web Browser Dashboard]
+
+    subgraph Hardware Network
+        Master[Master Node ESP32-S3<br>WiFi Access Point]
+        Slave1[Slave Node 1 ESP32-S3]
+        Slave2[Slave Node 2 ESP32-S3]
+    end
+
+    %% WiFi/Websocket connections
+    Browser <==>|WebSocket Stream| Master
+    Browser <==>|WebSocket Stream| Slave1
+    Browser <==>|WebSocket Stream| Slave2
+
+    %% ESP-NOW Sync
+    Master -.->|ESP-NOW Time Sync Beacons| Slave1
+    Master -.->|ESP-NOW Time Sync Beacons| Slave2
+
+    style Browser fill:#f9f,stroke:#333,stroke-width:2px
+    style Master fill:#bbf,stroke:#333,stroke-width:2px
+    style Slave1 fill:#dfd,stroke:#333,stroke-width:1px
+    style Slave2 fill:#dfd,stroke:#333,stroke-width:1px
+```
+
 - **WiFi & ESP-NOW Hybrid**: Automatische Rollenverteilung in Master und Slave-Knoten. Der Master fungiert als WiFi Access Point und liefert das Web-Dashboard aus. **Jeder Knoten** (sowohl Master als auch Slaves) betreibt jedoch einen eigenen, dedizierten WebSocket-Server. Der Browser baut zu jedem Sensor eine direkte Punkt-zu-Punkt-Verbindung auf, um Daten ohne Flaschenhals parallel zu streamen. ESP-NOW wird **ausschließlich** für die Zeitsynchronisation genutzt.
 - **Microsecond Time-Sync**: Präzise, netzwerkweite Zeitsynchronisation über ESP-NOW Beacons zur Vermeidung von Drift zwischen den Knoten.
 

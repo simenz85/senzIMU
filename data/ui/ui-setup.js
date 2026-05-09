@@ -411,6 +411,7 @@ export function buildSettingsColumnForNode(nodeIp, channelName, color, nodeMac =
         <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; gap: 8px;">
            <button id="ledConfigBtn_${safeIp}" style="padding:6px; border-radius: 4px; background: rgba(56, 101, 150, 0.3); border: 1px solid #386596; color: #fff; font-size: 0.8rem; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(56,101,150,0.6)'" onmouseout="this.style.background='rgba(56,101,150,0.3)'">🎨 LED Config</button>
            <button id="identifyBtn_${safeIp}" style="padding:6px; border-radius: 4px; background: rgba(0, 229, 255, 0.2); border: 1px solid #00e5ff; color: #00e5ff; font-size: 0.8rem; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(0,229,255,0.4)'" onmouseout="this.style.background='rgba(0,229,255,0.2)'">🚨 Identify</button>
+           <button id="imuUlpBtn_${safeIp}" style="padding:6px; border-radius: 4px; background: rgba(255, 191, 0, 0.16); border: 1px solid rgba(255, 191, 0, 0.55); color: #ffd166; font-size: 0.8rem; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,191,0,0.3)'" onmouseout="this.style.background='rgba(255,191,0,0.16)'">IMU ULP Test</button>
            <button id="shutdownBtn_${safeIp}" style="padding:6px; border-radius: 4px; background: rgba(255,0,0,0.15); border: 1px solid rgba(255,0,0,0.5); color: #ff6b6b; font-size: 0.8rem; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,0,0,0.3)'" onmouseout="this.style.background='rgba(255,0,0,0.15)'">Shutdown</button>
         </div>
 
@@ -526,6 +527,23 @@ export function buildSettingsColumnForNode(nodeIp, channelName, color, nodeMac =
             sendConfigToSelectedSensor({ COMMAND: "IDENTIFY" });
             
             if (targetSelect && oldTarget) targetSelect.value = oldTarget; // revert
+        });
+    }
+
+    const imuUlpBtn = document.getElementById(`imuUlpBtn_${safeIp}`);
+    if (imuUlpBtn) {
+        imuUlpBtn.addEventListener("click", () => {
+            const oldTarget = document.getElementById("settingsSensorTarget")?.value;
+            const targetSelect = document.getElementById("settingsSensorTarget");
+            if (targetSelect) targetSelect.value = nodeIp; // fake context
+
+            sendConfigToSelectedSensor({ COMMAND: "IMU_ULP_TEST" });
+
+            if (targetSelect && oldTarget) targetSelect.value = oldTarget; // revert
+
+            imuUlpBtn.innerText = "ULP aktiv...";
+            imuUlpBtn.style.opacity = "0.6";
+            imuUlpBtn.disabled = true;
         });
     }
 

@@ -397,6 +397,7 @@ static void wifi_watchdog_task(void *arg) {
 }
 
 static volatile bool g_force_deep_sleep = false;
+extern LSM6DSO imu;
 
 static void sleep_watchdog_task(void *arg) {
     TickType_t last_active_time = xTaskGetTickCount();
@@ -429,6 +430,16 @@ static void sleep_watchdog_task(void *arg) {
                 }
                 vTaskDelay(pdMS_TO_TICKS(100));
 
+                // IMU erst abschalten, bevor das Touch-Wakeup scharf gemacht wird.
+                imu.setAccelDataRate(0);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                //imu.setAccelBatchDataRate(26);
+                imu.setGyroDataRate(0);
+               // imu.setGyroBatchDataRate(26);
+                //imu.setTempSamplingRate(0);
+                
+                vTaskDelay(pdMS_TO_TICKS(500));
+                
                 // Touch-Sensor Initialisieren (D4 = GPIO5 = TOUCH5)
                 touch_pad_init();
                 #if SOC_TOUCH_SENSOR_VERSION == 2 // ESP32-S2 und S3

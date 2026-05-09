@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>senzIMU Touch Test</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e141b;
+      --panel: #17212b;
+      --border: rgba(255,255,255,0.08);
+      --text: #edf3f8;
+      --muted: rgba(237,243,248,0.72);
+      --accent: #ffd166;
+      --ok: #67e8a5;
+      --bad: #ff8a8a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(255, 209, 102, 0.14), transparent 32%),
+        linear-gradient(180deg, #111922 0%, #0b1016 100%);
+      color: var(--text);
+    }
+    .wrap {
+      width: min(920px, calc(100% - 32px));
+      margin: 32px auto;
+      display: grid;
+      gap: 18px;
+    }
+    .card {
+      background: rgba(23, 33, 43, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.25);
+      backdrop-filter: blur(8px);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.4rem;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .metric {
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .metric-label {
+      font-size: 0.76rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .metric-value {
+      font-size: 1.6rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .target-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 16px;
+    }
+    .target-row label {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .target-row input {
+      min-width: 220px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      font: inherit;
+    }
+    button {
+      border: 1px solid rgba(255, 209, 102, 0.45);
+      background: rgba(255, 209, 102, 0.12);
+      color: var(--accent);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.secondary {
+      border-color: rgba(103, 232, 165, 0.4);
+      background: rgba(103, 232, 165, 0.1);
+      color: var(--ok);
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+    .status {
+      margin-top: 12px;
+      min-height: 1.4em;
+      color: var(--muted);
+    }
+    .status.bad { color: var(--bad); }
+    .status.ok { color: var(--ok); }
+    canvas {
+      width: 100%;
+      height: 240px;
+      display: block;
+      background: rgba(0,0,0,0.18);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.06);
+      margin-top: 14px;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card">
+      <h1>Touch Test UI</h1>
+      <p>Live-Ansicht für Touch-Pad 5. Damit können wir sehen, ob sich Rohwert, Benchmark oder berechnete Schwelle beim ULP-Wechsel auffällig verhalten.</p>
+      <div class="target-row">
+        <label for="targetHost">Sensor-Host</label>
+        <input id="targetHost" type="text" placeholder="z. B. 192.168.4.1">
+        <button id="applyTargetBtn" class="secondary">Host übernehmen</button>
+      </div>
+      <div class="toolbar">
+        <button id="ulpBtn">IMU ULP Test senden</button>
+        <button id="armBtn" class="secondary">Touch Sleep nur scharf schalten</button>
+        <button id="armWaitBtn" class="secondary">Arm + 1s Wait</button>
+        <button id="refreshBtn" class="secondary">Neu pollen</button>
+      </div>
+      <div class="target-row">
+        <label for="thresholdInput">Sleep-Threshold</label>
+        <input id="thresholdInput" type="number" value="1200" step="100" min="0">
+      </div>
+      <div id="commandStatus" class="status">Bereit.</div>
+    </section>
+
+    <section class="card">
+      <div class="grid">
+        <div class="metric">
+          <div class="metric-label">Raw</div>
+          <div id="rawValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Benchmark</div>
+          <div id="benchmarkValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Sleep Raw</div>
+          <div id="sleepRawValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Sleep Smooth</div>
+          <div id="sleepSmoothValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Threshold</div>
+          <div id="thresholdValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Delta (Raw-Threshold)</div>
+          <div id="deltaValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Touch Status Mask</div>
+          <div id="touchStatusValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Intr Status Mask</div>
+          <div id="intrStatusValue" class="metric-value mono">-</div>
+        </div>
+      </div>
+      <div id="pollStatus" class="status">Warte auf Daten ...</div>
+      <canvas id="chart" width="880" height="240"></canvas>
+    </section>
+
+    <section class="card">
+      <h1 style="font-size:1rem; margin-bottom: 12px;">Pre-Sleep Snapshot</h1>
+      <div class="grid">
+        <div class="metric">
+          <div class="metric-label">Raw</div>
+          <div id="preRawValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Sleep Raw</div>
+          <div id="preSleepRawValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Sleep Smooth</div>
+          <div id="preSleepSmoothValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Benchmark</div>
+          <div id="preBenchmarkValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Threshold</div>
+          <div id="preThresholdValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Touch Status Mask</div>
+          <div id="preTouchStatusValue" class="metric-value mono">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Intr Status Mask</div>
+          <div id="preIntrStatusValue" class="metric-value mono">-</div>
+        </div>
+      </div>
+      <div id="preSleepStatus" class="status">Noch kein Snapshot.</div>
+    </section>
+  </div>
+
+  <script>
+    const rawEl = document.getElementById('rawValue');
+    const benchmarkEl = document.getElementById('benchmarkValue');
+    const sleepRawEl = document.getElementById('sleepRawValue');
+    const sleepSmoothEl = document.getElementById('sleepSmoothValue');
+    const thresholdEl = document.getElementById('thresholdValue');
+    const deltaEl = document.getElementById('deltaValue');
+    const touchStatusEl = document.getElementById('touchStatusValue');
+    const intrStatusEl = document.getElementById('intrStatusValue');
+    const pollStatusEl = document.getElementById('pollStatus');
+    const commandStatusEl = document.getElementById('commandStatus');
+    const ulpBtn = document.getElementById('ulpBtn');
+    const armBtn = document.getElementById('armBtn');
+    const armWaitBtn = document.getElementById('armWaitBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const targetHostInput = document.getElementById('targetHost');
+    const applyTargetBtn = document.getElementById('applyTargetBtn');
+    const thresholdInput = document.getElementById('thresholdInput');
+    const preRawEl = document.getElementById('preRawValue');
+    const preSleepRawEl = document.getElementById('preSleepRawValue');
+    const preSleepSmoothEl = document.getElementById('preSleepSmoothValue');
+    const preBenchmarkEl = document.getElementById('preBenchmarkValue');
+    const preThresholdEl = document.getElementById('preThresholdValue');
+    const preTouchStatusEl = document.getElementById('preTouchStatusValue');
+    const preIntrStatusEl = document.getElementById('preIntrStatusValue');
+    const preSleepStatusEl = document.getElementById('preSleepStatus');
+    const canvas = document.getElementById('chart');
+    const ctx = canvas.getContext('2d');
+
+    const samples = [];
+    const maxSamples = 140;
+    const queryHost = new URLSearchParams(window.location.search).get('host');
+    const defaultHost = (location.hostname && location.hostname !== '127.0.0.1' && location.hostname !== 'localhost')
+      ? location.host
+      : '192.168.4.1';
+    let targetHost = localStorage.getItem('touchTestTargetHost') || queryHost || defaultHost;
+    targetHostInput.value = targetHost;
+
+    function getHttpBase() {
+      return /^https?:\/\//i.test(targetHost) ? targetHost : `http://${targetHost}`;
+    }
+
+    function getWsBase() {
+      if (/^wss?:\/\//i.test(targetHost)) return targetHost;
+      return `ws://${targetHost}`;
+    }
+
+    function applyTargetHost() {
+      const value = targetHostInput.value.trim();
+      if (!value) return;
+      targetHost = value;
+      localStorage.setItem('touchTestTargetHost', targetHost);
+      commandStatusEl.textContent = `Zielhost gesetzt: ${targetHost}`;
+      commandStatusEl.className = 'status ok';
+    }
+
+    function drawChart() {
+      const { width, height } = canvas;
+      ctx.clearRect(0, 0, width, height);
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 4; i++) {
+        const y = (height / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+
+      if (samples.length < 2) return;
+
+      const values = samples.flatMap(s => [s.raw, s.threshold]).filter(Number.isFinite);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = Math.max(1, max - min);
+
+      const mapY = (value) => height - ((value - min) / span) * (height - 20) - 10;
+      const stepX = width / Math.max(1, maxSamples - 1);
+
+      const drawLine = (key, stroke) => {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        samples.forEach((sample, index) => {
+          const x = index * stepX;
+          const y = mapY(sample[key]);
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      };
+
+      drawLine('raw', '#ffd166');
+      drawLine('threshold', '#67e8a5');
+
+      ctx.fillStyle = 'rgba(237,243,248,0.8)';
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.fillText(`min ${min}`, 10, height - 8);
+      ctx.fillText(`max ${max}`, 10, 16);
+    }
+
+    async function pollTouch() {
+      try {
+        const response = await fetch(`${getHttpBase()}/api/touch_debug?ts=${Date.now()}`, { cache: 'no-store' });
+        const data = await response.json();
+
+        rawEl.textContent = data.raw ?? '-';
+        benchmarkEl.textContent = data.benchmark ?? '-';
+        sleepRawEl.textContent = data.sleepRaw ?? '-';
+        sleepSmoothEl.textContent = data.sleepSmooth ?? '-';
+        thresholdEl.textContent = data.threshold ?? '-';
+        touchStatusEl.textContent = data.touchStatusMask ?? '-';
+        intrStatusEl.textContent = data.intrStatusMask ?? '-';
+
+        if (data.preSleepSnapshotValid && data.preSleep) {
+          preRawEl.textContent = data.preSleep.raw ?? '-';
+          preSleepRawEl.textContent = data.preSleep.sleepRaw ?? '-';
+          preSleepSmoothEl.textContent = data.preSleep.sleepSmooth ?? '-';
+          preBenchmarkEl.textContent = data.preSleep.benchmark ?? '-';
+          preThresholdEl.textContent = data.preSleep.threshold ?? '-';
+          preTouchStatusEl.textContent = data.preSleep.touchStatusMask ?? '-';
+          preIntrStatusEl.textContent = data.preSleep.intrStatusMask ?? '-';
+          preSleepStatusEl.textContent = `Snapshot vorhanden. Fehler: ${data.preSleep.error}`;
+          preSleepStatusEl.className = `status ${data.preSleep.error === 'ESP_OK' ? 'ok' : 'bad'}`;
+        }
+
+        const delta = Number(data.raw) - Number(data.threshold);
+        deltaEl.textContent = Number.isFinite(delta) ? delta : '-';
+
+        pollStatusEl.textContent = data.ok
+          ? `Pad ${data.pad}, Touch-Sensor-Version ${data.socTouchVersion}, Fehler: ${data.error}, Arm-Fehler: ${data.armError}, ArmCount: ${data.armCount}`
+          : `Lesefehler: ${data.error}`;
+        pollStatusEl.className = `status ${data.ok ? 'ok' : 'bad'}`;
+
+        if (Number.isFinite(data.raw) && Number.isFinite(data.threshold)) {
+          samples.push({ raw: Number(data.raw), threshold: Number(data.threshold) });
+          if (samples.length > maxSamples) samples.shift();
+          drawChart();
+        }
+      } catch (error) {
+        pollStatusEl.textContent = `Polling fehlgeschlagen: ${error.message}`;
+        pollStatusEl.className = 'status bad';
+      }
+    }
+
+    async function armTouchSleepOnly() {
+      armBtn.disabled = true;
+      commandStatusEl.textContent = 'Scharte Touch-Sleep-Konfiguration ...';
+      commandStatusEl.className = 'status';
+
+      try {
+        const response = await fetch(`${getHttpBase()}/api/touch_debug/arm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ threshold: Number(thresholdInput.value || 0) })
+        });
+        const data = await response.json();
+        commandStatusEl.textContent = data.ok
+          ? `Touch-Sleep geschärft. Threshold=${data.threshold}, ArmCount=${data.armCount}`
+          : `Touch-Sleep konnte nicht geschärft werden: ${data.error}`;
+        commandStatusEl.className = `status ${data.ok ? 'ok' : 'bad'}`;
+        pollTouch();
+      } catch (error) {
+        commandStatusEl.textContent = `Arm fehlgeschlagen: ${error.message}`;
+        commandStatusEl.className = 'status bad';
+      } finally {
+        armBtn.disabled = false;
+      }
+    }
+
+    async function armTouchSleepAndWait() {
+      armWaitBtn.disabled = true;
+      commandStatusEl.textContent = 'Queue echte Arm-Sequenz mit 1s Wait ...';
+      commandStatusEl.className = 'status';
+
+      try {
+        const response = await fetch(`${getHttpBase()}/api/touch_debug/arm_wait`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ threshold: Number(thresholdInput.value || 0) })
+        });
+        const data = await response.json();
+        commandStatusEl.textContent = data.ok
+          ? `Arm+Wait gestartet. Threshold=${data.threshold}. Snapshot wird per Polling erscheinen.`
+          : `Arm+Wait fehlgeschlagen: ${data.error}`;
+        commandStatusEl.className = `status ${data.ok ? 'ok' : 'bad'}`;
+        setTimeout(() => pollTouch(), 300);
+        setTimeout(() => pollTouch(), 1200);
+      } catch (error) {
+        commandStatusEl.textContent = `Arm+Wait fehlgeschlagen: ${error.message}`;
+        commandStatusEl.className = 'status bad';
+      } finally {
+        armWaitBtn.disabled = false;
+      }
+    }
+
+    function sendUlpCommand() {
+      ulpBtn.disabled = true;
+      commandStatusEl.textContent = 'Sende IMU_ULP_TEST ...';
+      commandStatusEl.className = 'status';
+
+      const ws = new WebSocket(`${getWsBase()}/ws`);
+      ws.addEventListener('open', () => {
+        ws.send(JSON.stringify({ COMMAND: 'IMU_ULP_TEST' }));
+        commandStatusEl.textContent = 'IMU_ULP_TEST gesendet.';
+        commandStatusEl.className = 'status ok';
+        setTimeout(() => ws.close(), 150);
+        setTimeout(() => { ulpBtn.disabled = false; }, 1000);
+      });
+      ws.addEventListener('error', () => {
+        commandStatusEl.textContent = 'WebSocket-Verbindung fehlgeschlagen.';
+        commandStatusEl.className = 'status bad';
+        ulpBtn.disabled = false;
+      });
+    }
+
+    ulpBtn.addEventListener('click', sendUlpCommand);
+    armBtn.addEventListener('click', armTouchSleepOnly);
+    armWaitBtn.addEventListener('click', armTouchSleepAndWait);
+    refreshBtn.addEventListener('click', pollTouch);
+    applyTargetBtn.addEventListener('click', applyTargetHost);
+
+    pollTouch();
+    setInterval(pollTouch, 400);
+  </script>
+</body>
+</html>

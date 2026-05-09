@@ -4,6 +4,13 @@
 
 ![SenzIMU](https://img.shields.io/badge/Platform-ESP32--S3-blue) ![Framework](https://img.shields.io/badge/Framework-ESP--IDF%20(C++)-orange) ![UI](https://img.shields.io/badge/Frontend-Web%2FThree.js-yellow) ![Topology](https://img.shields.io/badge/Network-ESP--NOW%20%2B%20WiFi-success)
 
+> **Zero-Latency 3D Tracking & Vibration Analysis right in your browser. Fully synchronized.**
+> 
+> <div align="center">
+>   <!-- PLACEHOLDER: Insert a short GIF (3D Tracking) or a Hero image here -->
+>   <img src="docs/assets/hero_demo.gif" alt="SenzIMU 3D Tracking Demo" width="80%">
+> </div>
+
 ## What is SenzIMU and what can it do?
 
 SenzIMU Multichannel is a wireless, standalone **sensor network for real-time motion and vibration analysis**. 
@@ -14,12 +21,15 @@ You attach multiple tiny sensor nodes to any objects, machines, or body parts. O
 
 1. **Live 3D Tracking (Kinematics & Orientation)**
    The system calculates the exact spatial orientation (quaternions) and kinematic translation (movement in space) of all connected sensors from the raw data. These are animated live in the browser as 3D models. If you move a sensor in the real world, the model on the screen moves instantly with zero latency.
+   <br>![3D Tracking](docs/assets/3d_tracking.png)
 
 2. **Vibration, Frequency & Modal Analysis**
    The sensors support a **variable sampling rate from 26 to 6660 Hz** (e.g., using the [LSM6DSO](https://www.st.com/en/mems-and-sensors/lsm6dso.html)). The web dashboard uses this to calculate a Fast Fourier Transform (FFT) in real-time, displaying high-resolution frequency spectra and **waterfall spectrograms**. By capturing synchronized data across multiple points simultaneously, the system enables comprehensive **modal analysis** to determine natural frequencies and mode shapes of machines and structures.
+   <br>![FFT Spectrogram](docs/assets/fft_spectrogram.png)
 
 3. **Comparative Sensor Diagnostics**
    All sensors in the network are synchronized down to the microsecond. The high-performance live charts allow you to overlay and exactly compare the acceleration and gyroscope values of multiple sensors. You immediately spot the slightest delays or deviations between different objects.
+   <br>![Livechart Multichannel](docs/assets/livechart_multichannel.png)
 
 4. **Live Calibration (Over-the-Air)**
    Each sensor can be calibrated directly from the dashboard. Parameters like gyroscope offsets, scaling, or gravity cutoffs can be measured at the push of a button and permanently saved on the respective sensor node.
@@ -42,6 +52,32 @@ You attach multiple tiny sensor nodes to any objects, machines, or body parts. O
 To enable this performance directly in the browser, the system utilizes state-of-the-art embedded and web technologies:
 
 ### 📡 Multi-Node Sensor Network
+
+```mermaid
+graph TD
+    Browser[Web Browser Dashboard]
+
+    subgraph Hardware Network
+        Master[Master Node ESP32-S3<br>WiFi Access Point]
+        Slave1[Slave Node 1 ESP32-S3]
+        Slave2[Slave Node 2 ESP32-S3]
+    end
+
+    %% WiFi/Websocket connections
+    Browser <==>|WebSocket Stream| Master
+    Browser <==>|WebSocket Stream| Slave1
+    Browser <==>|WebSocket Stream| Slave2
+
+    %% ESP-NOW Sync
+    Master -.->|ESP-NOW Time Sync Beacons| Slave1
+    Master -.->|ESP-NOW Time Sync Beacons| Slave2
+
+    style Browser fill:#f9f,stroke:#333,stroke-width:2px
+    style Master fill:#bbf,stroke:#333,stroke-width:2px
+    style Slave1 fill:#dfd,stroke:#333,stroke-width:1px
+    style Slave2 fill:#dfd,stroke:#333,stroke-width:1px
+```
+
 - **WiFi & ESP-NOW Hybrid**: Automatic role distribution into master and slave nodes. The master acts as a WiFi Access Point and serves the web dashboard. However, **every single node** (master and slaves alike) runs its own dedicated WebSocket server. The browser establishes a direct point-to-point connection to each sensor to stream data in parallel without bottlenecks. ESP-NOW is used **exclusively** for time synchronization.
 - **Microsecond Time-Sync**: Precise, network-wide time synchronization via ESP-NOW beacons to prevent drift between the nodes.
 
