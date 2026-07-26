@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700">
+<style>
+text{font-family:Arial,sans-serif;font-size:18px}
+.small{font-size:15px}
+.pin{fill:#f3f3f3;stroke:#444}
+.box{fill:#e8f4ff;stroke:#1d4e89;stroke-width:2}
+.sensor{fill:#eef8ea;stroke:#2f7d32;stroke-width:2}
+.line{stroke:#444;stroke-width:2}
+</style>
+
+<rect x="430" y="80" width="340" height="520" class="box"/>
+<text x="500" y="110" font-size="24">Seeed XIAO ESP32-S3</text>
+
+<g>
+<text x="455" y="150">D0</text><text x="455" y="190">D1</text><text x="455" y="230">D2</text>
+<text x="455" y="270">D3</text><text x="455" y="310">D4</text>
+<text x="455" y="350">D5</text><text x="455" y="390">D6</text>
+<text x="650" y="150">5V</text><text x="650" y="190">GND</text><text x="650" y="230">3V3</text>
+<text x="650" y="270">D10</text><text x="650" y="310">D9</text><text x="650" y="350">D8</text><text x="650" y="390">D7</text>
+</g>
+
+<circle cx="120" cy="150" r="10" fill="red"/><text x="20" y="155">RGB Red</text>
+<circle cx="120" cy="190" r="10" fill="green"/><text x="10" y="195">RGB Green</text>
+<circle cx="120" cy="230" r="10" fill="blue"/><text x="20" y="235">RGB Blue</text>
+
+<line x1="130" y1="150" x2="430" y2="150" class="line"/>
+<line x1="130" y1="190" x2="430" y2="190" class="line"/>
+<line x1="130" y1="230" x2="430" y2="230" class="line"/>
+
+<rect x="900" y="180" width="220" height="220" class="sensor"/>
+<text x="955" y="210">LSM6DSO IMU</text>
+<text x="930" y="245" class="small">VCC</text>
+<text x="930" y="275" class="small">GND</text>
+<text x="930" y="305" class="small">CS</text>
+<text x="930" y="335" class="small">SCK</text>
+<text x="930" y="365" class="small">MISO</text>
+<text x="930" y="395" class="small">MOSI</text>
+
+<line x1="770" y1="230" x2="900" y2="245" class="line"/>
+<line x1="770" y1="190" x2="900" y2="275" class="line"/>
+<line x1="430" y1="270" x2="900" y2="305" class="line"/>
+<line x1="770" y1="350" x2="900" y2="335" class="line"/>
+<line x1="770" y1="310" x2="900" y2="365" class="line"/>
+<line x1="770" y1="270" x2="900" y2="395" class="line"/>
+
+<rect x="20" y="500" width="180" height="70" class="sensor"/>
+<text x="45" y="540">Capacitive Touch Pad</text>
+<line x1="200" y1="535" x2="430" y2="310" class="line"/>
+</svg>

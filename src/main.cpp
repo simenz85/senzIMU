@@ -433,11 +433,7 @@ static void sleep_watchdog_task(void *arg) {
                 // IMU erst abschalten, bevor das Touch-Wakeup scharf gemacht wird.
                 imu.setAccelDataRate(0);
                 vTaskDelay(pdMS_TO_TICKS(100));
-                //imu.setAccelBatchDataRate(26);
                 imu.setGyroDataRate(0);
-               // imu.setGyroBatchDataRate(26);
-                //imu.setTempSamplingRate(0);
-                
                 vTaskDelay(pdMS_TO_TICKS(500));
                 
                 // Touch-Sensor Initialisieren (D4 = GPIO5 = TOUCH5)

@@ -148,7 +148,6 @@
         <button id="applyTargetBtn" class="secondary">Host übernehmen</button>
       </div>
       <div class="toolbar">
-        <button id="ulpBtn">IMU ULP Test senden</button>
         <button id="armBtn" class="secondary">Touch Sleep nur scharf schalten</button>
         <button id="armWaitBtn" class="secondary">Arm + 1s Wait</button>
         <button id="refreshBtn" class="secondary">Neu pollen</button>
@@ -246,7 +245,6 @@
     const intrStatusEl = document.getElementById('intrStatusValue');
     const pollStatusEl = document.getElementById('pollStatus');
     const commandStatusEl = document.getElementById('commandStatus');
-    const ulpBtn = document.getElementById('ulpBtn');
     const armBtn = document.getElementById('armBtn');
     const armWaitBtn = document.getElementById('armWaitBtn');
     const refreshBtn = document.getElementById('refreshBtn');
@@ -432,27 +430,6 @@
       }
     }
 
-    function sendUlpCommand() {
-      ulpBtn.disabled = true;
-      commandStatusEl.textContent = 'Sende IMU_ULP_TEST ...';
-      commandStatusEl.className = 'status';
-
-      const ws = new WebSocket(`${getWsBase()}/ws`);
-      ws.addEventListener('open', () => {
-        ws.send(JSON.stringify({ COMMAND: 'IMU_ULP_TEST' }));
-        commandStatusEl.textContent = 'IMU_ULP_TEST gesendet.';
-        commandStatusEl.className = 'status ok';
-        setTimeout(() => ws.close(), 150);
-        setTimeout(() => { ulpBtn.disabled = false; }, 1000);
-      });
-      ws.addEventListener('error', () => {
-        commandStatusEl.textContent = 'WebSocket-Verbindung fehlgeschlagen.';
-        commandStatusEl.className = 'status bad';
-        ulpBtn.disabled = false;
-      });
-    }
-
-    ulpBtn.addEventListener('click', sendUlpCommand);
     armBtn.addEventListener('click', armTouchSleepOnly);
     armWaitBtn.addEventListener('click', armTouchSleepAndWait);
     refreshBtn.addEventListener('click', pollTouch);
